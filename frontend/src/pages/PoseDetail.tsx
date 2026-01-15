@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { posesApi, categoriesApi } from "../services/api";
+import { posesApi, categoriesApi, getImageProxyUrl } from "../services/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
@@ -82,7 +82,18 @@ export const PoseDetail: React.FC = () => {
 
   const getActiveImage = () => {
     if (!pose) return null;
-    return activeTab === "muscles" ? pose.muscle_layer_path : pose.photo_path;
+    if (activeTab === "muscles" && pose.muscle_layer_path) {
+      return getImageProxyUrl(pose.id, 'muscle_layer');
+    }
+    if (pose.photo_path) {
+      return getImageProxyUrl(pose.id, 'photo');
+    }
+    return null;
+  };
+
+  const getSchemaImage = () => {
+    if (!pose || !pose.schema_path) return null;
+    return getImageProxyUrl(pose.id, 'schema');
   };
 
   const handleDownload = async () => {
@@ -225,7 +236,7 @@ export const PoseDetail: React.FC = () => {
               <div className="bg-white rounded-2xl border border-stone-200 p-6">
                 <h3 className="text-sm font-medium text-stone-600 mb-4">Source Schematic</h3>
                 <img
-                  src={pose.schema_path}
+                  src={getSchemaImage() || ''}
                   alt="Source schematic"
                   className="w-full rounded-xl border border-stone-100"
                 />

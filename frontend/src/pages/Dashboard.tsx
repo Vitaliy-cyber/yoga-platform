@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { PoseCard, PoseFilters, PoseViewer, GenerateModal } from "../components/Pose";
-import { categoriesApi, posesApi } from "../services/api";
+import { categoriesApi, posesApi, getImageProxyUrl } from "../services/api";
 import { Plus, Grid3X3, List, Image, Loader2 } from "lucide-react";
 import type { Category, PoseListItem, Pose } from "../types";
 
@@ -188,7 +188,7 @@ export const Dashboard: React.FC = () => {
                 className="flex items-center gap-4 p-4 rounded-xl border bg-white hover:bg-stone-50 transition-colors"
               >
                 <img
-                  src={pose.photo_path || pose.schema_path || "/placeholder.jpg"}
+                  src={pose.photo_path ? getImageProxyUrl(pose.id, 'photo') : pose.schema_path ? getImageProxyUrl(pose.id, 'schema') : "/placeholder.jpg"}
                   alt={pose.name}
                   className="w-16 h-16 rounded-lg object-cover bg-stone-100"
                 />

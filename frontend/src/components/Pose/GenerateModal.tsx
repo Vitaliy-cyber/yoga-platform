@@ -8,7 +8,7 @@ import { Loader2, Sparkles, Camera, Activity, Lightbulb, Check, Upload, X } from
 import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
 import { useGenerate } from "../../hooks/useGenerate";
-import { posesApi } from "../../services/api";
+import { posesApi, getImageProxyUrl } from "../../services/api";
 
 const steps = [
   { id: "analyzing", label: "Analyzing pose structure...", icon: Lightbulb, minProgress: 0, maxProgress: 30 },
@@ -102,7 +102,9 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       if (uploadedFile) {
         fileToGenerate = uploadedFile;
       } else if (pose?.schema_path) {
-        const response = await fetch(pose.schema_path);
+        // Use proxy URL to avoid CORS issues
+        const proxyUrl = getImageProxyUrl(pose.id, 'schema');
+        const response = await fetch(proxyUrl);
         if (!response.ok) {
           throw new Error(`Failed to fetch schema: ${response.status}`);
         }
@@ -175,7 +177,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 /* Show existing schema */
                 <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
                   <img
-                    src={pose.schema_path!}
+                    src={getImageProxyUrl(pose.id, 'schema')}
                     alt="Source schematic"
                     className="max-h-48 mx-auto object-contain"
                     onError={() => setSchemaLoadError(true)}

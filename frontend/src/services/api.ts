@@ -17,6 +17,16 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || window.location.origin;
 // Debug log
 console.log('API_BASE_URL:', API_BASE_URL);
 
+/**
+ * Get proxy URL for pose images to bypass S3 CORS restrictions.
+ * @param poseId - The pose ID
+ * @param imageType - Type of image: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer'
+ * @returns Proxy URL for the image
+ */
+export const getImageProxyUrl = (poseId: number, imageType: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer'): string => {
+  return `${API_BASE_URL}/api/poses/${poseId}/image/${imageType}`;
+};
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   // Don't set Content-Type here - axios will set it automatically

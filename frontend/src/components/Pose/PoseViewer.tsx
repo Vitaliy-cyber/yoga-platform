@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { VisuallyHidden } from "../ui/visually-hidden";
 import { Activity, Download, Eye, Layers, X } from "lucide-react";
 import type { Pose } from "../../types";
+import { getImageProxyUrl } from "../../services/api";
 
 interface PoseViewerProps {
   pose: Pose;
@@ -22,10 +23,13 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
   const [overlayOpacity, setOverlayOpacity] = useState(0.7);
 
   const getActiveImage = () => {
-    if (activeOverlay === "muscles") {
-      return pose.muscle_layer_path || pose.photo_path;
+    if (activeOverlay === "muscles" && pose.muscle_layer_path) {
+      return getImageProxyUrl(pose.id, 'muscle_layer');
     }
-    return pose.photo_path;
+    if (pose.photo_path) {
+      return getImageProxyUrl(pose.id, 'photo');
+    }
+    return null;
   };
 
   const hasOverlay = (type: string) => {
@@ -94,7 +98,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
             <div className="flex-1 relative flex items-center justify-center p-8 bg-stone-900">
               <div className="relative max-w-full max-h-full">
                 <img
-                  src={pose.photo_path || ""}
+                  src={pose.photo_path ? getImageProxyUrl(pose.id, 'photo') : ""}
                   alt={pose.name}
                   className="max-w-full max-h-[calc(90vh-180px)] object-contain rounded-lg transition-opacity duration-200"
                 />

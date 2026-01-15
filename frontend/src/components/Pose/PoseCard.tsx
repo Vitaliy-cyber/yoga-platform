@@ -4,6 +4,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Eye, Sparkles, AlertCircle, CheckCircle2, ExternalLink, ImageIcon } from "lucide-react";
 import type { PoseListItem } from "../../types";
+import { getImageProxyUrl } from "../../services/api";
 
 const statusConfig = {
   draft: { label: "Draft", color: "bg-stone-100 text-stone-600", icon: null },
@@ -34,7 +35,7 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
         {/* Generated photo */}
         {hasGeneratedPhoto && !imageError && (
           <img
-            src={pose.photo_path!}
+            src={getImageProxyUrl(pose.id, 'photo')}
             alt={pose.name}
             className="absolute inset-0 w-full h-full object-cover"
             onError={() => setImageError(true)}
@@ -44,7 +45,7 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
         {/* Schema image */}
         {!hasGeneratedPhoto && hasSchema && !imageError && (
           <img
-            src={pose.schema_path!}
+            src={getImageProxyUrl(pose.id, 'schema')}
             alt={pose.name}
             className="absolute inset-0 w-full h-full object-contain p-4 bg-white/90"
             onError={() => setImageError(true)}

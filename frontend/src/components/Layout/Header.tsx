@@ -4,6 +4,7 @@ import { Search, Loader2 } from "lucide-react";
 import { useSearchPoses } from "../../hooks/usePoses";
 import { Input } from "../ui/input";
 import { cn } from "../../lib/utils";
+import { getImageProxyUrl } from "../../services/api";
 
 
 export const Header: React.FC = () => {
@@ -72,7 +73,7 @@ export const Header: React.FC = () => {
                     className="flex items-center gap-3 w-full p-2 hover:bg-accent rounded-lg transition-colors duration-150 text-left group"
                   >
                     {pose.photo_path ? (
-                      <img src={pose.photo_path} alt={pose.name} className="w-10 h-10 rounded-md object-cover bg-secondary" />
+                      <img src={getImageProxyUrl(pose.id, 'photo')} alt={pose.name} className="w-10 h-10 rounded-md object-cover bg-secondary" />
                     ) : (
                       <div className="w-10 h-10 rounded-md bg-secondary flex items-center justify-center">
                         <Search className="h-4 w-4 text-muted-foreground" />
