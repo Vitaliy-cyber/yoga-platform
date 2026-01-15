@@ -42,58 +42,30 @@ async def run_generation(task_id: str, image_bytes: bytes, mime_type: str):
 
         storage = S3Storage.get_instance()
 
-        if settings.ENABLE_AI_GENERATION and settings.GOOGLE_API_KEY:
+        def progress_callback(progress: int, message: str):
+            update_task_progress(task_id, progress, message)
 
-            def progress_callback(progress: int, message: str):
-                update_task_progress(task_id, progress, message)
+        from services.google_generator import GoogleGeminiGenerator
 
-            from services.google_generator import GoogleGeminiGenerator
+        generator = GoogleGeminiGenerator.get_instance()
 
-            generator = GoogleGeminiGenerator.get_instance()
+        result = await generator.generate_all_from_image(
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            task_id=task_id,
+            progress_callback=progress_callback,
+        )
 
-            result = await generator.generate_all_from_image(
-                image_bytes=image_bytes,
-                mime_type=mime_type,
-                task_id=task_id,
-                progress_callback=progress_callback,
-            )
+        photo_key = f"generated/{task_id}_photo.png"
+        muscles_key = f"generated/{task_id}_muscles.png"
 
-            photo_key = f"generated/{task_id}_photo.png"
-            muscles_key = f"generated/{task_id}_muscles.png"
-
-            generation_tasks[task_id]["photo_url"] = await storage.upload_bytes(
-                result.photo_bytes, photo_key, "image/png"
-            )
-            generation_tasks[task_id]["muscles_url"] = await storage.upload_bytes(
-                result.muscles_bytes, muscles_key, "image/png"
-            )
-            generation_tasks[task_id]["quota_warning"] = result.used_placeholders
-
-        else:
-            # Mock mode for testing (no API key)
-            for progress, message in [
-                (30, "Generating studio photo..."),
-                (60, "Generating body paint muscles..."),
-            ]:
-                update_task_progress(task_id, progress, message)
-                await asyncio.sleep(1)
-
-            from PIL import Image
-
-            placeholder = Image.new("RGB", (512, 512), color=(200, 200, 200))
-            buffer = BytesIO()
-            placeholder.save(buffer, format="PNG")
-            placeholder_bytes = buffer.getvalue()
-
-            photo_key = f"generated/{task_id}_photo.png"
-            muscles_key = f"generated/{task_id}_muscles.png"
-
-            generation_tasks[task_id]["photo_url"] = await storage.upload_bytes(
-                placeholder_bytes, photo_key, "image/png"
-            )
-            generation_tasks[task_id]["muscles_url"] = await storage.upload_bytes(
-                placeholder_bytes, muscles_key, "image/png"
-            )
+        generation_tasks[task_id]["photo_url"] = await storage.upload_bytes(
+            result.photo_bytes, photo_key, "image/png"
+        )
+        generation_tasks[task_id]["muscles_url"] = await storage.upload_bytes(
+            result.muscles_bytes, muscles_key, "image/png"
+        )
+        generation_tasks[task_id]["quota_warning"] = result.used_placeholders
 
         generation_tasks[task_id]["status"] = GenerateStatus.COMPLETED
         generation_tasks[task_id]["progress"] = 100

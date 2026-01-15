@@ -41,12 +41,8 @@ class Settings(BaseSettings):
     S3_SECRET_ACCESS_KEY: str = ""
     S3_PREFIX: str = ""
 
-    # AI Generation Settings
-    ENABLE_AI_GENERATION: bool = True
-
-    # Google Gemini API
+    # Google Gemini API (AI generation is always enabled)
     GOOGLE_API_KEY: str = ""
-    USE_GOOGLE_AI: bool = True
 
     # CORS - додаткові origins для Railway та інших платформ
     CORS_ALLOWED_ORIGINS: str = ""  # Comma-separated list of allowed origins

@@ -36,20 +36,17 @@ async def lifespan(app: FastAPI):
     logger.info(f"Storage backend: {settings.STORAGE_BACKEND}")
 
     # Initialize AI Generator (Google Gemini API)
-    if settings.ENABLE_AI_GENERATION:
-        try:
-            if settings.GOOGLE_API_KEY:
-                from services.google_generator import GoogleGeminiGenerator
+    try:
+        if settings.GOOGLE_API_KEY:
+            from services.google_generator import GoogleGeminiGenerator
 
-                GoogleGeminiGenerator.get_instance()
-                logger.info("Google Gemini AI Generator initialized")
-            else:
-                logger.warning("No GOOGLE_API_KEY configured. Set it in .env")
-        except Exception as e:
-            logger.warning(f"Failed to initialize AI generator: {e}")
-            logger.warning("AI generation will not be available")
-    else:
-        logger.info("AI generation disabled")
+            GoogleGeminiGenerator.get_instance()
+            logger.info("Google Gemini AI Generator initialized")
+        else:
+            logger.warning("No GOOGLE_API_KEY configured. Set it in .env")
+    except Exception as e:
+        logger.warning(f"Failed to initialize AI generator: {e}")
+        logger.warning("AI generation will not be available")
 
     yield
 
@@ -107,7 +104,6 @@ async def health_check():
     return {
         "status": "healthy",
         "mode": settings.APP_MODE.value,
-        "ai_enabled": settings.ENABLE_AI_GENERATION,
         "ai_provider": "google_gemini" if settings.GOOGLE_API_KEY else None,
     }
 
@@ -120,7 +116,7 @@ async def api_info():
         "version": "1.0.0",
         "mode": settings.APP_MODE.value,
         "features": {
-            "ai_generation": settings.ENABLE_AI_GENERATION,
+            "ai_generation": True,
             "pose_management": True,
             "muscle_mapping": True,
             "layer_visualization": True,
