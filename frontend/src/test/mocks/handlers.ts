@@ -1,5 +1,14 @@
 import { http, HttpResponse } from "msw";
 
+// Mock user data
+const mockUser = {
+  id: 1,
+  token: "test-user-token",
+  name: "Test User",
+  created_at: "2024-01-01T00:00:00Z",
+  last_login: "2024-01-02T00:00:00Z",
+};
+
 // Mock data
 const mockCategories = [
   {
@@ -81,6 +90,45 @@ const mockPoses = [
 ];
 
 export const handlers = [
+  // Auth endpoints
+  http.post("/api/auth/login", async ({ request }) => {
+    const body = (await request.json()) as { token: string };
+    if (!body.token) {
+      return HttpResponse.json(
+        { detail: "Token is required" },
+        { status: 422 }
+      );
+    }
+    return HttpResponse.json({
+      access_token: "mock-jwt-token-xyz",
+      token_type: "bearer",
+      user: { ...mockUser, token: body.token },
+    });
+  }),
+
+  http.get("/api/auth/me", ({ request }) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return HttpResponse.json(
+        { detail: "Not authenticated" },
+        { status: 401 }
+      );
+    }
+    return HttpResponse.json(mockUser);
+  }),
+
+  http.put("/api/auth/me", async ({ request }) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return HttpResponse.json(
+        { detail: "Not authenticated" },
+        { status: 401 }
+      );
+    }
+    const body = (await request.json()) as { name?: string };
+    return HttpResponse.json({ ...mockUser, ...body });
+  }),
+
   // Health check
   http.get("/api/health", () => {
     return HttpResponse.json({ status: "healthy" });

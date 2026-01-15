@@ -21,6 +21,7 @@ from db.database import Base, get_db
 from models.category import Category
 from models.muscle import Muscle
 from models.pose import Pose, PoseMuscle
+from models.user import User
 
 # Test database URL (SQLite for testing)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///./test.db"
@@ -43,7 +44,7 @@ def event_loop():
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Create a fresh database session for each test."""
     # Import models to register them
-    from models import category, muscle, pose
+    from models import category, muscle, pose, user
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
