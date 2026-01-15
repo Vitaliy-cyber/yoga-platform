@@ -32,7 +32,7 @@ export const useAuthStore = create<AuthState>()(
         set({
           user,
           accessToken,
-          isAuthenticated: true,
+          isAuthenticated: Boolean(accessToken),
           isLoading: false,
         }),
 
@@ -53,19 +53,21 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: TOKEN_KEY,
-      // Only persist token and user, not loading state
+      // Only persist token and user, not loading/auth flags
       partialize: (state) => ({
         user: state.user,
         accessToken: state.accessToken,
-        isAuthenticated: state.isAuthenticated,
       }),
-      // After rehydration, set loading to false
+      // After rehydration, set loading and auth state
       onRehydrateStorage: () => (state, error) => {
         if (error) {
           console.error('Failed to rehydrate auth state:', error);
         }
-        // Use setState to properly trigger re-render
-        useAuthStore.setState({ isLoading: false });
+        const current = useAuthStore.getState();
+        useAuthStore.setState({
+          isLoading: false,
+          isAuthenticated: Boolean(current.accessToken),
+        });
       },
     }
   )

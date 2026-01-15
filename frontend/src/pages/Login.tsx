@@ -65,12 +65,13 @@ export const Login: React.FC = () => {
                 <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-stone-400" />
                 <Input
                   id="token"
-                  type="text"
+                  type="password"
                   placeholder="Enter your unique token..."
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   className="pl-10 h-12 rounded-xl border-stone-200 focus:border-stone-400 focus:ring-stone-400"
                   disabled={isLoading}
+                  autoComplete="off"
                   autoFocus
                 />
               </div>

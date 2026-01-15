@@ -14,13 +14,15 @@ import type {
   User,
   UserUpdate,
 } from '../types';
-import { getAuthToken } from '../store/useAuthStore';
+import { getAuthToken, useAuthStore } from '../store/useAuthStore';
 
 // Get API URL from env or use relative path (for same-origin requests)
 const API_BASE_URL = import.meta.env.VITE_API_URL || window.location.origin;
 
-// Debug log
-console.log('API_BASE_URL:', API_BASE_URL);
+// Debug log (dev only)
+if (import.meta.env.DEV) {
+  console.log('API_BASE_URL:', API_BASE_URL);
+}
 
 /**
  * Get proxy URL for pose images to bypass S3 CORS restrictions.
@@ -28,8 +30,17 @@ console.log('API_BASE_URL:', API_BASE_URL);
  * @param imageType - Type of image: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer'
  * @returns Proxy URL for the image
  */
-export const getImageProxyUrl = (poseId: number, imageType: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer'): string => {
-  return `${API_BASE_URL}/api/poses/${poseId}/image/${imageType}`;
+export const getImageProxyUrl = (
+  poseId: number,
+  imageType: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer'
+): string => {
+  const token = getAuthToken();
+  const baseUrl = `${API_BASE_URL}/api/poses/${poseId}/image/${imageType}`;
+  if (!token) {
+    return baseUrl;
+  }
+  const params = new URLSearchParams({ token });
+  return `${baseUrl}?${params.toString()}`;
 };
 
 const api = axios.create({
@@ -49,6 +60,18 @@ api.interceptors.request.use(
     return config;
   },
   (error) => Promise.reject(error)
+);
+
+// Auto-logout on auth errors
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status;
+    if (status === 401 || status === 403) {
+      useAuthStore.getState().logout();
+    }
+    return Promise.reject(error);
+  }
 );
 
 // Обробка помилок

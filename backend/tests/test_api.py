@@ -9,6 +9,9 @@ from io import BytesIO
 from PIL import Image
 
 
+# Root endpoints are public; use unauthenticated client
+
+
 # ============== Root & Health Endpoints ==============
 
 
@@ -53,16 +56,16 @@ class TestCategoriesAPI:
     """Tests for categories endpoints."""
 
     @pytest.mark.asyncio
-    async def test_get_categories_empty(self, client: AsyncClient):
+    async def test_get_categories_empty(self, auth_client: AsyncClient):
         """Test getting categories when database is empty."""
-        response = await client.get("/api/categories")
+        response = await auth_client.get("/api/categories")
         assert response.status_code == 200
         assert response.json() == []
 
     @pytest.mark.asyncio
-    async def test_create_category_success(self, client: AsyncClient):
+    async def test_create_category_success(self, auth_client: AsyncClient):
         """Test creating a new category."""
-        response = await client.post(
+        response = await auth_client.post(
             "/api/categories",
             json={"name": "Standing Poses", "description": "Poses performed standing"},
         )
@@ -74,9 +77,9 @@ class TestCategoriesAPI:
         assert "created_at" in data
 
     @pytest.mark.asyncio
-    async def test_create_category_without_description(self, client: AsyncClient):
+    async def test_create_category_without_description(self, auth_client: AsyncClient):
         """Test creating category without optional description."""
-        response = await client.post(
+        response = await auth_client.post(
             "/api/categories",
             json={"name": "Balancing"},
         )
@@ -86,46 +89,48 @@ class TestCategoriesAPI:
         assert data["description"] is None
 
     @pytest.mark.asyncio
-    async def test_create_category_duplicate_name(self, client: AsyncClient):
+    async def test_create_category_duplicate_name(self, auth_client: AsyncClient):
         """Test creating category with duplicate name fails."""
-        await client.post("/api/categories", json={"name": "Unique Name"})
-        response = await client.post("/api/categories", json={"name": "Unique Name"})
+        await auth_client.post("/api/categories", json={"name": "Unique Name"})
+        response = await auth_client.post(
+            "/api/categories", json={"name": "Unique Name"}
+        )
         assert response.status_code == 400
         assert "already exists" in response.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_create_category_empty_name(self, client: AsyncClient):
+    async def test_create_category_empty_name(self, auth_client: AsyncClient):
         """Test creating category with empty name fails validation."""
-        response = await client.post("/api/categories", json={"name": ""})
+        response = await auth_client.post("/api/categories", json={"name": ""})
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_get_category_by_id(self, client: AsyncClient):
+    async def test_get_category_by_id(self, auth_client: AsyncClient):
         """Test getting a category by ID."""
-        create_response = await client.post(
+        create_response = await auth_client.post(
             "/api/categories", json={"name": "Test Category"}
         )
         category_id = create_response.json()["id"]
 
-        response = await client.get(f"/api/categories/{category_id}")
+        response = await auth_client.get(f"/api/categories/{category_id}")
         assert response.status_code == 200
         assert response.json()["name"] == "Test Category"
 
     @pytest.mark.asyncio
-    async def test_get_category_not_found(self, client: AsyncClient):
+    async def test_get_category_not_found(self, auth_client: AsyncClient):
         """Test getting non-existent category returns 404."""
-        response = await client.get("/api/categories/99999")
+        response = await auth_client.get("/api/categories/99999")
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_update_category(self, client: AsyncClient):
+    async def test_update_category(self, auth_client: AsyncClient):
         """Test updating a category."""
-        create_response = await client.post(
+        create_response = await auth_client.post(
             "/api/categories", json={"name": "Original Name"}
         )
         category_id = create_response.json()["id"]
 
-        response = await client.put(
+        response = await auth_client.put(
             f"/api/categories/{category_id}",
             json={"name": "Updated Name", "description": "New description"},
         )
@@ -135,18 +140,18 @@ class TestCategoriesAPI:
         assert data["description"] == "New description"
 
     @pytest.mark.asyncio
-    async def test_delete_category(self, client: AsyncClient):
+    async def test_delete_category(self, auth_client: AsyncClient):
         """Test deleting a category."""
-        create_response = await client.post(
+        create_response = await auth_client.post(
             "/api/categories", json={"name": "To Delete"}
         )
         category_id = create_response.json()["id"]
 
-        response = await client.delete(f"/api/categories/{category_id}")
+        response = await auth_client.delete(f"/api/categories/{category_id}")
         assert response.status_code == 204
 
         # Verify deleted
-        get_response = await client.get(f"/api/categories/{category_id}")
+        get_response = await auth_client.get(f"/api/categories/{category_id}")
         assert get_response.status_code == 404
 
 
@@ -157,16 +162,16 @@ class TestPosesAPI:
     """Tests for poses endpoints."""
 
     @pytest.mark.asyncio
-    async def test_get_poses_empty(self, client: AsyncClient):
+    async def test_get_poses_empty(self, auth_client: AsyncClient):
         """Test getting poses when database is empty."""
-        response = await client.get("/api/poses")
+        response = await auth_client.get("/api/poses")
         assert response.status_code == 200
         assert response.json() == []
 
     @pytest.mark.asyncio
-    async def test_create_pose_minimal(self, client: AsyncClient):
+    async def test_create_pose_minimal(self, auth_client: AsyncClient):
         """Test creating a pose with minimal required fields."""
-        response = await client.post(
+        response = await auth_client.post(
             "/api/poses",
             json={"code": "TST01", "name": "Test Pose"},
         )
@@ -176,15 +181,15 @@ class TestPosesAPI:
         assert data["name"] == "Test Pose"
 
     @pytest.mark.asyncio
-    async def test_create_pose_full(self, client: AsyncClient):
+    async def test_create_pose_full(self, auth_client: AsyncClient):
         """Test creating a pose with all fields."""
         # Create category first
-        cat_response = await client.post(
+        cat_response = await auth_client.post(
             "/api/categories", json={"name": "Test Category"}
         )
         category_id = cat_response.json()["id"]
 
-        response = await client.post(
+        response = await auth_client.post(
             "/api/poses",
             json={
                 "code": "WAR01",
@@ -205,19 +210,21 @@ class TestPosesAPI:
         assert data["category_name"] == "Test Category"
 
     @pytest.mark.asyncio
-    async def test_create_pose_duplicate_code(self, client: AsyncClient):
+    async def test_create_pose_duplicate_code(self, auth_client: AsyncClient):
         """Test creating pose with duplicate code fails."""
-        await client.post("/api/poses", json={"code": "DUP01", "name": "First Pose"})
-        response = await client.post(
+        await auth_client.post(
+            "/api/poses", json={"code": "DUP01", "name": "First Pose"}
+        )
+        response = await auth_client.post(
             "/api/poses", json={"code": "DUP01", "name": "Second Pose"}
         )
         assert response.status_code == 400
         assert "already exists" in response.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_create_pose_invalid_category(self, client: AsyncClient):
+    async def test_create_pose_invalid_category(self, auth_client: AsyncClient):
         """Test creating pose with non-existent category fails."""
-        response = await client.post(
+        response = await auth_client.post(
             "/api/poses",
             json={"code": "INV01", "name": "Invalid", "category_id": 99999},
         )
@@ -225,123 +232,133 @@ class TestPosesAPI:
         assert "Category not found" in response.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_get_pose_by_id(self, client: AsyncClient):
+    async def test_get_pose_by_id(self, auth_client: AsyncClient):
         """Test getting a pose by ID."""
-        create_response = await client.post(
+        create_response = await auth_client.post(
             "/api/poses", json={"code": "GET01", "name": "Get Pose"}
         )
         pose_id = create_response.json()["id"]
 
-        response = await client.get(f"/api/poses/{pose_id}")
+        response = await auth_client.get(f"/api/poses/{pose_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["code"] == "GET01"
         assert "muscles" in data
 
     @pytest.mark.asyncio
-    async def test_get_pose_by_code(self, client: AsyncClient):
+    async def test_get_pose_by_code(self, auth_client: AsyncClient):
         """Test getting a pose by code."""
-        await client.post("/api/poses", json={"code": "COD01", "name": "Code Pose"})
+        await auth_client.post(
+            "/api/poses", json={"code": "COD01", "name": "Code Pose"}
+        )
 
-        response = await client.get("/api/poses/code/COD01")
+        response = await auth_client.get("/api/poses/code/COD01")
         assert response.status_code == 200
         assert response.json()["code"] == "COD01"
 
     @pytest.mark.asyncio
-    async def test_get_pose_not_found(self, client: AsyncClient):
+    async def test_get_pose_not_found(self, auth_client: AsyncClient):
         """Test getting non-existent pose returns 404."""
-        response = await client.get("/api/poses/99999")
+        response = await auth_client.get("/api/poses/99999")
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_search_poses(self, client: AsyncClient):
+    async def test_search_poses(self, auth_client: AsyncClient):
         """Test searching poses by name."""
-        await client.post("/api/poses", json={"code": "WAR01", "name": "Warrior One"})
-        await client.post("/api/poses", json={"code": "WAR02", "name": "Warrior Two"})
-        await client.post("/api/poses", json={"code": "MNT01", "name": "Mountain"})
+        await auth_client.post(
+            "/api/poses", json={"code": "WAR01", "name": "Warrior One"}
+        )
+        await auth_client.post(
+            "/api/poses", json={"code": "WAR02", "name": "Warrior Two"}
+        )
+        await auth_client.post("/api/poses", json={"code": "MNT01", "name": "Mountain"})
 
-        response = await client.get("/api/poses/search?q=warrior")
+        response = await auth_client.get("/api/poses/search?q=warrior")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 2
         assert all("warrior" in p["name"].lower() for p in data)
 
     @pytest.mark.asyncio
-    async def test_search_poses_by_code(self, client: AsyncClient):
+    async def test_search_poses_by_code(self, auth_client: AsyncClient):
         """Test searching poses by code."""
-        await client.post("/api/poses", json={"code": "ABC01", "name": "Pose A"})
-        await client.post("/api/poses", json={"code": "ABC02", "name": "Pose B"})
-        await client.post("/api/poses", json={"code": "XYZ01", "name": "Pose C"})
+        await auth_client.post("/api/poses", json={"code": "ABC01", "name": "Pose A"})
+        await auth_client.post("/api/poses", json={"code": "ABC02", "name": "Pose B"})
+        await auth_client.post("/api/poses", json={"code": "XYZ01", "name": "Pose C"})
 
-        response = await client.get("/api/poses/search?q=ABC")
+        response = await auth_client.get("/api/poses/search?q=ABC")
         assert response.status_code == 200
         assert len(response.json()) == 2
 
     @pytest.mark.asyncio
-    async def test_search_poses_empty_query(self, client: AsyncClient):
+    async def test_search_poses_empty_query(self, auth_client: AsyncClient):
         """Test search with empty query fails validation."""
-        response = await client.get("/api/poses/search?q=")
+        response = await auth_client.get("/api/poses/search?q=")
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_get_poses_by_category(self, client: AsyncClient):
+    async def test_get_poses_by_category(self, auth_client: AsyncClient):
         """Test getting poses filtered by category."""
         # Create categories
-        cat1_response = await client.post("/api/categories", json={"name": "Cat 1"})
-        cat2_response = await client.post("/api/categories", json={"name": "Cat 2"})
+        cat1_response = await auth_client.post(
+            "/api/categories", json={"name": "Cat 1"}
+        )
+        cat2_response = await auth_client.post(
+            "/api/categories", json={"name": "Cat 2"}
+        )
         cat1_id = cat1_response.json()["id"]
         cat2_id = cat2_response.json()["id"]
 
         # Create poses in different categories
-        await client.post(
+        await auth_client.post(
             "/api/poses",
             json={"code": "C1P1", "name": "Cat1 Pose", "category_id": cat1_id},
         )
-        await client.post(
+        await auth_client.post(
             "/api/poses",
             json={"code": "C2P1", "name": "Cat2 Pose", "category_id": cat2_id},
         )
 
         # Get poses for category 1
-        response = await client.get(f"/api/poses/category/{cat1_id}")
+        response = await auth_client.get(f"/api/poses/category/{cat1_id}")
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
         assert data[0]["code"] == "C1P1"
 
     @pytest.mark.asyncio
-    async def test_get_poses_pagination(self, client: AsyncClient):
+    async def test_get_poses_pagination(self, auth_client: AsyncClient):
         """Test poses pagination."""
         # Create multiple poses
         for i in range(15):
-            await client.post(
+            await auth_client.post(
                 "/api/poses", json={"code": f"PAG{i:02d}", "name": f"Pose {i}"}
             )
 
         # Test default pagination
-        response = await client.get("/api/poses")
+        response = await auth_client.get("/api/poses")
         assert response.status_code == 200
         assert len(response.json()) == 15
 
         # Test with limit
-        response = await client.get("/api/poses?limit=5")
+        response = await auth_client.get("/api/poses?limit=5")
         assert response.status_code == 200
         assert len(response.json()) == 5
 
         # Test with skip
-        response = await client.get("/api/poses?skip=10&limit=10")
+        response = await auth_client.get("/api/poses?skip=10&limit=10")
         assert response.status_code == 200
         assert len(response.json()) == 5
 
     @pytest.mark.asyncio
-    async def test_update_pose(self, client: AsyncClient):
+    async def test_update_pose(self, auth_client: AsyncClient):
         """Test updating a pose."""
-        create_response = await client.post(
+        create_response = await auth_client.post(
             "/api/poses", json={"code": "UPD01", "name": "Original"}
         )
         pose_id = create_response.json()["id"]
 
-        response = await client.put(
+        response = await auth_client.put(
             f"/api/poses/{pose_id}",
             json={"name": "Updated Name", "description": "New description"},
         )
@@ -352,18 +369,18 @@ class TestPosesAPI:
         assert data["code"] == "UPD01"  # Code unchanged
 
     @pytest.mark.asyncio
-    async def test_delete_pose(self, client: AsyncClient):
+    async def test_delete_pose(self, auth_client: AsyncClient):
         """Test deleting a pose."""
-        create_response = await client.post(
+        create_response = await auth_client.post(
             "/api/poses", json={"code": "DEL01", "name": "To Delete"}
         )
         pose_id = create_response.json()["id"]
 
-        response = await client.delete(f"/api/poses/{pose_id}")
+        response = await auth_client.delete(f"/api/poses/{pose_id}")
         assert response.status_code == 204
 
         # Verify deleted
-        get_response = await client.get(f"/api/poses/{pose_id}")
+        get_response = await auth_client.get(f"/api/poses/{pose_id}")
         assert get_response.status_code == 404
 
 
@@ -374,10 +391,12 @@ class TestPoseSchemaUpload:
     """Tests for pose schema upload endpoint."""
 
     @pytest.mark.asyncio
-    async def test_upload_schema_success(self, client_with_mocked_storage: AsyncClient):
+    async def test_upload_schema_success(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
         """Test successful schema upload."""
         # Create pose
-        create_response = await client_with_mocked_storage.post(
+        create_response = await auth_client_with_mocked_storage.post(
             "/api/poses", json={"code": "SCH01", "name": "Schema Pose"}
         )
         pose_id = create_response.json()["id"]
@@ -389,7 +408,7 @@ class TestPoseSchemaUpload:
         buffer.seek(0)
 
         # Upload schema
-        response = await client_with_mocked_storage.post(
+        response = await auth_client_with_mocked_storage.post(
             f"/api/poses/{pose_id}/schema",
             files={"file": ("test.png", buffer, "image/png")},
         )
@@ -400,7 +419,7 @@ class TestPoseSchemaUpload:
 
     @pytest.mark.asyncio
     async def test_upload_schema_pose_not_found(
-        self, client_with_mocked_storage: AsyncClient
+        self, auth_client_with_mocked_storage: AsyncClient
     ):
         """Test uploading schema for non-existent pose."""
         img = Image.new("RGB", (100, 100), "red")
@@ -408,7 +427,7 @@ class TestPoseSchemaUpload:
         img.save(buffer, format="PNG")
         buffer.seek(0)
 
-        response = await client_with_mocked_storage.post(
+        response = await auth_client_with_mocked_storage.post(
             "/api/poses/99999/schema",
             files={"file": ("test.png", buffer, "image/png")},
         )
@@ -422,16 +441,16 @@ class TestMusclesAPI:
     """Tests for muscles endpoints."""
 
     @pytest.mark.asyncio
-    async def test_get_muscles_empty(self, client: AsyncClient):
+    async def test_get_muscles_empty(self, auth_client: AsyncClient):
         """Test getting muscles when database is empty."""
-        response = await client.get("/api/muscles")
+        response = await auth_client.get("/api/muscles")
         assert response.status_code == 200
         assert response.json() == []
 
     @pytest.mark.asyncio
-    async def test_seed_muscles(self, client: AsyncClient):
+    async def test_seed_muscles(self, auth_client: AsyncClient):
         """Test seeding default muscles."""
-        response = await client.post("/api/muscles/seed")
+        response = await auth_client.post("/api/muscles/seed")
         assert response.status_code == 200
         data = response.json()
         assert len(data) > 0
@@ -439,40 +458,40 @@ class TestMusclesAPI:
         assert all("body_part" in m for m in data)
 
     @pytest.mark.asyncio
-    async def test_seed_muscles_idempotent(self, client: AsyncClient):
+    async def test_seed_muscles_idempotent(self, auth_client: AsyncClient):
         """Test that seeding muscles is idempotent."""
-        response1 = await client.post("/api/muscles/seed")
+        response1 = await auth_client.post("/api/muscles/seed")
         count1 = len(response1.json())
 
-        response2 = await client.post("/api/muscles/seed")
+        response2 = await auth_client.post("/api/muscles/seed")
         count2 = len(response2.json())
 
         assert count1 == count2
 
     @pytest.mark.asyncio
-    async def test_get_muscles_by_body_part(self, client: AsyncClient):
+    async def test_get_muscles_by_body_part(self, auth_client: AsyncClient):
         """Test filtering muscles by body part."""
-        await client.post("/api/muscles/seed")
+        await auth_client.post("/api/muscles/seed")
 
-        response = await client.get("/api/muscles?body_part=legs")
+        response = await auth_client.get("/api/muscles?body_part=legs")
         assert response.status_code == 200
         data = response.json()
         assert all(m["body_part"] == "legs" for m in data)
 
     @pytest.mark.asyncio
-    async def test_get_muscle_by_id(self, client: AsyncClient):
+    async def test_get_muscle_by_id(self, auth_client: AsyncClient):
         """Test getting a muscle by ID."""
-        seed_response = await client.post("/api/muscles/seed")
+        seed_response = await auth_client.post("/api/muscles/seed")
         muscle_id = seed_response.json()[0]["id"]
 
-        response = await client.get(f"/api/muscles/{muscle_id}")
+        response = await auth_client.get(f"/api/muscles/{muscle_id}")
         assert response.status_code == 200
         assert "name" in response.json()
 
     @pytest.mark.asyncio
-    async def test_get_muscle_not_found(self, client: AsyncClient):
+    async def test_get_muscle_not_found(self, auth_client: AsyncClient):
         """Test getting non-existent muscle returns 404."""
-        response = await client.get("/api/muscles/99999")
+        response = await auth_client.get("/api/muscles/99999")
         assert response.status_code == 404
 
 
@@ -484,10 +503,10 @@ class TestGenerateAPI:
 
     @pytest.mark.asyncio
     async def test_generate_invalid_file_type(
-        self, client_with_mocked_storage: AsyncClient
+        self, auth_client_with_mocked_storage: AsyncClient
     ):
         """Test generation with invalid file type fails."""
-        response = await client_with_mocked_storage.post(
+        response = await auth_client_with_mocked_storage.post(
             "/api/generate",
             files={"schema_file": ("test.txt", b"not an image", "text/plain")},
         )
@@ -495,14 +514,16 @@ class TestGenerateAPI:
         assert "Invalid file type" in response.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_generate_valid_image(self, client_with_mocked_storage: AsyncClient):
+    async def test_generate_valid_image(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
         """Test generation with valid image starts task."""
         img = Image.new("RGB", (100, 100), "blue")
         buffer = BytesIO()
         img.save(buffer, format="PNG")
         buffer.seek(0)
 
-        response = await client_with_mocked_storage.post(
+        response = await auth_client_with_mocked_storage.post(
             "/api/generate",
             files={"schema_file": ("test.png", buffer, "image/png")},
         )
@@ -513,28 +534,30 @@ class TestGenerateAPI:
         assert data["progress"] == 0
 
     @pytest.mark.asyncio
-    async def test_generate_jpeg_image(self, client_with_mocked_storage: AsyncClient):
+    async def test_generate_jpeg_image(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
         """Test generation accepts JPEG images."""
         img = Image.new("RGB", (100, 100), "green")
         buffer = BytesIO()
         img.save(buffer, format="JPEG")
         buffer.seek(0)
 
-        response = await client_with_mocked_storage.post(
+        response = await auth_client_with_mocked_storage.post(
             "/api/generate",
             files={"schema_file": ("test.jpg", buffer, "image/jpeg")},
         )
         assert response.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_get_generation_status_not_found(self, client: AsyncClient):
+    async def test_get_generation_status_not_found(self, auth_client: AsyncClient):
         """Test getting status for non-existent task."""
-        response = await client.get("/api/generate/status/non-existent-task-id")
+        response = await auth_client.get("/api/generate/status/non-existent-task-id")
         assert response.status_code == 404
 
     @pytest.mark.asyncio
     async def test_get_generation_status_success(
-        self, client_with_mocked_storage: AsyncClient
+        self, auth_client_with_mocked_storage: AsyncClient
     ):
         """Test getting status for existing task."""
         # Start generation
@@ -543,14 +566,14 @@ class TestGenerateAPI:
         img.save(buffer, format="PNG")
         buffer.seek(0)
 
-        start_response = await client_with_mocked_storage.post(
+        start_response = await auth_client_with_mocked_storage.post(
             "/api/generate",
             files={"schema_file": ("test.png", buffer, "image/png")},
         )
         task_id = start_response.json()["task_id"]
 
         # Check status
-        response = await client_with_mocked_storage.get(
+        response = await auth_client_with_mocked_storage.get(
             f"/api/generate/status/{task_id}"
         )
         assert response.status_code == 200
@@ -567,15 +590,15 @@ class TestPoseWithMuscles:
     """Tests for poses with muscle associations."""
 
     @pytest.mark.asyncio
-    async def test_create_pose_with_muscles(self, client: AsyncClient):
+    async def test_create_pose_with_muscles(self, auth_client: AsyncClient):
         """Test creating a pose with muscle associations."""
         # Seed muscles first
-        await client.post("/api/muscles/seed")
-        muscles_response = await client.get("/api/muscles")
+        await auth_client.post("/api/muscles/seed")
+        muscles_response = await auth_client.get("/api/muscles")
         muscles = muscles_response.json()
 
         # Create pose with muscles
-        response = await client.post(
+        response = await auth_client.post(
             "/api/poses",
             json={
                 "code": "MUS01",
@@ -592,15 +615,15 @@ class TestPoseWithMuscles:
         assert data["muscles"][0]["activation_level"] == 80
 
     @pytest.mark.asyncio
-    async def test_update_pose_muscles(self, client: AsyncClient):
+    async def test_update_pose_muscles(self, auth_client: AsyncClient):
         """Test updating pose muscle associations."""
         # Seed muscles
-        await client.post("/api/muscles/seed")
-        muscles_response = await client.get("/api/muscles")
+        await auth_client.post("/api/muscles/seed")
+        muscles_response = await auth_client.get("/api/muscles")
         muscles = muscles_response.json()
 
         # Create pose
-        create_response = await client.post(
+        create_response = await auth_client.post(
             "/api/poses",
             json={
                 "code": "UPM01",
@@ -611,7 +634,7 @@ class TestPoseWithMuscles:
         pose_id = create_response.json()["id"]
 
         # Update with new muscles
-        response = await client.put(
+        response = await auth_client.put(
             f"/api/poses/{pose_id}",
             json={
                 "muscles": [
@@ -633,9 +656,9 @@ class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
     @pytest.mark.asyncio
-    async def test_unicode_in_pose_name(self, client: AsyncClient):
+    async def test_unicode_in_pose_name(self, auth_client: AsyncClient):
         """Test handling of unicode characters in pose names."""
-        response = await client.post(
+        response = await auth_client.post(
             "/api/poses",
             json={
                 "code": "UNI01",
@@ -649,10 +672,10 @@ class TestEdgeCases:
         assert data["name"] == "Поза Воїна"
 
     @pytest.mark.asyncio
-    async def test_long_description(self, client: AsyncClient):
+    async def test_long_description(self, auth_client: AsyncClient):
         """Test handling of long description text."""
         long_text = "A" * 5000
-        response = await client.post(
+        response = await auth_client.post(
             "/api/poses",
             json={"code": "LNG01", "name": "Long Desc Pose", "description": long_text},
         )
@@ -660,9 +683,9 @@ class TestEdgeCases:
         assert len(response.json()["description"]) == 5000
 
     @pytest.mark.asyncio
-    async def test_special_characters_in_code(self, client: AsyncClient):
+    async def test_special_characters_in_code(self, auth_client: AsyncClient):
         """Test pose codes handle special characters appropriately."""
-        response = await client.post(
+        response = await auth_client.post(
             "/api/poses",
             json={"code": "TEST-01_V2", "name": "Special Code Pose"},
         )
@@ -670,24 +693,24 @@ class TestEdgeCases:
         assert response.json()["code"] == "TEST-01_V2"
 
     @pytest.mark.asyncio
-    async def test_concurrent_category_creation(self, client: AsyncClient):
+    async def test_concurrent_category_creation(self, auth_client: AsyncClient):
         """Test that duplicate detection works under concurrent creation."""
         # Create first
-        response1 = await client.post(
+        response1 = await auth_client.post(
             "/api/categories", json={"name": "Concurrent Test"}
         )
         assert response1.status_code == 201
 
         # Try to create duplicate
-        response2 = await client.post(
+        response2 = await auth_client.post(
             "/api/categories", json={"name": "Concurrent Test"}
         )
         assert response2.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_invalid_json_body(self, client: AsyncClient):
+    async def test_invalid_json_body(self, auth_client: AsyncClient):
         """Test handling of invalid JSON in request body."""
-        response = await client.post(
+        response = await auth_client.post(
             "/api/categories",
             content="not valid json",
             headers={"Content-Type": "application/json"},
@@ -695,19 +718,19 @@ class TestEdgeCases:
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_missing_required_field(self, client: AsyncClient):
+    async def test_missing_required_field(self, auth_client: AsyncClient):
         """Test validation error for missing required fields."""
-        response = await client.post("/api/poses", json={"code": "MISS01"})
+        response = await auth_client.post("/api/poses", json={"code": "MISS01"})
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_invalid_pagination_params(self, client: AsyncClient):
+    async def test_invalid_pagination_params(self, auth_client: AsyncClient):
         """Test validation of pagination parameters."""
-        response = await client.get("/api/poses?skip=-1")
+        response = await auth_client.get("/api/poses?skip=-1")
         assert response.status_code == 422
 
-        response = await client.get("/api/poses?limit=0")
+        response = await auth_client.get("/api/poses?limit=0")
         assert response.status_code == 422
 
-        response = await client.get("/api/poses?limit=1000")
+        response = await auth_client.get("/api/poses?limit=1000")
         assert response.status_code == 422

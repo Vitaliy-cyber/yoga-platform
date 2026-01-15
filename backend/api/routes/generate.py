@@ -4,8 +4,18 @@ from io import BytesIO
 from typing import Dict
 
 from config import get_settings
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status, UploadFile, File
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    HTTPException,
+    status,
+    UploadFile,
+    File,
+    Depends,
+)
+from models.user import User
 from schemas.generate import GenerateResponse, GenerateStatus
+from services.auth import get_current_user
 from services.storage import S3Storage
 
 settings = get_settings()
@@ -13,6 +23,7 @@ router = APIRouter(prefix="/api/generate", tags=["generate"])
 
 # In-memory storage for generation tasks (use Redis in production)
 generation_tasks: Dict[str, dict] = {}
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 def create_task_id() -> str:
@@ -86,6 +97,7 @@ async def generate(
     schema_file: UploadFile = File(
         ..., description="Schema image file (PNG, JPG, WEBP)"
     ),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Generate all layers from uploaded schema image.
@@ -113,9 +125,16 @@ async def generate(
             detail=f"Failed to read file: {str(e)}",
         )
 
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large. Max size is 10MB",
+        )
+
     mime_type = schema_file.content_type or "image/png"
 
     generation_tasks[task_id] = {
+        "user_id": current_user.id,
         "status": GenerateStatus.PENDING,
         "progress": 0,
         "status_message": "In queue...",
@@ -136,7 +155,7 @@ async def generate(
 
 
 @router.get("/status/{task_id}", response_model=GenerateResponse)
-async def get_status(task_id: str):
+async def get_status(task_id: str, current_user: User = Depends(get_current_user)):
     """Check generation status"""
 
     if task_id not in generation_tasks:
@@ -145,6 +164,10 @@ async def get_status(task_id: str):
         )
 
     task = generation_tasks[task_id]
+    if task.get("user_id") != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Task not found"
+        )
 
     return GenerateResponse(
         task_id=task_id,

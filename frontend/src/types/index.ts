@@ -72,11 +72,7 @@ export interface PoseCreate {
   }[];
 }
 
-export interface PoseUpdate extends Partial<PoseCreate> {
-  schema_path?: string;
-  photo_path?: string;
-  muscle_layer_path?: string;
-}
+export interface PoseUpdate extends Partial<PoseCreate> {}
 
 // Типи для генерації
 export type LayerType = 'photo' | 'muscles';

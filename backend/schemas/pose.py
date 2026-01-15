@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .muscle import PoseMuscleResponse
 
@@ -20,6 +20,36 @@ class PoseBase(BaseModel):
     effect: Optional[str] = None
     breathing: Optional[str] = None
 
+    @field_validator("code", mode="before")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                raise ValueError("Code cannot be blank")
+            return normalized
+        return value
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                raise ValueError("Name cannot be blank")
+            return normalized
+        return value
+
+    @field_validator("name_en", "description", "effect", "breathing", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
 
 class PoseCreate(PoseBase):
     muscles: Optional[List[PoseMuscleCreate]] = None
@@ -33,10 +63,29 @@ class PoseUpdate(BaseModel):
     description: Optional[str] = None
     effect: Optional[str] = None
     breathing: Optional[str] = None
-    schema_path: Optional[str] = None
-    photo_path: Optional[str] = None
-    muscle_layer_path: Optional[str] = None
     muscles: Optional[List[PoseMuscleCreate]] = None
+
+    @field_validator("code", "name", mode="before")
+    @classmethod
+    def normalize_required_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                raise ValueError("Field cannot be blank")
+            return normalized
+        return value
+
+    @field_validator("name_en", "description", "effect", "breathing", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
 
 
 class PoseResponse(PoseBase):

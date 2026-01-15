@@ -9,9 +9,9 @@ describe("App", () => {
     expect(document.body).toBeDefined();
   });
 
-  it("renders main navigation", async () => {
+  it("renders login screen when unauthenticated", async () => {
     rtlRender(<App />);
-    // App should render the platform title
-    expect(screen.getByText("YogaFlow")).toBeInTheDocument();
+    expect(await screen.findByText("Pose Studio")).toBeInTheDocument();
+    expect(screen.getByText("Welcome")).toBeInTheDocument();
   });
 });

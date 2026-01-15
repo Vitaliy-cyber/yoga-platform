@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from api.routes import auth, categories, generate, muscles, poses
 from config import AppMode, get_settings
 from db.database import init_db
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -28,6 +28,13 @@ async def lifespan(app: FastAPI):
 
     # === STARTUP ===
     logger.info(f"Starting Yoga Platform in {settings.APP_MODE.value} mode...")
+
+    # Попередження про небезпечний SECRET_KEY в production
+    if (
+        settings.APP_MODE == AppMode.PROD
+        and settings.SECRET_KEY == "your-secret-key-here-change-in-production"
+    ):
+        logger.error("SECRET_KEY is using the default value in production")
 
     # Ініціалізація бази даних
     await init_db()
@@ -64,10 +71,11 @@ app = FastAPI(
 )
 
 # CORS middleware
+allow_credentials = "*" not in settings.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -105,13 +113,17 @@ async def health_check():
     return {
         "status": "healthy",
         "mode": settings.APP_MODE.value,
+        "ai_enabled": bool(settings.GOOGLE_API_KEY),
         "ai_provider": "google_gemini" if settings.GOOGLE_API_KEY else None,
     }
 
 
 @app.get("/debug/storage")
 async def debug_storage():
-    """Debug endpoint to check S3 configuration (remove in production)"""
+    """Debug endpoint to check S3 configuration (dev only)."""
+    if settings.APP_MODE != AppMode.DEV:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
     return {
         "storage_backend": settings.STORAGE_BACKEND,
         "s3_bucket": settings.S3_BUCKET or settings.BUCKET_NAME or "<not set>",

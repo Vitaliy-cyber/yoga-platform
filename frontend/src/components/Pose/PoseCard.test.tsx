@@ -33,6 +33,6 @@ describe("PoseCard", () => {
     };
     render(<PoseCard pose={poseWithPhoto} />);
     const img = screen.getByAltText("Тадасана");
-    expect(img).toHaveAttribute("src", "/uploads/test.jpg");
+    expect(img.getAttribute("src")).toContain("/api/poses/1/image/photo");
   });
 });

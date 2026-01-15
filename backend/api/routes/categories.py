@@ -95,11 +95,11 @@ async def create_category(
     db: AsyncSession = Depends(get_db),
 ):
     """Створити нову категорію"""
-    # Перевірка на унікальність назви для цього користувача
+    # Перевірка на унікальність назви для цього користувача (case-insensitive)
     existing = await db.execute(
         select(Category).where(
             and_(
-                Category.name == category_data.name,
+                func.lower(Category.name) == func.lower(category_data.name),
                 Category.user_id == current_user.id,
             )
         )
@@ -144,6 +144,29 @@ async def update_category(
         )
 
     update_data = category_data.model_dump(exclude_unset=True)
+
+    # If name is being updated, ensure uniqueness for this user
+    if "name" in update_data:
+        if update_data["name"] is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Category name cannot be empty",
+            )
+        existing = await db.execute(
+            select(Category).where(
+                and_(
+                    func.lower(Category.name) == func.lower(update_data["name"]),
+                    Category.user_id == current_user.id,
+                    Category.id != category_id,
+                )
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Category with this name already exists",
+            )
+
     for field, value in update_data.items():
         setattr(category, field, value)
 

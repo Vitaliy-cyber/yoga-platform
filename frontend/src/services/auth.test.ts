@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { authApi } from './api';
 import { server } from '../test/setup';
 import { http, HttpResponse } from 'msw';

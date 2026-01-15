@@ -168,7 +168,7 @@ class TestAuthAPI:
     async def test_get_me_unauthenticated(self, client: AsyncClient):
         """Test getting current user without authentication fails."""
         response = await client.get("/api/auth/me")
-        assert response.status_code == 403  # HTTPBearer returns 403 when no token
+        assert response.status_code == 401
 
     @pytest.mark.asyncio
     async def test_get_me_invalid_token(self, client: AsyncClient):
@@ -212,7 +212,7 @@ class TestAuthAPI:
             "/api/auth/me",
             json={"name": "Should Fail"},
         )
-        assert response.status_code == 403
+        assert response.status_code == 401
 
 
 # ============== Protected Routes Tests ==============
@@ -226,28 +226,28 @@ class TestProtectedRoutes:
         """Test that poses endpoints require authentication."""
         # GET poses
         response = await client.get("/api/poses")
-        assert response.status_code == 403
+        assert response.status_code == 401
 
         # POST pose
         response = await client.post(
             "/api/poses",
             json={"code": "TST01", "name": "Test"},
         )
-        assert response.status_code == 403
+        assert response.status_code == 401
 
     @pytest.mark.asyncio
     async def test_categories_require_auth(self, client: AsyncClient):
         """Test that categories endpoints require authentication."""
         # GET categories
         response = await client.get("/api/categories")
-        assert response.status_code == 403
+        assert response.status_code == 401
 
         # POST category
         response = await client.post(
             "/api/categories",
             json={"name": "Test Category"},
         )
-        assert response.status_code == 403
+        assert response.status_code == 401
 
     @pytest.mark.asyncio
     async def test_poses_accessible_with_auth(self, client: AsyncClient):

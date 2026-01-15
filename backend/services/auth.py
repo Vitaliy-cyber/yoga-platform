@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -14,7 +15,7 @@ from db.database import get_db
 from models.user import User
 
 settings = get_settings()
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 def create_access_token(user_id: int, expires_delta: Optional[timedelta] = None) -> str:
@@ -29,6 +30,10 @@ def create_access_token(user_id: int, expires_delta: Optional[timedelta] = None)
     to_encode = {
         "sub": str(user_id),
         "exp": expire,
+        "iat": datetime.now(timezone.utc),
+        "iss": settings.JWT_ISSUER,
+        "aud": settings.JWT_AUDIENCE,
+        "jti": str(uuid4()),
         "type": "access",
     }
     encoded_jwt = jwt.encode(
@@ -41,12 +46,21 @@ def verify_token(token: str) -> Optional[int]:
     """Verify JWT token and return user_id if valid."""
     try:
         payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            audience=settings.JWT_AUDIENCE,
+            issuer=settings.JWT_ISSUER,
         )
-        user_id: str = payload.get("sub")
+        if payload.get("type") != "access":
+            return None
+        user_id: str | None = payload.get("sub")
         if user_id is None:
             return None
-        return int(user_id)
+        try:
+            return int(user_id)
+        except (TypeError, ValueError):
+            return None
     except JWTError:
         return None
 
@@ -62,7 +76,10 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    token = credentials.credentials
+    if credentials is None:
+        raise credentials_exception
+
+    token = credentials.credentials.strip()
     user_id = verify_token(token)
 
     if user_id is None:
@@ -88,7 +105,7 @@ async def get_optional_user(
     if credentials is None:
         return None
 
-    token = credentials.credentials
+    token = credentials.credentials.strip()
     user_id = verify_token(token)
 
     if user_id is None:
@@ -96,3 +113,38 @@ async def get_optional_user(
 
     result = await db.execute(select(User).where(User.id == user_id))
     return result.scalar_one_or_none()
+
+
+async def get_current_user_from_request(
+    token: Optional[str] = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
+        HTTPBearer(auto_error=False)
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Get current user from Authorization header or token query param."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    raw_token = None
+    if credentials is not None:
+        raw_token = credentials.credentials
+    elif token:
+        raw_token = token
+
+    if not raw_token:
+        raise credentials_exception
+
+    user_id = verify_token(raw_token.strip())
+    if user_id is None:
+        raise credentials_exception
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise credentials_exception
+
+    return user

@@ -3,8 +3,10 @@ from typing import List, Optional
 from db.database import get_db
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.muscle import Muscle
+from models.user import User
 from schemas.muscle import MuscleCreate, MuscleResponse
-from sqlalchemy import select
+from services.auth import get_current_user
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/muscles", tags=["muscles"])
@@ -12,13 +14,16 @@ router = APIRouter(prefix="/api/muscles", tags=["muscles"])
 
 @router.get("", response_model=List[MuscleResponse])
 async def get_muscles(
-    body_part: Optional[str] = None, db: AsyncSession = Depends(get_db)
+    body_part: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Отримати список всіх м'язів"""
     query = select(Muscle)
 
     if body_part:
-        query = query.where(Muscle.body_part == body_part)
+        normalized_body_part = body_part.strip().lower()
+        query = query.where(Muscle.body_part == normalized_body_part)
 
     query = query.order_by(Muscle.body_part, Muscle.name)
 
@@ -29,7 +34,11 @@ async def get_muscles(
 
 
 @router.get("/{muscle_id}", response_model=MuscleResponse)
-async def get_muscle(muscle_id: int, db: AsyncSession = Depends(get_db)):
+async def get_muscle(
+    muscle_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Отримати м'яз за ID"""
     query = select(Muscle).where(Muscle.id == muscle_id)
     result = await db.execute(query)
@@ -44,10 +53,16 @@ async def get_muscle(muscle_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("", response_model=MuscleResponse, status_code=status.HTTP_201_CREATED)
-async def create_muscle(muscle_data: MuscleCreate, db: AsyncSession = Depends(get_db)):
+async def create_muscle(
+    muscle_data: MuscleCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Створити новий м'яз"""
-    # Перевірка на унікальність назви
-    existing = await db.execute(select(Muscle).where(Muscle.name == muscle_data.name))
+    # Перевірка на унікальність назви (case-insensitive)
+    existing = await db.execute(
+        select(Muscle).where(func.lower(Muscle.name) == func.lower(muscle_data.name))
+    )
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -63,7 +78,11 @@ async def create_muscle(muscle_data: MuscleCreate, db: AsyncSession = Depends(ge
 
 
 @router.delete("/{muscle_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_muscle(muscle_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_muscle(
+    muscle_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Видалити м'яз"""
     query = select(Muscle).where(Muscle.id == muscle_id)
     result = await db.execute(query)
@@ -78,7 +97,10 @@ async def delete_muscle(muscle_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/seed", response_model=List[MuscleResponse])
-async def seed_muscles(db: AsyncSession = Depends(get_db)):
+async def seed_muscles(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Заповнити базу даних стандартними м'язами"""
     default_muscles = [
         {"name": "erector_spinae", "name_ua": "Прямий м'яз спини", "body_part": "back"},

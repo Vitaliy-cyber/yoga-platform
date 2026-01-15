@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { createBrowserRouter, RouterProvider, Navigate, Outlet } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Dashboard, PoseGallery, PoseDetail, Upload, Generate, Login } from './pages';
+import { authApi } from './services/api';
 import { useAuthStore } from './store/useAuthStore';
 import { Loader2 } from 'lucide-react';
 
@@ -87,6 +88,46 @@ const router = createBrowserRouter(
 );
 
 const App: React.FC = () => {
+  const { accessToken, user, setAuth, logout, setLoading } = useAuthStore();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateAuth = async () => {
+      if (!accessToken) {
+        setLoading(false);
+        return;
+      }
+
+      if (user) {
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const currentUser = await authApi.getMe();
+        if (!cancelled) {
+          setAuth(currentUser, accessToken);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          logout();
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    hydrateAuth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, user, setAuth, logout, setLoading]);
+
   return <RouterProvider router={router} future={{ v7_startTransition: true }} />;
 };
 

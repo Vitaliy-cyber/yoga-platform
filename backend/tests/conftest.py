@@ -327,9 +327,19 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 
 @pytest_asyncio.fixture(scope="function")
+async def auth_client(client: AsyncClient) -> AsyncGenerator[AsyncClient, None]:
+    """Create an authenticated client using the login endpoint."""
+    response = await client.post("/api/auth/login", json={"token": "test-auth-token"})
+    token = response.json()["access_token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    yield client
+
+
+@pytest_asyncio.fixture(scope="function")
 async def client_with_mocked_storage(
     db_session: AsyncSession,
     mock_s3_storage_for_routes,
+    mock_google_generator,
 ) -> AsyncGenerator[AsyncClient, None]:
     """Create a test client with mocked S3 storage."""
     from main import app
@@ -344,3 +354,16 @@ async def client_with_mocked_storage(
         yield ac
 
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def auth_client_with_mocked_storage(
+    client_with_mocked_storage: AsyncClient,
+) -> AsyncGenerator[AsyncClient, None]:
+    """Create an authenticated client with mocked S3 storage."""
+    response = await client_with_mocked_storage.post(
+        "/api/auth/login", json={"token": "test-auth-token"}
+    )
+    token = response.json()["access_token"]
+    client_with_mocked_storage.headers.update({"Authorization": f"Bearer {token}"})
+    yield client_with_mocked_storage

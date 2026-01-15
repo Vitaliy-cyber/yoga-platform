@@ -26,13 +26,13 @@ describe("PoseViewer", () => {
   it("renders photo layer by default", () => {
     render(<PoseViewer pose={mockPose} isOpen onClose={() => {}} />);
     const img = screen.getByAltText(/Тадасана/i);
-    expect(img).toHaveAttribute("src", "/generated/photo.png");
+    expect(img.getAttribute("src")).toContain("/api/poses/1/image/photo");
   });
 
   it("switches to muscles layer", () => {
     render(<PoseViewer pose={mockPose} isOpen onClose={() => {}} />);
     fireEvent.click(screen.getByText("Muscles"));
     const img = screen.getByAltText(/Тадасана - muscles/i);
-    expect(img).toHaveAttribute("src", "/generated/muscles.png");
+    expect(img.getAttribute("src")).toContain("/api/poses/1/image/muscle_layer");
   });
 });

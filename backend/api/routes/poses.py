@@ -12,13 +12,16 @@ from models.pose import Pose, PoseMuscle
 from models.user import User
 from schemas.muscle import PoseMuscleResponse
 from schemas.pose import PoseCreate, PoseListResponse, PoseResponse, PoseUpdate
-from services.auth import get_current_user
+from services.auth import get_current_user, get_current_user_from_request
 from services.storage import S3Storage
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/api/poses", tags=["poses"])
+
+ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"]
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 async def save_upload_file(file: UploadFile, subdir: str = "") -> str:
@@ -30,6 +33,12 @@ async def save_upload_file(file: UploadFile, subdir: str = "") -> str:
     key = f"{prefix}/{filename}"
 
     content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large. Max size is 10MB",
+        )
+
     content_type = file.content_type or "image/png"
 
     storage = S3Storage.get_instance()
@@ -345,6 +354,51 @@ async def update_pose(
 
     # Оновлення полів
     update_data = pose_data.model_dump(exclude={"muscles"}, exclude_unset=True)
+
+    # Перевірка на унікальність коду для цього користувача
+    if "code" in update_data:
+        if update_data["code"] is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pose code cannot be empty",
+            )
+        existing = await db.execute(
+            select(Pose).where(
+                and_(
+                    Pose.code == update_data["code"],
+                    Pose.user_id == current_user.id,
+                    Pose.id != pose_id,
+                )
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Pose with this code already exists",
+            )
+
+    if "name" in update_data and update_data["name"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pose name cannot be empty",
+        )
+
+    # Перевірка категорії (якщо оновлюється)
+    if "category_id" in update_data and update_data["category_id"] is not None:
+        category = await db.execute(
+            select(Category).where(
+                and_(
+                    Category.id == update_data["category_id"],
+                    Category.user_id == current_user.id,
+                )
+            )
+        )
+        if not category.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Category not found",
+            )
+
     for field, value in update_data.items():
         setattr(pose, field, value)
 
@@ -432,6 +486,13 @@ async def upload_pose_schema(
             status_code=status.HTTP_404_NOT_FOUND, detail="Pose not found"
         )
 
+    # Validate file type
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file type. Allowed: PNG, JPG, WEBP",
+        )
+
     # Зберегти файл
     file_path = await save_upload_file(file, "schemas")
     pose.schema_path = file_path
@@ -446,7 +507,7 @@ async def upload_pose_schema(
 async def get_pose_image(
     pose_id: int,
     image_type: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_request),
     db: AsyncSession = Depends(get_db),
 ):
     """

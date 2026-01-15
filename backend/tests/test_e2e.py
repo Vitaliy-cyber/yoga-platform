@@ -18,8 +18,8 @@ class TestHealthAndInfo:
     """Тести базових ендпоінтів"""
 
     @pytest.mark.asyncio
-    async def test_health_check(self, client: AsyncClient):
-        response = await client.get("/health")
+    async def test_health_check(self, auth_client: AsyncClient):
+        response = await auth_client.get("/health")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
@@ -27,16 +27,16 @@ class TestHealthAndInfo:
         assert "ai_enabled" in data
 
     @pytest.mark.asyncio
-    async def test_root_endpoint(self, client: AsyncClient):
-        response = await client.get("/")
+    async def test_root_endpoint(self, auth_client: AsyncClient):
+        response = await auth_client.get("/")
         assert response.status_code == 200
         data = response.json()
         assert data["name"] == "Yoga Pose Platform API"
         assert "version" in data
 
     @pytest.mark.asyncio
-    async def test_api_info(self, client: AsyncClient):
-        response = await client.get("/api/info")
+    async def test_api_info(self, auth_client: AsyncClient):
+        response = await auth_client.get("/api/info")
         assert response.status_code == 200
         data = response.json()
         assert "features" in data
@@ -47,11 +47,11 @@ class TestCategoriesE2E:
     """E2E тести для категорій"""
 
     @pytest.mark.asyncio
-    async def test_full_category_lifecycle(self, client: AsyncClient):
+    async def test_full_category_lifecycle(self, auth_client: AsyncClient):
         """Тест повного життєвого циклу категорії: створення -> читання -> оновлення -> видалення"""
 
         # 1. Створення категорії
-        create_response = await client.post(
+        create_response = await auth_client.post(
             "/api/categories",
             json={"name": "Прогини", "description": "Пози з прогином спини"},
         )
@@ -62,19 +62,19 @@ class TestCategoriesE2E:
         category_id = category["id"]
 
         # 2. Отримання категорії
-        get_response = await client.get(f"/api/categories/{category_id}")
+        get_response = await auth_client.get(f"/api/categories/{category_id}")
         assert get_response.status_code == 200
         assert get_response.json()["name"] == "Прогини"
 
         # 3. Отримання списку категорій
-        list_response = await client.get("/api/categories")
+        list_response = await auth_client.get("/api/categories")
         assert list_response.status_code == 200
         categories = list_response.json()
         assert len(categories) >= 1
         assert any(c["id"] == category_id for c in categories)
 
         # 4. Оновлення категорії
-        update_response = await client.put(
+        update_response = await auth_client.put(
             f"/api/categories/{category_id}",
             json={"name": "Прогини спини", "description": "Оновлений опис"},
         )
@@ -84,22 +84,22 @@ class TestCategoriesE2E:
         assert updated["description"] == "Оновлений опис"
 
         # 5. Видалення категорії
-        delete_response = await client.delete(f"/api/categories/{category_id}")
+        delete_response = await auth_client.delete(f"/api/categories/{category_id}")
         assert delete_response.status_code == 204
 
         # 6. Перевірка що категорія видалена
-        get_deleted = await client.get(f"/api/categories/{category_id}")
+        get_deleted = await auth_client.get(f"/api/categories/{category_id}")
         assert get_deleted.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_category_duplicate_name(self, client: AsyncClient):
+    async def test_category_duplicate_name(self, auth_client: AsyncClient):
         """Тест на унікальність назви категорії"""
 
         # Створюємо першу категорію
-        await client.post("/api/categories", json={"name": "Унікальна"})
+        await auth_client.post("/api/categories", json={"name": "Унікальна"})
 
         # Спроба створити з тією ж назвою
-        response = await client.post("/api/categories", json={"name": "Унікальна"})
+        response = await auth_client.post("/api/categories", json={"name": "Унікальна"})
         assert response.status_code == 400
         assert "already exists" in response.json()["detail"]
 
@@ -108,17 +108,17 @@ class TestMusclesE2E:
     """E2E тести для м'язів"""
 
     @pytest.mark.asyncio
-    async def test_seed_and_list_muscles(self, client: AsyncClient):
+    async def test_seed_and_list_muscles(self, auth_client: AsyncClient):
         """Тест заповнення та отримання м'язів"""
 
         # Seed м'язів
-        seed_response = await client.post("/api/muscles/seed")
+        seed_response = await auth_client.post("/api/muscles/seed")
         assert seed_response.status_code == 200
         seeded = seed_response.json()
         assert len(seeded) > 0
 
         # Отримання всіх м'язів
-        list_response = await client.get("/api/muscles")
+        list_response = await auth_client.get("/api/muscles")
         assert list_response.status_code == 200
         muscles = list_response.json()
         assert len(muscles) >= len(seeded)
@@ -131,14 +131,14 @@ class TestMusclesE2E:
         assert "body_part" in muscle
 
     @pytest.mark.asyncio
-    async def test_filter_muscles_by_body_part(self, client: AsyncClient):
+    async def test_filter_muscles_by_body_part(self, auth_client: AsyncClient):
         """Тест фільтрації м'язів по частині тіла"""
 
         # Спочатку seed
-        await client.post("/api/muscles/seed")
+        await auth_client.post("/api/muscles/seed")
 
         # Фільтрація по спині
-        response = await client.get("/api/muscles", params={"body_part": "back"})
+        response = await auth_client.get("/api/muscles", params={"body_part": "back"})
         assert response.status_code == 200
         muscles = response.json()
 
@@ -147,16 +147,16 @@ class TestMusclesE2E:
             assert muscle["body_part"] == "back"
 
     @pytest.mark.asyncio
-    async def test_get_muscle_by_id(self, client: AsyncClient):
+    async def test_get_muscle_by_id(self, auth_client: AsyncClient):
         """Тест отримання м'яза по ID"""
 
         # Seed
-        seed_response = await client.post("/api/muscles/seed")
+        seed_response = await auth_client.post("/api/muscles/seed")
         muscles = seed_response.json()
 
         if muscles:
             muscle_id = muscles[0]["id"]
-            response = await client.get(f"/api/muscles/{muscle_id}")
+            response = await auth_client.get(f"/api/muscles/{muscle_id}")
             assert response.status_code == 200
             assert response.json()["id"] == muscle_id
 
@@ -165,16 +165,18 @@ class TestPosesE2E:
     """E2E тести для поз"""
 
     @pytest.mark.asyncio
-    async def test_full_pose_lifecycle(self, client: AsyncClient):
+    async def test_full_pose_lifecycle(self, auth_client: AsyncClient):
         """Тест повного життєвого циклу пози"""
 
         # 1. Створюємо категорію
-        cat_response = await client.post("/api/categories", json={"name": "Баланс"})
+        cat_response = await auth_client.post(
+            "/api/categories", json={"name": "Баланс"}
+        )
         category_id = cat_response.json()["id"]
 
         # 2. Seed м'язів
-        await client.post("/api/muscles/seed")
-        muscles_response = await client.get("/api/muscles")
+        await auth_client.post("/api/muscles/seed")
+        muscles_response = await auth_client.get("/api/muscles")
         muscles = muscles_response.json()
 
         # 3. Створюємо позу
@@ -194,7 +196,7 @@ class TestPosesE2E:
             else [],
         }
 
-        create_response = await client.post("/api/poses", json=pose_data)
+        create_response = await auth_client.post("/api/poses", json=pose_data)
         assert create_response.status_code == 201
         pose = create_response.json()
         assert pose["code"] == "001"
@@ -203,26 +205,28 @@ class TestPosesE2E:
         pose_id = pose["id"]
 
         # 4. Отримання пози
-        get_response = await client.get(f"/api/poses/{pose_id}")
+        get_response = await auth_client.get(f"/api/poses/{pose_id}")
         assert get_response.status_code == 200
         fetched = get_response.json()
         assert fetched["name"] == "Дерево"
         assert len(fetched["muscles"]) == len(pose_data["muscles"])
 
         # 5. Отримання по коду
-        code_response = await client.get("/api/poses/code/001")
+        code_response = await auth_client.get("/api/poses/code/001")
         assert code_response.status_code == 200
         assert code_response.json()["id"] == pose_id
 
         # 6. Пошук
-        search_response = await client.get("/api/poses/search", params={"q": "Дерево"})
+        search_response = await auth_client.get(
+            "/api/poses/search", params={"q": "Дерево"}
+        )
         assert search_response.status_code == 200
         results = search_response.json()
         assert len(results) >= 1
         assert any(p["id"] == pose_id for p in results)
 
         # 7. Оновлення
-        update_response = await client.put(
+        update_response = await auth_client.put(
             f"/api/poses/{pose_id}",
             json={"name": "Дерево (Врікшасана)", "effect": "Оновлений ефект"},
         )
@@ -230,74 +234,74 @@ class TestPosesE2E:
         assert update_response.json()["name"] == "Дерево (Врікшасана)"
 
         # 8. Видалення
-        delete_response = await client.delete(f"/api/poses/{pose_id}")
+        delete_response = await auth_client.delete(f"/api/poses/{pose_id}")
         assert delete_response.status_code == 204
 
         # 9. Перевірка видалення
-        get_deleted = await client.get(f"/api/poses/{pose_id}")
+        get_deleted = await auth_client.get(f"/api/poses/{pose_id}")
         assert get_deleted.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_poses_by_category(self, client: AsyncClient):
+    async def test_poses_by_category(self, auth_client: AsyncClient):
         """Тест отримання поз по категорії"""
 
         # Створюємо категорії
-        cat1 = await client.post("/api/categories", json={"name": "Стоячі"})
-        cat2 = await client.post("/api/categories", json={"name": "Сидячі"})
+        cat1 = await auth_client.post("/api/categories", json={"name": "Стоячі"})
+        cat2 = await auth_client.post("/api/categories", json={"name": "Сидячі"})
         cat1_id = cat1.json()["id"]
         cat2_id = cat2.json()["id"]
 
         # Створюємо пози
-        await client.post(
+        await auth_client.post(
             "/api/poses", json={"code": "S01", "name": "Гора", "category_id": cat1_id}
         )
-        await client.post(
+        await auth_client.post(
             "/api/poses", json={"code": "S02", "name": "Воїн", "category_id": cat1_id}
         )
-        await client.post(
+        await auth_client.post(
             "/api/poses", json={"code": "L01", "name": "Лотос", "category_id": cat2_id}
         )
 
         # Отримуємо пози категорії "Стоячі"
-        response = await client.get(f"/api/poses/category/{cat1_id}")
+        response = await auth_client.get(f"/api/poses/category/{cat1_id}")
         assert response.status_code == 200
         poses = response.json()
         assert len(poses) == 2
         assert all(p["category_id"] == cat1_id for p in poses)
 
     @pytest.mark.asyncio
-    async def test_pose_duplicate_code(self, client: AsyncClient):
+    async def test_pose_duplicate_code(self, auth_client: AsyncClient):
         """Тест на унікальність коду пози"""
 
-        await client.post("/api/poses", json={"code": "DUP01", "name": "Перша"})
+        await auth_client.post("/api/poses", json={"code": "DUP01", "name": "Перша"})
 
-        response = await client.post(
+        response = await auth_client.post(
             "/api/poses", json={"code": "DUP01", "name": "Друга"}
         )
         assert response.status_code == 400
         assert "already exists" in response.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_pose_search_multiple_fields(self, client: AsyncClient):
+    async def test_pose_search_multiple_fields(self, auth_client: AsyncClient):
         """Тест пошуку по різних полях"""
 
-        await client.post(
+        await auth_client.post(
             "/api/poses",
             json={"code": "WAR01", "name": "Воїн Один", "name_en": "Warrior One"},
         )
 
         # Пошук по українській назві
-        response1 = await client.get("/api/poses/search", params={"q": "Воїн"})
+        response1 = await auth_client.get("/api/poses/search", params={"q": "Воїн"})
         assert response1.status_code == 200
         assert len(response1.json()) >= 1
 
         # Пошук по англійській назві
-        response2 = await client.get("/api/poses/search", params={"q": "Warrior"})
+        response2 = await auth_client.get("/api/poses/search", params={"q": "Warrior"})
         assert response2.status_code == 200
         assert len(response2.json()) >= 1
 
         # Пошук по коду
-        response3 = await client.get("/api/poses/search", params={"q": "WAR"})
+        response3 = await auth_client.get("/api/poses/search", params={"q": "WAR"})
         assert response3.status_code == 200
         assert len(response3.json()) >= 1
 
@@ -306,14 +310,18 @@ class TestGenerationE2E:
     """E2E тести для генерації (mock mode)"""
 
     @pytest.mark.asyncio
-    async def test_generate_photo_returns_task(self, client: AsyncClient):
-        """Тест що генерація фото повертає task_id"""
+    async def test_generate_returns_task(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        """Тест що генерація повертає task_id"""
 
         # Створюємо фейковий файл
         file_content = b"fake image content"
-        files = {"schema": ("test.png", io.BytesIO(file_content), "image/png")}
+        files = {"schema_file": ("test.png", io.BytesIO(file_content), "image/png")}
 
-        response = await client.post("/api/generate/photo", files=files)
+        response = await auth_client_with_mocked_storage.post(
+            "/api/generate", files=files
+        )
         assert response.status_code == 200
         data = response.json()
         assert "task_id" in data
@@ -321,40 +329,24 @@ class TestGenerationE2E:
         assert data["status"] in ["pending", "processing"]
 
     @pytest.mark.asyncio
-    async def test_generate_muscles_returns_task(self, client: AsyncClient):
-        """Тест генерації м'язів"""
-
-        file_content = b"fake image content"
-        files = {"schema": ("test.png", io.BytesIO(file_content), "image/png")}
-
-        response = await client.post("/api/generate/muscles", files=files)
-        assert response.status_code == 200
-        assert "task_id" in response.json()
-
-    @pytest.mark.asyncio
-    async def test_generate_skeleton_returns_task(self, client: AsyncClient):
-        """Тест генерації скелету"""
-
-        file_content = b"fake image content"
-        files = {"schema": ("test.png", io.BytesIO(file_content), "image/png")}
-
-        response = await client.post("/api/generate/skeleton", files=files)
-        assert response.status_code == 200
-        assert "task_id" in response.json()
-
-    @pytest.mark.asyncio
-    async def test_get_generation_status(self, client: AsyncClient):
+    async def test_get_generation_status(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
         """Тест отримання статусу генерації"""
 
         # Створюємо задачу
         file_content = b"fake image content"
-        files = {"schema": ("test.png", io.BytesIO(file_content), "image/png")}
+        files = {"schema_file": ("test.png", io.BytesIO(file_content), "image/png")}
 
-        create_response = await client.post("/api/generate/photo", files=files)
+        create_response = await auth_client_with_mocked_storage.post(
+            "/api/generate", files=files
+        )
         task_id = create_response.json()["task_id"]
 
         # Отримуємо статус
-        status_response = await client.get(f"/api/generate/status/{task_id}")
+        status_response = await auth_client_with_mocked_storage.get(
+            f"/api/generate/status/{task_id}"
+        )
         assert status_response.status_code == 200
         data = status_response.json()
         assert data["task_id"] == task_id
@@ -362,10 +354,10 @@ class TestGenerationE2E:
         assert "progress" in data
 
     @pytest.mark.asyncio
-    async def test_get_status_not_found(self, client: AsyncClient):
+    async def test_get_status_not_found(self, auth_client: AsyncClient):
         """Тест статусу неіснуючої задачі"""
 
-        response = await client.get("/api/generate/status/non-existent-task-id")
+        response = await auth_client.get("/api/generate/status/non-existent-task-id")
         assert response.status_code == 404
 
 
@@ -373,16 +365,20 @@ class TestIntegrationE2E:
     """Інтеграційні E2E тести"""
 
     @pytest.mark.asyncio
-    async def test_full_workflow(self, client: AsyncClient):
+    async def test_full_workflow(
+        self,
+        auth_client: AsyncClient,
+        auth_client_with_mocked_storage: AsyncClient,
+    ):
         """Тест повного робочого процесу платформи"""
 
         # 1. Seed м'язів
-        seed_response = await client.post("/api/muscles/seed")
+        seed_response = await auth_client.post("/api/muscles/seed")
         assert seed_response.status_code == 200
         muscles = seed_response.json()
 
         # 2. Створюємо категорію
-        cat_response = await client.post(
+        cat_response = await auth_client.post(
             "/api/categories",
             json={"name": "Інверсії", "description": "Перевернуті пози"},
         )
@@ -390,11 +386,11 @@ class TestIntegrationE2E:
         category = cat_response.json()
 
         # 3. Перевіряємо що категорія показує 0 поз
-        cat_check = await client.get(f"/api/categories/{category['id']}")
+        cat_check = await auth_client.get(f"/api/categories/{category['id']}")
         assert cat_check.json()["pose_count"] == 0
 
         # 4. Створюємо позу з м'язами
-        pose_response = await client.post(
+        pose_response = await auth_client.post(
             "/api/poses",
             json={
                 "code": "INV01",
@@ -412,11 +408,11 @@ class TestIntegrationE2E:
         pose = pose_response.json()
 
         # 5. Перевіряємо що категорія тепер показує 1 позу
-        cat_check2 = await client.get(f"/api/categories/{category['id']}")
+        cat_check2 = await auth_client.get(f"/api/categories/{category['id']}")
         assert cat_check2.json()["pose_count"] == 1
 
         # 6. Отримуємо деталі пози з м'язами
-        pose_details = await client.get(f"/api/poses/{pose['id']}")
+        pose_details = await auth_client.get(f"/api/poses/{pose['id']}")
         assert pose_details.status_code == 200
         details = pose_details.json()
         assert details["category_name"] == "Інверсії"
@@ -425,25 +421,27 @@ class TestIntegrationE2E:
             assert details["muscles"][0]["activation_level"] == 90
 
         # 7. Перевіряємо список поз по категорії
-        poses_by_cat = await client.get(f"/api/poses/category/{category['id']}")
+        poses_by_cat = await auth_client.get(f"/api/poses/category/{category['id']}")
         assert len(poses_by_cat.json()) == 1
 
         # 8. Пошук пози (пошук по англійській назві для надійності)
-        search = await client.get("/api/poses/search", params={"q": "Headstand"})
+        search = await auth_client.get("/api/poses/search", params={"q": "Headstand"})
         assert len(search.json()) >= 1
 
         # 9. Генерація (mock)
         file_content = b"fake schema"
-        files = {"schema": ("schema.png", io.BytesIO(file_content), "image/png")}
-        gen_response = await client.post("/api/generate/photo", files=files)
+        files = {"schema_file": ("schema.png", io.BytesIO(file_content), "image/png")}
+        gen_response = await auth_client_with_mocked_storage.post(
+            "/api/generate", files=files
+        )
         assert gen_response.status_code == 200
 
         # 10. Cleanup
-        await client.delete(f"/api/poses/{pose['id']}")
-        await client.delete(f"/api/categories/{category['id']}")
+        await auth_client.delete(f"/api/poses/{pose['id']}")
+        await auth_client.delete(f"/api/categories/{category['id']}")
 
         # Verify cleanup
-        assert (await client.get(f"/api/poses/{pose['id']}")).status_code == 404
+        assert (await auth_client.get(f"/api/poses/{pose['id']}")).status_code == 404
         assert (
-            await client.get(f"/api/categories/{category['id']}")
+            await auth_client.get(f"/api/categories/{category['id']}")
         ).status_code == 404
