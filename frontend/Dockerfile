@@ -3,10 +3,6 @@ FROM node:20-alpine as builder
 
 WORKDIR /app
 
-# Build argument for API URL (passed from Railway)
-ARG VITE_API_URL
-ENV VITE_API_URL=$VITE_API_URL
-
 # Copy package files
 COPY package.json package-lock.json* ./
 
@@ -16,24 +12,25 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Build the app
+# Build with placeholder API URL (will be replaced at runtime)
+ENV VITE_API_URL=__VITE_API_URL_PLACEHOLDER__
 RUN npm run build
 
 # Production stage
 FROM nginx:alpine
 
-# Install envsubst for dynamic port configuration
+# Install gettext for envsubst
 RUN apk add --no-cache gettext
 
-# Copy nginx template
+# Copy nginx config
 COPY nginx.template.conf /etc/nginx/templates/default.conf.template
 
 # Copy built assets
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Railway uses PORT env variable, default to 80
+# Railway uses PORT env variable
 ENV PORT=80
+ENV VITE_API_URL=http://localhost:8000
 
-# Use nginx docker-entrypoint which processes templates
-# It will replace ${PORT} in the template
-CMD ["sh", "-c", "envsubst '$PORT' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
+# Start script: replace placeholder with actual URL, then start nginx
+CMD ["sh", "-c", "find /usr/share/nginx/html -type f -name '*.js' -exec sed -i \"s|__VITE_API_URL_PLACEHOLDER__|$VITE_API_URL|g\" {} + && envsubst '$PORT' < /etc/nginx/templates/default.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
