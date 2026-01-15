@@ -110,5 +110,23 @@ class S3Storage:
             "ContentType": content_type,
         }
 
-        await asyncio.to_thread(self.client.put_object, **params)
-        return self._build_public_url(s3_key)
+        try:
+            logger.info(
+                "Uploading to S3: bucket=%s, key=%s, endpoint=%s",
+                self.bucket,
+                s3_key,
+                self.endpoint_url,
+            )
+            await asyncio.to_thread(self.client.put_object, **params)
+            url = self._build_public_url(s3_key)
+            logger.info("Upload successful: %s", url)
+            return url
+        except Exception as e:
+            logger.error(
+                "S3 upload failed: bucket=%s, key=%s, endpoint=%s, error=%s",
+                self.bucket,
+                s3_key,
+                self.endpoint_url,
+                str(e),
+            )
+            raise

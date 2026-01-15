@@ -108,6 +108,23 @@ async def health_check():
     }
 
 
+@app.get("/debug/storage")
+async def debug_storage():
+    """Debug endpoint to check S3 configuration (remove in production)"""
+    return {
+        "storage_backend": settings.STORAGE_BACKEND,
+        "s3_bucket": settings.S3_BUCKET or settings.BUCKET_NAME or "<not set>",
+        "s3_region": settings.S3_REGION or settings.AWS_REGION or "<not set>",
+        "s3_endpoint": settings.S3_ENDPOINT_URL
+        or settings.BUCKET_ENDPOINT
+        or "<not set>",
+        "has_access_key": bool(settings.S3_ACCESS_KEY_ID or settings.AWS_ACCESS_KEY_ID),
+        "has_secret_key": bool(
+            settings.S3_SECRET_ACCESS_KEY or settings.AWS_SECRET_ACCESS_KEY
+        ),
+    }
+
+
 @app.get("/api/info")
 async def api_info():
     """Інформація про API"""
