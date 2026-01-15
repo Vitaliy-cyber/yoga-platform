@@ -88,18 +88,13 @@ const router = createBrowserRouter(
 );
 
 const App: React.FC = () => {
-  const { accessToken, user, setAuth, logout, setLoading } = useAuthStore();
+  const { accessToken, setAuth, logout, setLoading } = useAuthStore();
 
   useEffect(() => {
     let cancelled = false;
 
     const hydrateAuth = async () => {
       if (!accessToken) {
-        setLoading(false);
-        return;
-      }
-
-      if (user) {
         setLoading(false);
         return;
       }
@@ -126,7 +121,7 @@ const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, user, setAuth, logout, setLoading]);
+  }, [accessToken, setAuth, logout, setLoading]);
 
   return <RouterProvider router={router} future={{ v7_startTransition: true }} />;
 };
