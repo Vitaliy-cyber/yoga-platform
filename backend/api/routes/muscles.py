@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from db.database import get_db
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -11,7 +11,9 @@ router = APIRouter(prefix="/api/muscles", tags=["muscles"])
 
 
 @router.get("", response_model=List[MuscleResponse])
-async def get_muscles(body_part: str = None, db: AsyncSession = Depends(get_db)):
+async def get_muscles(
+    body_part: Optional[str] = None, db: AsyncSession = Depends(get_db)
+):
     """Отримати список всіх м'язів"""
     query = select(Muscle)
 

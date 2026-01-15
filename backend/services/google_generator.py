@@ -37,8 +37,8 @@ class GoogleGeminiGenerator:
     """
 
     _instance: Optional["GoogleGeminiGenerator"] = None
-    _client = None
-    _initialized = False
+    _client: Optional["genai.Client"] = None  # type: ignore
+    _initialized: bool = False
 
     # Model for image generation (lerailchuk@gmail.com)
     GEMINI_IMAGE_MODEL = "models/gemini-3-pro-image-preview"
@@ -101,6 +101,9 @@ class GoogleGeminiGenerator:
 
         logger.info("Analyzing pose from image bytes (%s)", mime_type)
 
+        if self._client is None:
+            raise RuntimeError("Google Gemini client not initialized")
+
         try:
             response = self._client.models.generate_content(
                 model=self.GEMINI_VISION_MODEL,
@@ -113,7 +116,7 @@ class GoogleGeminiGenerator:
                 ],
             )
 
-            pose_description = response.text.strip()
+            pose_description = response.text.strip() if response.text else "yoga pose"
             logger.info(f"Detected pose: {pose_description}")
             return pose_description
 
@@ -154,6 +157,9 @@ class GoogleGeminiGenerator:
         else:
             contents = prompt
 
+        if self._client is None:
+            raise RuntimeError("Google Gemini client not initialized")
+
         for attempt in range(max_retries):
             try:
                 response = self._client.models.generate_content(
@@ -165,12 +171,16 @@ class GoogleGeminiGenerator:
                 )
 
                 # Extract image from response using the new API
-                for part in response.parts:
-                    if part.inline_data is not None:
-                        # Convert bytes to PIL Image
-                        image_data = part.inline_data.data
-                        pil_image = Image.open(BytesIO(image_data))
-                        return pil_image, False
+                if response.parts:
+                    for part in response.parts:
+                        if (
+                            part.inline_data is not None
+                            and part.inline_data.data is not None
+                        ):
+                            # Convert bytes to PIL Image
+                            image_data = part.inline_data.data
+                            pil_image = Image.open(BytesIO(image_data))
+                            return pil_image, False
 
                 logger.warning("No image in response")
 

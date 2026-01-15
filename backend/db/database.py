@@ -15,19 +15,15 @@ if database_url.startswith("postgresql://"):
 # Налаштування для різних БД
 is_sqlite = database_url.startswith("sqlite")
 
-engine_kwargs = {
+engine_kwargs: dict = {
     "echo": False,
 }
 
 if not is_sqlite:
     # PostgreSQL специфічні налаштування
-    engine_kwargs.update(
-        {
-            "pool_pre_ping": True,
-            "pool_size": 5,
-            "max_overflow": 10,
-        }
-    )
+    engine_kwargs["pool_pre_ping"] = True
+    engine_kwargs["pool_size"] = 5
+    engine_kwargs["max_overflow"] = 10
 
 engine = create_async_engine(database_url, **engine_kwargs)
 
