@@ -163,11 +163,11 @@ export function useGenerate() {
 
         addToast({ type: "info", message: "Генерація розпочата..." });
 
-        // Poll immediately, then every 300ms for smoother progress updates
+        // Poll immediately, then every 1000ms (1 second)
         pollStatus(response.task_id);
         pollingRef.current = setInterval(() => {
           pollStatus(response.task_id);
-        }, 300);
+        }, 1000);
       } catch (err) {
         clearSimulation();
         const message =

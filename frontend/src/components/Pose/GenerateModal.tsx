@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -36,49 +36,26 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const [schemaLoadError, setSchemaLoadError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, generate, reset } = useGenerate();
-  const [isSaving, setIsSaving] = useState(false);
+  const [_isSaving, setIsSaving] = useState(false);
   const [generationStarted, setGenerationStarted] = useState(false);
 
   // Determine current step based on progress
   // Backend sends: 10% (analyzing), 30% (photo start), 60% (muscles start), 100% (done)
   const currentStep = progress < 30 ? 0 : progress < 60 ? 1 : progress < 100 ? 2 : 2;
   
-  // Save generated images to database when generation completes
-  // Only trigger if generation was started in this modal session
-  useEffect(() => {
-    const saveGeneratedImages = async () => {
-      if (generationStarted && photoUrl && !isGenerating && !isSaving && pose) {
-        setIsSaving(true);
-        try {
-          // Update the pose with the generated image URLs
-          await posesApi.update(pose.id, {
-            photo_path: photoUrl,
-            ...(musclesUrl && { muscle_layer_path: musclesUrl }),
-          });
-          
-          // Notify parent to refresh data
-          if (onComplete) {
-            onComplete();
-          }
-          handleClose();
-        } catch (err) {
-          console.error("Failed to save generated images:", err);
-          // Still close and refresh - the images are generated, just not saved to pose
-          if (onComplete) {
-            onComplete();
-          }
-          handleClose();
-        }
+  // Ref to prevent double saves
+  const savingRef = useRef(false);
+
+  // Helper to clear uploaded file
+  const handleClearFile = useCallback(() => {
+    setUploadedFile(null);
+    setPreviewUrl((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev);
       }
-    };
-    
-    saveGeneratedImages();
-  }, [photoUrl, musclesUrl, isGenerating, pose, generationStarted]);
-  
-  // Check if pose has existing schema (and it loaded successfully)
-  const hasExistingSchema = Boolean(pose?.schema_path && pose.schema_path.trim()) && !schemaLoadError;
-  const hasUploadedFile = Boolean(uploadedFile);
-  const canGenerate = hasUploadedFile || (hasExistingSchema && !schemaLoadError);
+      return null;
+    });
+  }, []);
 
   const handleFileSelect = (file: File) => {
     if (file && file.type.startsWith("image/")) {
@@ -87,13 +64,49 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     }
   };
 
-  const handleClearFile = () => {
-    setUploadedFile(null);
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(null);
-    }
-  };
+  // Check if pose has existing schema (and it loaded successfully)
+  const hasExistingSchema = Boolean(pose?.schema_path && pose.schema_path.trim()) && !schemaLoadError;
+  const hasUploadedFile = Boolean(uploadedFile);
+  const canGenerate = hasUploadedFile || (hasExistingSchema && !schemaLoadError);
+  
+  // Save generated images to database when generation completes
+  useEffect(() => {
+    const saveGeneratedImages = async () => {
+      // Prevent multiple saves with ref (more reliable than state)
+      if (!generationStarted || !photoUrl || isGenerating || savingRef.current || !pose) {
+        return;
+      }
+      
+      savingRef.current = true;
+      setIsSaving(true);
+      
+      try {
+        // Update the pose with the generated image URLs
+        await posesApi.update(pose.id, {
+          photo_path: photoUrl,
+          ...(musclesUrl && { muscle_layer_path: musclesUrl }),
+        });
+        
+        // Notify parent to refresh data
+        onComplete?.();
+      } catch (err) {
+        console.error("Failed to save generated images:", err);
+        // Still notify parent - the images are generated, just not saved to pose
+        onComplete?.();
+      } finally {
+        // Reset and close
+        savingRef.current = false;
+        setIsSaving(false);
+        setGenerationStarted(false);
+        reset();
+        handleClearFile();
+        setSchemaLoadError(false);
+        onClose();
+      }
+    };
+    
+    saveGeneratedImages();
+  }, [photoUrl, musclesUrl, isGenerating, pose, generationStarted, onComplete, onClose, reset, handleClearFile]);
 
   const handleGenerate = async () => {
     let fileToGenerate: File | null = null;
@@ -125,14 +138,18 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     }
   };
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
+    // Only close if not currently saving
+    if (savingRef.current) {
+      return;
+    }
     reset();
     handleClearFile();
     setSchemaLoadError(false);
     setIsSaving(false);
     setGenerationStarted(false);
     onClose();
-  };
+  }, [reset, handleClearFile, onClose]);
 
   if (!pose) return null;
 

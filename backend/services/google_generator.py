@@ -227,9 +227,16 @@ class GoogleGeminiGenerator:
         2. Generate realistic studio photo
         3. Generate body paint muscle visualization
         """
+
+        async def update_progress(progress: int, message: str):
+            if progress_callback:
+                result = progress_callback(progress, message)
+                # Handle both sync and async callbacks
+                if hasattr(result, "__await__"):
+                    await result
+
         # Step 1: Analyze pose
-        if progress_callback:
-            progress_callback(10, "Analyzing pose...")
+        await update_progress(10, "Analyzing pose...")
 
         pose_description = await self._analyze_pose_from_image(image_bytes, mime_type)
 
@@ -237,8 +244,7 @@ class GoogleGeminiGenerator:
 
         # Step 2: Generate studio photo
         # Use the schema as reference to ensure correct pose
-        if progress_callback:
-            progress_callback(30, "Generating studio photo...")
+        await update_progress(30, "Generating studio photo...")
 
         photo_prompt = f"""Professional yoga photography. Generate based on the reference pose image.
 
@@ -270,8 +276,7 @@ DO NOT generate: extra limbs, fused fingers, distorted hands, extra fingers, mut
 
         # Step 3: Generate body paint muscle visualization
         # Use the generated photo as reference to ensure consistent pose
-        if progress_callback:
-            progress_callback(60, "Generating muscle visualization...")
+        await update_progress(60, "Generating muscle visualization...")
 
         muscle_prompt = f"""Create an anatomical muscle and skeleton diagram based on EXACTLY this pose from the reference image.
 The figure MUST match the EXACT same pose, position, and angle as shown in the reference photo.
@@ -303,8 +308,7 @@ Color scheme:
         used_placeholders = used_placeholders or is_placeholder
         logger.info("Muscles generated")
 
-        if progress_callback:
-            progress_callback(100, "Completed!")
+        await update_progress(100, "Completed!")
 
         return GenerationResult(
             photo_bytes=photo_bytes,
@@ -319,10 +323,17 @@ Color scheme:
         progress_callback: Optional[Callable] = None,
     ) -> GenerationResult:
         """Generate 2 images from text description"""
+
+        async def update_progress(progress: int, message: str):
+            if progress_callback:
+                result = progress_callback(progress, message)
+                # Handle both sync and async callbacks
+                if hasattr(result, "__await__"):
+                    await result
+
         used_placeholders = False
 
-        if progress_callback:
-            progress_callback(30, "Generating studio photo...")
+        await update_progress(30, "Generating studio photo...")
 
         photo_img, is_placeholder = await self._generate_image(
             f"Professional yoga studio photograph, fit woman performing {pose_description}, "
@@ -331,8 +342,7 @@ Color scheme:
         photo_bytes = self._image_to_bytes(photo_img)
         used_placeholders = used_placeholders or is_placeholder
 
-        if progress_callback:
-            progress_callback(60, "Generating muscle visualization...")
+        await update_progress(60, "Generating muscle visualization...")
 
         muscle_prompt = f"""Create an anatomical muscle and skeleton diagram based on EXACTLY this pose from the reference image.
 The figure MUST match the EXACT same pose, position, and angle as shown in the reference photo.
@@ -356,8 +366,7 @@ Requirements:
         muscle_bytes = self._image_to_bytes(muscle_img)
         used_placeholders = used_placeholders or is_placeholder
 
-        if progress_callback:
-            progress_callback(100, "Completed!")
+        await update_progress(100, "Completed!")
 
         return GenerationResult(
             photo_bytes=photo_bytes,
