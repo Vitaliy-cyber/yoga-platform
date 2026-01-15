@@ -4,25 +4,32 @@ from db.database import get_db
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.category import Category
 from models.pose import Pose
+from models.user import User
 from schemas.category import CategoryCreate, CategoryResponse, CategoryUpdate
-from sqlalchemy import func, select
+from services.auth import get_current_user
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/categories", tags=["categories"])
 
 
 @router.get("", response_model=List[CategoryResponse])
-async def get_categories(db: AsyncSession = Depends(get_db)):
-    """Отримати список всіх категорій з кількістю поз"""
-    # Підзапит для підрахунку поз
+async def get_categories(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Отримати список категорій поточного користувача"""
+    # Підзапит для підрахунку поз користувача
     pose_count_subq = (
         select(Pose.category_id, func.count(Pose.id).label("pose_count"))
+        .where(Pose.user_id == current_user.id)
         .group_by(Pose.category_id)
         .subquery()
     )
 
     query = (
         select(Category, pose_count_subq.c.pose_count)
+        .where(Category.user_id == current_user.id)
         .outerjoin(pose_count_subq, Category.id == pose_count_subq.c.category_id)
         .order_by(Category.name)
     )
@@ -48,9 +55,15 @@ async def get_categories(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{category_id}", response_model=CategoryResponse)
-async def get_category(category_id: int, db: AsyncSession = Depends(get_db)):
+async def get_category(
+    category_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Отримати категорію за ID"""
-    query = select(Category).where(Category.id == category_id)
+    query = select(Category).where(
+        and_(Category.id == category_id, Category.user_id == current_user.id)
+    )
     result = await db.execute(query)
     category = result.scalar_one_or_none()
 
@@ -59,9 +72,9 @@ async def get_category(category_id: int, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND, detail="Category not found"
         )
 
-    # Підрахунок поз
+    # Підрахунок поз користувача
     pose_count_query = select(func.count(Pose.id)).where(
-        Pose.category_id == category_id
+        and_(Pose.category_id == category_id, Pose.user_id == current_user.id)
     )
     pose_count_result = await db.execute(pose_count_query)
     pose_count = pose_count_result.scalar() or 0
@@ -77,12 +90,19 @@ async def get_category(category_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
 async def create_category(
-    category_data: CategoryCreate, db: AsyncSession = Depends(get_db)
+    category_data: CategoryCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Створити нову категорію"""
-    # Перевірка на унікальність назви
+    # Перевірка на унікальність назви для цього користувача
     existing = await db.execute(
-        select(Category).where(Category.name == category_data.name)
+        select(Category).where(
+            and_(
+                Category.name == category_data.name,
+                Category.user_id == current_user.id,
+            )
+        )
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
@@ -90,7 +110,7 @@ async def create_category(
             detail="Category with this name already exists",
         )
 
-    category = Category(**category_data.model_dump())
+    category = Category(user_id=current_user.id, **category_data.model_dump())
     db.add(category)
     await db.flush()
     await db.refresh(category)
@@ -106,10 +126,15 @@ async def create_category(
 
 @router.put("/{category_id}", response_model=CategoryResponse)
 async def update_category(
-    category_id: int, category_data: CategoryUpdate, db: AsyncSession = Depends(get_db)
+    category_id: int,
+    category_data: CategoryUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Оновити категорію"""
-    query = select(Category).where(Category.id == category_id)
+    query = select(Category).where(
+        and_(Category.id == category_id, Category.user_id == current_user.id)
+    )
     result = await db.execute(query)
     category = result.scalar_one_or_none()
 
@@ -125,9 +150,9 @@ async def update_category(
     await db.flush()
     await db.refresh(category)
 
-    # Підрахунок поз
+    # Підрахунок поз користувача
     pose_count_query = select(func.count(Pose.id)).where(
-        Pose.category_id == category_id
+        and_(Pose.category_id == category_id, Pose.user_id == current_user.id)
     )
     pose_count_result = await db.execute(pose_count_query)
     pose_count = pose_count_result.scalar() or 0
@@ -142,9 +167,15 @@ async def update_category(
 
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_category(category_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_category(
+    category_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Видалити категорію"""
-    query = select(Category).where(Category.id == category_id)
+    query = select(Category).where(
+        and_(Category.id == category_id, Category.user_id == current_user.id)
+    )
     result = await db.execute(query)
     category = result.scalar_one_or_none()
 

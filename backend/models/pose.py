@@ -16,11 +16,17 @@ class Pose(Base):
     __tablename__ = "poses"
 
     id = Column(Integer, primary_key=True, index=True)
-    code = Column(String(20), nullable=False, unique=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code = Column(String(20), nullable=False, index=True)
     name = Column(String(200), nullable=False)
     name_en = Column(String(200), nullable=True)
     category_id = Column(
-        Integer, ForeignKey("categories.id"), nullable=True, index=True
+        Integer,
+        ForeignKey("categories.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     description = Column(Text, nullable=True)
     effect = Column(Text, nullable=True)
@@ -35,6 +41,7 @@ class Pose(Base):
     )
 
     # Зв'язки
+    user = relationship("User", back_populates="poses")
     category = relationship("Category", back_populates="poses")
     pose_muscles = relationship(
         "PoseMuscle", back_populates="pose", cascade="all, delete-orphan"

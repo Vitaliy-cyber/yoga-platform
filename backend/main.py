@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from api.routes import categories, generate, muscles, poses
+from api.routes import auth, categories, generate, muscles, poses
 from config import AppMode, get_settings
 from db.database import init_db
 from fastapi import FastAPI
@@ -81,6 +81,7 @@ if settings.STORAGE_BACKEND == "local":
     app.mount("/layers", StaticFiles(directory=settings.LAYERS_DIR), name="layers")
 
 # API Routes
+app.include_router(auth.router)
 app.include_router(poses.router)
 app.include_router(generate.router)
 app.include_router(categories.router)

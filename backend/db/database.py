@@ -56,7 +56,7 @@ async def get_db():
 async def init_db():
     """Ініціалізація бази даних"""
     # Імпортуємо моделі щоб вони зареєструвались
-    from models import category, muscle, pose
+    from models import category, muscle, pose, user
 
     async with engine.begin() as conn:
         # Використовуємо checkfirst=True щоб не падало на існуючих таблицях

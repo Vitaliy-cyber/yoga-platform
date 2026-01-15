@@ -1,6 +1,4 @@
 import os
-import os
-import re
 import uuid
 from typing import List, Optional
 
@@ -11,10 +9,12 @@ from fastapi.responses import Response
 from models.category import Category
 from models.muscle import Muscle
 from models.pose import Pose, PoseMuscle
+from models.user import User
 from schemas.muscle import PoseMuscleResponse
 from schemas.pose import PoseCreate, PoseListResponse, PoseResponse, PoseUpdate
+from services.auth import get_current_user
 from services.storage import S3Storage
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -75,10 +75,16 @@ async def get_poses(
     category_id: Optional[int] = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Отримати список всіх поз"""
-    query = select(Pose).options(selectinload(Pose.category)).order_by(Pose.code)
+    """Отримати список поз поточного користувача"""
+    query = (
+        select(Pose)
+        .options(selectinload(Pose.category))
+        .where(Pose.user_id == current_user.id)
+        .order_by(Pose.code)
+    )
 
     if category_id:
         query = query.where(Pose.category_id == category_id)
@@ -105,7 +111,9 @@ async def get_poses(
 
 @router.get("/search", response_model=List[PoseListResponse])
 async def search_poses(
-    q: str = Query(..., min_length=1), db: AsyncSession = Depends(get_db)
+    q: str = Query(..., min_length=1),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Пошук поз за назвою або кодом"""
     search_term = f"%{q}%"
@@ -114,10 +122,13 @@ async def search_poses(
         select(Pose)
         .options(selectinload(Pose.category))
         .where(
-            or_(
-                Pose.name.ilike(search_term),
-                Pose.name_en.ilike(search_term),
-                Pose.code.ilike(search_term),
+            and_(
+                Pose.user_id == current_user.id,
+                or_(
+                    Pose.name.ilike(search_term),
+                    Pose.name_en.ilike(search_term),
+                    Pose.code.ilike(search_term),
+                ),
             )
         )
         .order_by(Pose.code)
@@ -143,10 +154,18 @@ async def search_poses(
 
 
 @router.get("/category/{category_id}", response_model=List[PoseListResponse])
-async def get_poses_by_category(category_id: int, db: AsyncSession = Depends(get_db)):
+async def get_poses_by_category(
+    category_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Отримати пози за категорією"""
-    # Перевірити чи категорія існує
-    category = await db.execute(select(Category).where(Category.id == category_id))
+    # Перевірити чи категорія існує і належить користувачу
+    category = await db.execute(
+        select(Category).where(
+            and_(Category.id == category_id, Category.user_id == current_user.id)
+        )
+    )
     if not category.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Category not found"
@@ -155,7 +174,7 @@ async def get_poses_by_category(category_id: int, db: AsyncSession = Depends(get
     query = (
         select(Pose)
         .options(selectinload(Pose.category))
-        .where(Pose.category_id == category_id)
+        .where(and_(Pose.category_id == category_id, Pose.user_id == current_user.id))
         .order_by(Pose.code)
     )
 
@@ -178,7 +197,11 @@ async def get_poses_by_category(category_id: int, db: AsyncSession = Depends(get
 
 
 @router.get("/{pose_id}", response_model=PoseResponse)
-async def get_pose(pose_id: int, db: AsyncSession = Depends(get_db)):
+async def get_pose(
+    pose_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Отримати позу за ID"""
     query = (
         select(Pose)
@@ -186,7 +209,7 @@ async def get_pose(pose_id: int, db: AsyncSession = Depends(get_db)):
             selectinload(Pose.category),
             selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
         )
-        .where(Pose.id == pose_id)
+        .where(and_(Pose.id == pose_id, Pose.user_id == current_user.id))
     )
 
     result = await db.execute(query)
@@ -201,7 +224,11 @@ async def get_pose(pose_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/code/{code}", response_model=PoseResponse)
-async def get_pose_by_code(code: str, db: AsyncSession = Depends(get_db)):
+async def get_pose_by_code(
+    code: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Отримати позу за кодом"""
     query = (
         select(Pose)
@@ -209,7 +236,7 @@ async def get_pose_by_code(code: str, db: AsyncSession = Depends(get_db)):
             selectinload(Pose.category),
             selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
         )
-        .where(Pose.code == code)
+        .where(and_(Pose.code == code, Pose.user_id == current_user.id))
     )
 
     result = await db.execute(query)
@@ -224,20 +251,33 @@ async def get_pose_by_code(code: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("", response_model=PoseResponse, status_code=status.HTTP_201_CREATED)
-async def create_pose(pose_data: PoseCreate, db: AsyncSession = Depends(get_db)):
+async def create_pose(
+    pose_data: PoseCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Створити нову позу"""
-    # Перевірка на унікальність коду
-    existing = await db.execute(select(Pose).where(Pose.code == pose_data.code))
+    # Перевірка на унікальність коду для цього користувача
+    existing = await db.execute(
+        select(Pose).where(
+            and_(Pose.code == pose_data.code, Pose.user_id == current_user.id)
+        )
+    )
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Pose with this code already exists",
         )
 
-    # Перевірка категорії
+    # Перевірка категорії (якщо вказана)
     if pose_data.category_id:
         category = await db.execute(
-            select(Category).where(Category.id == pose_data.category_id)
+            select(Category).where(
+                and_(
+                    Category.id == pose_data.category_id,
+                    Category.user_id == current_user.id,
+                )
+            )
         )
         if not category.scalar_one_or_none():
             raise HTTPException(
@@ -246,7 +286,7 @@ async def create_pose(pose_data: PoseCreate, db: AsyncSession = Depends(get_db))
 
     # Створення пози
     pose_dict = pose_data.model_dump(exclude={"muscles"})
-    pose = Pose(**pose_dict)
+    pose = Pose(user_id=current_user.id, **pose_dict)
     db.add(pose)
     await db.flush()
 
@@ -286,10 +326,15 @@ async def create_pose(pose_data: PoseCreate, db: AsyncSession = Depends(get_db))
 
 @router.put("/{pose_id}", response_model=PoseResponse)
 async def update_pose(
-    pose_id: int, pose_data: PoseUpdate, db: AsyncSession = Depends(get_db)
+    pose_id: int,
+    pose_data: PoseUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Оновити позу"""
-    query = select(Pose).where(Pose.id == pose_id)
+    query = select(Pose).where(
+        and_(Pose.id == pose_id, Pose.user_id == current_user.id)
+    )
     result = await db.execute(query)
     pose = result.scalar_one_or_none()
 
@@ -343,9 +388,15 @@ async def update_pose(
 
 
 @router.delete("/{pose_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_pose(pose_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_pose(
+    pose_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Видалити позу"""
-    query = select(Pose).where(Pose.id == pose_id)
+    query = select(Pose).where(
+        and_(Pose.id == pose_id, Pose.user_id == current_user.id)
+    )
     result = await db.execute(query)
     pose = result.scalar_one_or_none()
 
@@ -359,7 +410,10 @@ async def delete_pose(pose_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{pose_id}/schema", response_model=PoseResponse)
 async def upload_pose_schema(
-    pose_id: int, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)
+    pose_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Завантажити схему для пози"""
     query = (
@@ -368,7 +422,7 @@ async def upload_pose_schema(
             selectinload(Pose.category),
             selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
         )
-        .where(Pose.id == pose_id)
+        .where(and_(Pose.id == pose_id, Pose.user_id == current_user.id))
     )
     result = await db.execute(query)
     pose = result.scalar_one_or_none()
@@ -392,6 +446,7 @@ async def upload_pose_schema(
 async def get_pose_image(
     pose_id: int,
     image_type: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -406,8 +461,10 @@ async def get_pose_image(
             detail=f"Invalid image type. Must be one of: {valid_types}",
         )
 
-    # Get pose
-    query = select(Pose).where(Pose.id == pose_id)
+    # Get pose (check user ownership)
+    query = select(Pose).where(
+        and_(Pose.id == pose_id, Pose.user_id == current_user.id)
+    )
     result = await db.execute(query)
     pose = result.scalar_one_or_none()
 
