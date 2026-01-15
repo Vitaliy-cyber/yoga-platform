@@ -59,10 +59,11 @@ async def get_db():
 
 async def init_db():
     """Ініціалізація бази даних"""
-    async with engine.begin() as conn:
-        # Імпортуємо моделі щоб вони зареєструвались
-        from models import category, muscle, pose
+    # Імпортуємо моделі щоб вони зареєструвались
+    from models import category, muscle, pose
 
-        await conn.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn:
+        # Використовуємо checkfirst=True щоб не падало на існуючих таблицях
+        await conn.run_sync(Base.metadata.create_all, checkfirst=True)
 
     logging.info("Database initialized successfully")
