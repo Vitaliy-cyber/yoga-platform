@@ -11,7 +11,15 @@ logger = logging.getLogger(__name__)
 
 
 class S3Storage:
-    """S3 storage service for uploading images."""
+    """S3 storage service for uploading images.
+
+    Supports:
+    - AWS S3
+    - Railway Object Storage
+    - Cloudflare R2
+    - MinIO
+    - Any S3-compatible storage
+    """
 
     _instance: Optional["S3Storage"] = None
 
@@ -29,31 +37,60 @@ class S3Storage:
         if settings.STORAGE_BACKEND != "s3":
             raise RuntimeError("S3 storage backend is not enabled")
 
-        if not settings.S3_BUCKET:
-            raise RuntimeError("S3_BUCKET is required when using S3 storage")
+        # Support both standard S3 and Railway Object Storage variable names
+        self.bucket = settings.S3_BUCKET or settings.BUCKET_NAME
 
-        self.bucket = settings.S3_BUCKET
-        self.prefix = settings.S3_PREFIX.strip("/")
-        self.public_base_url = self._resolve_public_base_url()
+        if not self.bucket:
+            raise RuntimeError(
+                "S3_BUCKET or BUCKET_NAME is required when using S3 storage"
+            )
 
-        self.client = boto3.client(
-            "s3",
-            aws_access_key_id=settings.S3_ACCESS_KEY_ID or None,
-            aws_secret_access_key=settings.S3_SECRET_ACCESS_KEY or None,
-            region_name=settings.S3_REGION or None,
-        )
+        self.prefix = settings.S3_PREFIX.strip("/") if settings.S3_PREFIX else ""
+
+        # Get credentials (support both naming conventions)
+        access_key = settings.S3_ACCESS_KEY_ID or settings.AWS_ACCESS_KEY_ID
+        secret_key = settings.S3_SECRET_ACCESS_KEY or settings.AWS_SECRET_ACCESS_KEY
+        region = settings.S3_REGION or settings.AWS_REGION or "us-east-1"
+
+        # Get endpoint URL (for Railway, R2, MinIO etc.)
+        self.endpoint_url = settings.S3_ENDPOINT_URL or settings.BUCKET_ENDPOINT or None
+
+        # Build S3 client
+        client_kwargs = {
+            "aws_access_key_id": access_key or None,
+            "aws_secret_access_key": secret_key or None,
+            "region_name": region,
+        }
+
+        if self.endpoint_url:
+            client_kwargs["endpoint_url"] = self.endpoint_url
+
+        self.client = boto3.client("s3", **client_kwargs)
+
+        # Resolve public URL base
+        self.public_base_url = self._resolve_public_base_url(region)
 
         logger.info(
-            "S3 storage initialized (bucket=%s, prefix=%s)",
+            "S3 storage initialized (bucket=%s, prefix=%s, endpoint=%s)",
             self.bucket,
             self.prefix or "<none>",
+            self.endpoint_url or "AWS S3",
         )
 
-    def _resolve_public_base_url(self) -> str:
-        region = settings.S3_REGION.strip()
-        if not region or region == "us-east-1":
-            return f"https://{settings.S3_BUCKET}.s3.amazonaws.com"
-        return f"https://{settings.S3_BUCKET}.s3.{region}.amazonaws.com"
+    def _resolve_public_base_url(self, region: str) -> str:
+        """Resolve public URL for accessing files."""
+        # If using custom endpoint (Railway, R2, etc.), use it for public URLs
+        if self.endpoint_url:
+            # Railway Object Storage public URL format
+            # Endpoint: https://xxx.r2.cloudflarestorage.com -> Public: same
+            # For Railway, public URLs are: {endpoint}/{bucket}/{key}
+            return f"{self.endpoint_url.rstrip('/')}/{self.bucket}"
+
+        # Standard AWS S3 URL format
+        region = region.strip() if region else "us-east-1"
+        if region == "us-east-1":
+            return f"https://{self.bucket}.s3.amazonaws.com"
+        return f"https://{self.bucket}.s3.{region}.amazonaws.com"
 
     def _build_key(self, key: str) -> str:
         key = key.lstrip("/")

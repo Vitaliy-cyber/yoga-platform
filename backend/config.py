@@ -35,11 +35,21 @@ class Settings(BaseSettings):
     LAYERS_DIR: str = "layers"
 
     # S3 settings (used when STORAGE_BACKEND="s3")
+    # Standard AWS S3 settings
     S3_BUCKET: str = ""
     S3_REGION: str = "us-east-1"
     S3_ACCESS_KEY_ID: str = ""
     S3_SECRET_ACCESS_KEY: str = ""
     S3_PREFIX: str = ""
+    # S3 endpoint (for Railway, Cloudflare R2, MinIO, etc.)
+    S3_ENDPOINT_URL: str = ""
+
+    # Railway Object Storage (alternative names)
+    BUCKET_NAME: str = ""  # Railway uses this
+    BUCKET_ENDPOINT: str = ""  # Railway uses this
+    AWS_ACCESS_KEY_ID: str = ""  # Railway uses this
+    AWS_SECRET_ACCESS_KEY: str = ""  # Railway uses this
+    AWS_REGION: str = ""  # Railway uses this
 
     # Google Gemini API (AI generation is always enabled)
     GOOGLE_API_KEY: str = ""
