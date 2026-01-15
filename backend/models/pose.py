@@ -17,7 +17,7 @@ class Pose(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
     )
     code = Column(String(20), nullable=False, index=True)
     name = Column(String(200), nullable=False)
