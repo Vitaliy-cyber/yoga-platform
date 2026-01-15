@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { User } from '../types';
 
+// Storage key for persisting auth state
 const TOKEN_KEY = 'yoga_auth_token';
 
 interface AuthState {
