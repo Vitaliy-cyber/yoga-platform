@@ -11,7 +11,11 @@ import type {
   ApiError,
 } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+// Get API URL from env or use relative path (for same-origin requests)
+const API_BASE_URL = import.meta.env.VITE_API_URL || window.location.origin;
+
+// Debug log
+console.log('API_BASE_URL:', API_BASE_URL);
 
 const api = axios.create({
   baseURL: API_BASE_URL,
