@@ -63,6 +63,8 @@ class PoseUpdate(BaseModel):
     description: Optional[str] = None
     effect: Optional[str] = None
     breathing: Optional[str] = None
+    photo_path: Optional[str] = None
+    muscle_layer_path: Optional[str] = None
     muscles: Optional[List[PoseMuscleCreate]] = None
 
     @field_validator("code", "name", mode="before")
