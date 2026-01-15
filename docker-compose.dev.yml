@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: yoga-db-dev
+    environment:
+      POSTGRES_USER: yoga_user
+      POSTGRES_PASSWORD: yoga_pass
+      POSTGRES_DB: yoga_db
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yoga_user -d yoga_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: yoga-backend-dev
+    environment:
+      - APP_MODE=dev
+      - DATABASE_URL=postgresql://yoga_user:yoga_pass@db:5432/yoga_db
+      - SECRET_KEY=dev-secret-key
+      - ENABLE_AI_GENERATION=${ENABLE_AI_GENERATION:-false}
+    volumes:
+      - ./backend:/app
+      - ./storage:/app/storage
+      - ./ai/models:/app/ai/models
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    # GPU support (optional, comment out if no GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: yoga-frontend-dev
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data_dev:

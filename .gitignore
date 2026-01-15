@@ -1,0 +1,69 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Storage (uploaded and generated images)
+storage/uploads/*
+storage/generated/*
+storage/layers/*
+!storage/uploads/.gitkeep
+!storage/generated/.gitkeep
+!storage/layers/.gitkeep
+
+# AI models (large files)
+ai/models/*
+!ai/models/.gitkeep
+
+# Docker
+*.log
+
+# Build artifacts
+frontend/dist/
+*.egg
+*.whl
+
+# Test
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# SSL certificates
+nginx/ssl/*
+!nginx/ssl/.gitkeep
+
+# Database
+*.db
+*.sqlite3
