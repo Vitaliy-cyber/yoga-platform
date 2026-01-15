@@ -1,10 +1,13 @@
 import os
 import os
+import re
 import uuid
 from typing import List, Optional
 
+import httpx
 from db.database import get_db
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from models.category import Category
 from models.muscle import Muscle
 from models.pose import Pose, PoseMuscle
@@ -383,3 +386,70 @@ async def upload_pose_schema(
     await db.refresh(pose)
 
     return build_pose_response(pose)
+
+
+@router.get("/{pose_id}/image/{image_type}")
+async def get_pose_image(
+    pose_id: int,
+    image_type: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Proxy endpoint to serve S3 images avoiding CORS issues.
+    image_type: schema, photo, muscle_layer, skeleton_layer
+    """
+    # Validate image_type
+    valid_types = ["schema", "photo", "muscle_layer", "skeleton_layer"]
+    if image_type not in valid_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid image type. Must be one of: {valid_types}",
+        )
+
+    # Get pose
+    query = select(Pose).where(Pose.id == pose_id)
+    result = await db.execute(query)
+    pose = result.scalar_one_or_none()
+
+    if not pose:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pose not found",
+        )
+
+    # Get the URL based on image type
+    url_map = {
+        "schema": pose.schema_path,
+        "photo": pose.photo_path,
+        "muscle_layer": pose.muscle_layer_path,
+        "skeleton_layer": pose.skeleton_layer_path,
+    }
+    image_url = url_map.get(image_type)
+
+    if not image_url:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No {image_type} image for this pose",
+        )
+
+    # Fetch image from S3
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(image_url, timeout=30.0)
+            response.raise_for_status()
+
+            # Determine content type
+            content_type = response.headers.get("content-type", "image/jpeg")
+
+            return Response(
+                content=response.content,
+                media_type=content_type,
+                headers={
+                    "Cache-Control": "public, max-age=86400",  # Cache for 1 day
+                },
+            )
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch image from storage: {str(e)}",
+        )
