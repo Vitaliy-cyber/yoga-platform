@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Label } from "../ui/label";
@@ -141,6 +141,9 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-xl font-medium">Generate Images for "{pose.name}"</DialogTitle>
+          <DialogDescription>
+            Generate photorealistic images from the source schematic using AI.
+          </DialogDescription>
         </DialogHeader>
 
         {!isGenerating ? (
