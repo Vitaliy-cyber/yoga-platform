@@ -3,11 +3,15 @@ import logging
 from typing import Optional
 
 import boto3
+from botocore.config import Config
 
 from config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+# Presigned URL expiration time (7 days in seconds)
+PRESIGNED_URL_EXPIRATION = 7 * 24 * 60 * 60
 
 
 class S3Storage:
@@ -19,6 +23,8 @@ class S3Storage:
     - Cloudflare R2
     - MinIO
     - Any S3-compatible storage
+
+    Uses presigned URLs for private buckets.
     """
 
     _instance: Optional["S3Storage"] = None
@@ -50,25 +56,23 @@ class S3Storage:
         # Get credentials (support both naming conventions)
         access_key = settings.S3_ACCESS_KEY_ID or settings.AWS_ACCESS_KEY_ID
         secret_key = settings.S3_SECRET_ACCESS_KEY or settings.AWS_SECRET_ACCESS_KEY
-        region = settings.S3_REGION or settings.AWS_REGION or "us-east-1"
+        self.region = settings.S3_REGION or settings.AWS_REGION or "us-east-1"
 
         # Get endpoint URL (for Railway, R2, MinIO etc.)
         self.endpoint_url = settings.S3_ENDPOINT_URL or settings.BUCKET_ENDPOINT or None
 
-        # Build S3 client
+        # Build S3 client with signature version for compatibility
         client_kwargs = {
             "aws_access_key_id": access_key or None,
             "aws_secret_access_key": secret_key or None,
-            "region_name": region,
+            "region_name": self.region,
+            "config": Config(signature_version="s3v4"),
         }
 
         if self.endpoint_url:
             client_kwargs["endpoint_url"] = self.endpoint_url
 
         self.client = boto3.client("s3", **client_kwargs)
-
-        # Resolve public URL base
-        self.public_base_url = self._resolve_public_base_url(region)
 
         logger.info(
             "S3 storage initialized (bucket=%s, prefix=%s, endpoint=%s)",
@@ -77,31 +81,32 @@ class S3Storage:
             self.endpoint_url or "AWS S3",
         )
 
-    def _resolve_public_base_url(self, region: str) -> str:
-        """Resolve public URL for accessing files."""
-        # If using custom endpoint (Railway, R2, etc.), use it for public URLs
-        if self.endpoint_url:
-            # Railway Object Storage public URL format
-            # Endpoint: https://xxx.r2.cloudflarestorage.com -> Public: same
-            # For Railway, public URLs are: {endpoint}/{bucket}/{key}
-            return f"{self.endpoint_url.rstrip('/')}/{self.bucket}"
-
-        # Standard AWS S3 URL format
-        region = region.strip() if region else "us-east-1"
-        if region == "us-east-1":
-            return f"https://{self.bucket}.s3.amazonaws.com"
-        return f"https://{self.bucket}.s3.{region}.amazonaws.com"
-
     def _build_key(self, key: str) -> str:
         key = key.lstrip("/")
         if self.prefix:
             return f"{self.prefix}/{key}"
         return key
 
-    def _build_public_url(self, key: str) -> str:
-        return f"{self.public_base_url}/{key}"
+    def _generate_presigned_url(
+        self, s3_key: str, expiration: int = PRESIGNED_URL_EXPIRATION
+    ) -> str:
+        """Generate a presigned URL for accessing a private S3 object."""
+        try:
+            url = self.client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": self.bucket,
+                    "Key": s3_key,
+                },
+                ExpiresIn=expiration,
+            )
+            return url
+        except Exception as e:
+            logger.error("Failed to generate presigned URL: %s", str(e))
+            raise
 
     async def upload_bytes(self, data: bytes, key: str, content_type: str) -> str:
+        """Upload bytes to S3 and return a presigned URL for access."""
         s3_key = self._build_key(key)
         params = {
             "Bucket": self.bucket,
@@ -118,8 +123,10 @@ class S3Storage:
                 self.endpoint_url,
             )
             await asyncio.to_thread(self.client.put_object, **params)
-            url = self._build_public_url(s3_key)
-            logger.info("Upload successful: %s", url)
+
+            # Return presigned URL instead of direct URL
+            url = self._generate_presigned_url(s3_key)
+            logger.info("Upload successful, presigned URL generated")
             return url
         except Exception as e:
             logger.error(
@@ -130,3 +137,10 @@ class S3Storage:
                 str(e),
             )
             raise
+
+    def get_presigned_url(
+        self, key: str, expiration: int = PRESIGNED_URL_EXPIRATION
+    ) -> str:
+        """Get a presigned URL for an existing S3 object."""
+        s3_key = self._build_key(key) if not key.startswith(self.prefix) else key
+        return self._generate_presigned_url(s3_key, expiration)
