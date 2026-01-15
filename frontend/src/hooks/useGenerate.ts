@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { generateApi } from "../services/api";
 import { useAppStore } from "../store/useAppStore";
 import type { GenerateStatus } from "../types";
@@ -16,99 +16,69 @@ interface GenerationState {
   quotaWarning: boolean;
 }
 
+const initialState: GenerationState = {
+  isGenerating: false,
+  progress: 0,
+  status: null,
+  statusMessage: null,
+  error: null,
+  photoUrl: null,
+  musclesUrl: null,
+  quotaWarning: false,
+};
+
 export function useGenerate() {
-  const [state, setState] = useState<GenerationState>({
-    isGenerating: false,
-    progress: 0,
-    status: null,
-    statusMessage: null,
-    error: null,
-    photoUrl: null,
-    musclesUrl: null,
-    quotaWarning: false,
-  });
+  const [state, setState] = useState<GenerationState>(initialState);
 
   const { addToast } = useAppStore();
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const simulationRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const serverProgressRef = useRef(0);
+  const taskIdRef = useRef<string | null>(null);
 
   const clearPolling = useCallback(() => {
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
+    taskIdRef.current = null;
   }, []);
 
-  const clearSimulation = useCallback(() => {
-    if (simulationRef.current) {
-      clearInterval(simulationRef.current);
-      simulationRef.current = null;
-    }
-  }, []);
-
-  const startSimulation = useCallback(() => {
-    clearSimulation();
-    serverProgressRef.current = 0;
-
-    const simulatedSteps = [5, 10, 20, 30, 40, 50, 60, 70, 80, 90];
-    let index = 0;
-
-    setState((prev) => ({
-      ...prev,
-      progress: Math.max(prev.progress, simulatedSteps[index]),
-    }));
-
-    simulationRef.current = setInterval(() => {
-      if (serverProgressRef.current > 0) {
-        clearSimulation();
-        return;
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
       }
-
-      index = Math.min(index + 1, simulatedSteps.length - 1);
-      setState((prev) => {
-        if (!prev.isGenerating || serverProgressRef.current > 0) {
-          return prev;
-        }
-        if (prev.progress >= simulatedSteps[index]) {
-          return prev;
-        }
-        return {
-          ...prev,
-          progress: simulatedSteps[index],
-        };
-      });
-    }, 500);
-  }, [clearSimulation]);
+    };
+  }, []);
 
   const pollStatus = useCallback(
     async (taskId: string) => {
+      // Skip if this poll is for an old task
+      if (taskIdRef.current !== taskId) {
+        return;
+      }
+
       try {
         const response = await generateApi.getStatus(taskId);
-        if (response.progress !== null && response.progress !== undefined) {
-          serverProgressRef.current = response.progress;
-          if (response.progress > 0) {
-            clearSimulation();
-          }
+
+        // Skip if task changed during the request
+        if (taskIdRef.current !== taskId) {
+          return;
         }
 
-        setState((prev) => ({
-          ...prev,
-          progress: response.progress ?? prev.progress,
-          status: response.status,
-          statusMessage: response.status_message,
-        }));
+        const serverProgress = response.progress ?? 0;
 
         if (response.status === "completed") {
           clearPolling();
-          clearSimulation();
           setState((prev) => ({
             ...prev,
             isGenerating: false,
             progress: 100,
+            status: response.status,
+            statusMessage: response.status_message,
             photoUrl: response.photo_url,
             musclesUrl: response.muscles_url,
-            quotaWarning: response.quota_warning,
+            quotaWarning: response.quota_warning ?? false,
           }));
           if (response.quota_warning) {
             addToast({ type: "warning", message: "Показано placeholder зображення. API квота вичерпана." });
@@ -117,20 +87,34 @@ export function useGenerate() {
           }
         } else if (response.status === "failed") {
           clearPolling();
-          clearSimulation();
           setState((prev) => ({
             ...prev,
             isGenerating: false,
+            progress: prev.progress,
+            status: response.status,
+            statusMessage: response.status_message,
             error: response.error_message || "Помилка генерації",
           }));
           addToast({
             type: "error",
             message: response.error_message || "Помилка генерації",
           });
+        } else {
+          // Processing or pending - update progress (never go backwards)
+          setState((prev) => ({
+            ...prev,
+            progress: Math.max(prev.progress, serverProgress),
+            status: response.status,
+            statusMessage: response.status_message,
+          }));
         }
       } catch (err) {
+        // Skip if task changed
+        if (taskIdRef.current !== taskId) {
+          return;
+        }
+        
         clearPolling();
-        clearSimulation();
         const message =
           err instanceof Error ? err.message : "Помилка перевірки статусу";
         setState((prev) => ({
@@ -140,36 +124,36 @@ export function useGenerate() {
         }));
       }
     },
-    [addToast, clearPolling, clearSimulation],
+    [addToast, clearPolling],
   );
 
   const generate = useCallback(
     async (file: File) => {
-      setState({
-        isGenerating: true,
-        progress: 0,
-        status: "pending",
-        statusMessage: "В черзі...",
-        error: null,
-        photoUrl: null,
-        musclesUrl: null,
-        quotaWarning: false,
-      });
+      // Clear any existing polling
+      clearPolling();
 
-      startSimulation();
+      // Reset state for new generation
+      setState({
+        ...initialState,
+        isGenerating: true,
+        status: "pending",
+        statusMessage: "Запуск генерації...",
+      });
 
       try {
         const response = await generateApi.generate(file);
+        
+        // Store task ID for this generation
+        taskIdRef.current = response.task_id;
 
         addToast({ type: "info", message: "Генерація розпочата..." });
 
-        // Poll immediately, then every 1000ms (1 second)
+        // Start polling for status
         pollStatus(response.task_id);
         pollingRef.current = setInterval(() => {
           pollStatus(response.task_id);
-        }, 1000);
+        }, 1500); // Poll every 1.5 seconds
       } catch (err) {
-        clearSimulation();
         const message =
           err instanceof Error ? err.message : "Помилка запуску генерації";
         setState((prev) => ({
@@ -180,23 +164,13 @@ export function useGenerate() {
         addToast({ type: "error", message });
       }
     },
-    [addToast, pollStatus, startSimulation, clearSimulation],
+    [addToast, pollStatus, clearPolling],
   );
 
   const reset = useCallback(() => {
     clearPolling();
-    clearSimulation();
-    setState({
-      isGenerating: false,
-      progress: 0,
-      status: null,
-      statusMessage: null,
-      error: null,
-      photoUrl: null,
-      musclesUrl: null,
-      quotaWarning: false,
-    });
-  }, [clearPolling, clearSimulation]);
+    setState(initialState);
+  }, [clearPolling]);
 
   return {
     ...state,

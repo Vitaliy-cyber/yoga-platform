@@ -10,11 +10,40 @@ import type { Pose, PoseListItem } from "../../types";
 import { useGenerate } from "../../hooks/useGenerate";
 import { posesApi, getImageProxyUrl } from "../../services/api";
 
+// Backend progress values:
+// 5% - Initializing
+// 10% - Analyzing pose
+// 30% - Generating photo (starts)
+// 60% - Generating muscles (starts)
+// 100% - Completed
 const steps = [
-  { id: "analyzing", label: "Analyzing pose structure...", icon: Lightbulb, minProgress: 0, maxProgress: 30 },
-  { id: "generating_photo", label: "Generating photorealistic image...", icon: Camera, minProgress: 30, maxProgress: 60 },
-  { id: "generating_muscles", label: "Creating muscle visualization...", icon: Activity, minProgress: 60, maxProgress: 100 },
+  { id: "analyzing", label: "Analyzing pose structure", icon: Lightbulb, progressThreshold: 10 },
+  { id: "generating_photo", label: "Generating photorealistic image", icon: Camera, progressThreshold: 30 },
+  { id: "generating_muscles", label: "Creating muscle visualization", icon: Activity, progressThreshold: 60 },
 ];
+
+// Determine which step is active based on progress
+function getStepState(stepIndex: number, progress: number, isComplete: boolean) {
+  const step = steps[stepIndex];
+  const nextStep = steps[stepIndex + 1];
+  
+  if (isComplete) {
+    return "complete";
+  }
+  
+  // Step is complete if progress has passed the NEXT step's threshold (or 100 if last step)
+  const nextThreshold = nextStep?.progressThreshold ?? 100;
+  if (progress >= nextThreshold) {
+    return "complete";
+  }
+  
+  // Step is active if progress is >= this step's threshold but < next threshold
+  if (progress >= step.progressThreshold) {
+    return "active";
+  }
+  
+  return "pending";
+}
 
 interface GenerateModalProps {
   pose: Pose | PoseListItem | null;
@@ -36,12 +65,10 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const [schemaLoadError, setSchemaLoadError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, generate, reset } = useGenerate();
-  const [_isSaving, setIsSaving] = useState(false);
   const [generationStarted, setGenerationStarted] = useState(false);
 
-  // Determine current step based on progress
-  // Backend sends: 10% (analyzing), 30% (photo start), 60% (muscles start), 100% (done)
-  const currentStep = progress < 30 ? 0 : progress < 60 ? 1 : progress < 100 ? 2 : 2;
+  // Track if generation is fully complete (100%)
+  const isComplete = progress >= 100;
   
   // Ref to prevent double saves
   const savingRef = useRef(false);
@@ -78,7 +105,6 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       }
       
       savingRef.current = true;
-      setIsSaving(true);
       
       try {
         // Update the pose with the generated image URLs
@@ -96,7 +122,6 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       } finally {
         // Reset and close
         savingRef.current = false;
-        setIsSaving(false);
         setGenerationStarted(false);
         reset();
         handleClearFile();
@@ -146,7 +171,6 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     reset();
     handleClearFile();
     setSchemaLoadError(false);
-    setIsSaving(false);
     setGenerationStarted(false);
     onClose();
   }, [reset, handleClearFile, onClose]);
@@ -274,13 +298,13 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
             {/* Progress bar */}
             <div className="mb-6">
               <div className="flex justify-between text-xs text-stone-500 mb-2">
-                <span>Progress</span>
-                <span>{progress}%</span>
+                <span>{statusMessage || "Processing..."}</span>
+                <span>{Math.min(progress, 100)}%</span>
               </div>
               <div className="h-2 bg-stone-200 rounded-full overflow-hidden">
                 <div 
-                  className="h-full bg-stone-800 rounded-full transition-all duration-500 ease-out"
-                  style={{ width: `${progress}%` }}
+                  className="h-full bg-stone-800 rounded-full transition-all duration-700 ease-out"
+                  style={{ width: `${Math.min(progress, 100)}%` }}
                 />
               </div>
             </div>
@@ -288,31 +312,35 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
             <div className="space-y-3">
               {steps.map((step, index) => {
                 const Icon = step.icon;
-                const isActive = index === currentStep && progress < 100;
-                const isComplete = index < currentStep || progress >= 100;
+                const stepState = getStepState(index, progress, isComplete);
+                const isActive = stepState === "active";
+                const isStepComplete = stepState === "complete";
+                const isPending = stepState === "pending";
+                
+                // Hide muscles step if not generating muscles
                 if (step.id === "generating_muscles" && !generateMuscles) return null;
 
                 return (
                   <div
                     key={step.id}
                     className={cn(
-                      "flex items-center gap-4 p-4 rounded-xl transition-all duration-200",
+                      "flex items-center gap-4 p-4 rounded-xl transition-all duration-300",
                       isActive && "bg-stone-100",
-                      isComplete && "bg-emerald-50",
-                      !isActive && !isComplete && "bg-stone-50 opacity-60"
+                      isStepComplete && "bg-emerald-50",
+                      isPending && "bg-stone-50 opacity-50"
                     )}
                   >
                     <div
                       className={cn(
-                        "w-10 h-10 rounded-full flex items-center justify-center transition-colors duration-200",
+                        "w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300",
                         isActive && "bg-stone-800",
-                        isComplete && "bg-emerald-500",
-                        !isActive && !isComplete && "bg-stone-200"
+                        isStepComplete && "bg-emerald-500",
+                        isPending && "bg-stone-200"
                       )}
                     >
                       {isActive ? (
                         <Loader2 className="w-5 h-5 text-white animate-spin" />
-                      ) : isComplete ? (
+                      ) : isStepComplete ? (
                         <Check className="w-5 h-5 text-white" />
                       ) : (
                         <Icon className="w-5 h-5 text-stone-400" />
@@ -321,24 +349,21 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                     <div className="flex-1">
                       <p
                         className={cn(
-                          "font-medium transition-colors duration-200",
+                          "font-medium transition-colors duration-300",
                           isActive && "text-stone-800",
-                          isComplete && "text-emerald-700",
-                          !isActive && !isComplete && "text-stone-500"
+                          isStepComplete && "text-emerald-700",
+                          isPending && "text-stone-400"
                         )}
                       >
                         {step.label}
                       </p>
-                      {isActive && statusMessage && (
-                        <p className="text-xs text-stone-500 mt-1">{statusMessage}</p>
-                      )}
                     </div>
                   </div>
                 );
               })}
             </div>
             <p className="text-center text-stone-500 text-sm mt-6">
-              This may take a few minutes. Please don't close this window.
+              This may take up to a minute. Please don't close this window.
             </p>
           </div>
         )}
