@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { User } from '../types';
 
 const TOKEN_KEY = 'yoga_auth_token';
@@ -10,12 +10,14 @@ interface AuthState {
   accessToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  _hasHydrated: boolean;
 
   // Actions
   setAuth: (user: User, accessToken: string) => void;
   logout: () => void;
   setLoading: (loading: boolean) => void;
   updateUser: (user: Partial<User>) => void;
+  setHasHydrated: (hasHydrated: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -26,6 +28,7 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       isAuthenticated: false,
       isLoading: true, // Start as loading to check stored auth
+      _hasHydrated: false,
 
       // Actions
       setAuth: (user, accessToken) =>
@@ -50,28 +53,36 @@ export const useAuthStore = create<AuthState>()(
         set((state) => ({
           user: state.user ? { ...state.user, ...updates } : null,
         })),
+
+      setHasHydrated: (hasHydrated) => set({ _hasHydrated: hasHydrated }),
     }),
     {
       name: TOKEN_KEY,
+      storage: createJSONStorage(() => localStorage),
       // Only persist token and user, not loading/auth flags
       partialize: (state) => ({
         user: state.user,
         accessToken: state.accessToken,
       }),
-      // After rehydration, set loading and auth state
-      onRehydrateStorage: () => (state, error) => {
-        if (error) {
-          console.error('Failed to rehydrate auth state:', error);
-        }
-        const hasToken = Boolean(state?.accessToken);
-        set({
-          isLoading: hasToken,
-          isAuthenticated: hasToken,
-        });
-      },
     }
   )
 );
+
+// Handle hydration separately to avoid TDZ issues
+// This runs after the store is created
+useAuthStore.persist.onFinishHydration((state) => {
+  const hasToken = Boolean(state.accessToken);
+  useAuthStore.setState({
+    isAuthenticated: hasToken,
+    isLoading: hasToken, // Will be set to false after validation in App.tsx
+    _hasHydrated: true,
+  });
+});
+
+// Ensure hydration happens
+if (typeof window !== 'undefined') {
+  useAuthStore.persist.rehydrate();
+}
 
 // Helper to get token for API calls (can be used outside React)
 export const getAuthToken = (): string | null => {

@@ -88,40 +88,44 @@ const router = createBrowserRouter(
 );
 
 const App: React.FC = () => {
-  const { accessToken, setAuth, logout, setLoading } = useAuthStore();
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const _hasHydrated = useAuthStore((state) => state._hasHydrated);
+  const setAuth = useAuthStore((state) => state.setAuth);
+  const logout = useAuthStore((state) => state.logout);
+  const setLoading = useAuthStore((state) => state.setLoading);
 
   useEffect(() => {
+    // Wait for zustand to hydrate from localStorage
+    if (!_hasHydrated) {
+      return;
+    }
+
     let cancelled = false;
 
-    const hydrateAuth = async () => {
+    const validateToken = async () => {
       if (!accessToken) {
         setLoading(false);
         return;
       }
 
-      setLoading(true);
       try {
         const currentUser = await authApi.getMe();
         if (!cancelled) {
           setAuth(currentUser, accessToken);
         }
-      } catch (error) {
+      } catch {
         if (!cancelled) {
           logout();
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
         }
       }
     };
 
-    hydrateAuth();
+    validateToken();
 
     return () => {
       cancelled = true;
     };
-  }, [accessToken, setAuth, logout, setLoading]);
+  }, [_hasHydrated, accessToken, setAuth, logout, setLoading]);
 
   return <RouterProvider router={router} future={{ v7_startTransition: true }} />;
 };
