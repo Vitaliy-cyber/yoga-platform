@@ -1,10 +1,12 @@
 import React, { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, LogOut, User } from "lucide-react";
 import { useSearchPoses } from "../../hooks/usePoses";
 import { Input } from "../ui/input";
+import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 import { getImageProxyUrl } from "../../services/api";
+import { useAuthStore } from "../../store/useAuthStore";
 
 
 export const Header: React.FC = () => {
@@ -12,6 +14,12 @@ export const Header: React.FC = () => {
   const { results, isSearching, search } = useSearchPoses();
   const [searchQuery, setSearchQuery] = useState("");
   const [showResults, setShowResults] = useState(false);
+  const { user, logout } = useAuthStore();
+
+  const handleLogout = useCallback(() => {
+    logout();
+    navigate("/login", { replace: true });
+  }, [logout, navigate]);
 
 
   const handleSearch = useCallback(
@@ -96,9 +104,29 @@ export const Header: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Actions */}
-        <div className="flex items-center gap-2">
-          {/* Could add notifications or theme toggle here */}
+        {/* Right Actions - User Menu */}
+        <div className="flex items-center gap-3">
+          {user && (
+            <div className="flex items-center gap-3">
+              <div className="hidden sm:flex items-center gap-2 text-sm">
+                <div className="w-8 h-8 rounded-full bg-stone-200 flex items-center justify-center">
+                  <User className="w-4 h-4 text-stone-600" />
+                </div>
+                <span className="text-stone-600 max-w-[120px] truncate">
+                  {user.name || user.token.slice(0, 8)}...
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleLogout}
+                className="text-stone-500 hover:text-stone-700 hover:bg-stone-100"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline ml-2">Logout</span>
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     </header>

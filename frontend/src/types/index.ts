@@ -101,6 +101,29 @@ export interface ApiError {
   detail: string;
 }
 
+// Auth типи
+export interface User {
+  id: number;
+  token: string;
+  name: string | null;
+  created_at: string;
+  last_login: string | null;
+}
+
+export interface LoginRequest {
+  token: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: User;
+}
+
+export interface UserUpdate {
+  name?: string;
+}
+
 // UI типи
 export interface Toast {
   id: string;

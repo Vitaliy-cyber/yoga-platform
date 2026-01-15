@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import type {
   Category,
   CategoryCreate,
@@ -9,7 +9,12 @@ import type {
   PoseUpdate,
   GenerateResponse,
   ApiError,
+  LoginRequest,
+  TokenResponse,
+  User,
+  UserUpdate,
 } from '../types';
+import { getAuthToken } from '../store/useAuthStore';
 
 // Get API URL from env or use relative path (for same-origin requests)
 const API_BASE_URL = import.meta.env.VITE_API_URL || window.location.origin;
@@ -33,6 +38,18 @@ const api = axios.create({
   // For JSON requests it will be application/json
   // For FormData it will be multipart/form-data with boundary
 });
+
+// Add auth token to all requests
+api.interceptors.request.use(
+  (config: InternalAxiosRequestConfig) => {
+    const token = getAuthToken();
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
 
 // Обробка помилок
 const handleError = (error: AxiosError<ApiError>): never => {
@@ -250,6 +267,37 @@ export const generateApi = {
   getStatus: async (taskId: string): Promise<GenerateResponse> => {
     try {
       const response = await api.get<GenerateResponse>(`/api/generate/status/${taskId}`);
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
+    }
+  },
+};
+
+// === Auth API ===
+
+export const authApi = {
+  login: async (data: LoginRequest): Promise<TokenResponse> => {
+    try {
+      const response = await api.post<TokenResponse>('/api/auth/login', data);
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
+    }
+  },
+
+  getMe: async (): Promise<User> => {
+    try {
+      const response = await api.get<User>('/api/auth/me');
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
+    }
+  },
+
+  updateMe: async (data: UserUpdate): Promise<User> => {
+    try {
+      const response = await api.put<User>('/api/auth/me', data);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);

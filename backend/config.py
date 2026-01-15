@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # JWT
     SECRET_KEY: str = "your-secret-key-here-change-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
     # Storage backend (S3 only for production)
     STORAGE_BACKEND: str = "s3"
