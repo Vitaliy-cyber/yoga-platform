@@ -60,10 +60,12 @@ export const useAuthStore = create<AuthState>()(
         isAuthenticated: state.isAuthenticated,
       }),
       // After rehydration, set loading to false
-      onRehydrateStorage: () => (state) => {
-        if (state) {
-          state.isLoading = false;
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          console.error('Failed to rehydrate auth state:', error);
         }
+        // Use setState to properly trigger re-render
+        useAuthStore.setState({ isLoading: false });
       },
     }
   )
