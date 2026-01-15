@@ -58,7 +58,7 @@ async def init_db():
     from sqlalchemy import text
 
     # Імпортуємо моделі щоб вони зареєструвались
-    from models import category, muscle, pose, user
+    from models import category, generation_task, muscle, pose, user
 
     async with engine.begin() as conn:
         # Використовуємо checkfirst=True щоб не падало на існуючих таблицях

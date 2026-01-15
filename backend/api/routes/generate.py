@@ -1,28 +1,28 @@
 import asyncio
 import uuid
-from io import BytesIO
-from typing import Dict
 
 from config import get_settings
+from db.database import AsyncSessionLocal, get_db
 from fastapi import (
     APIRouter,
     BackgroundTasks,
-    HTTPException,
-    status,
-    UploadFile,
-    File,
     Depends,
+    File,
+    HTTPException,
+    UploadFile,
+    status,
 )
+from models.generation_task import GenerationTask
 from models.user import User
 from schemas.generate import GenerateResponse, GenerateStatus
 from services.auth import get_current_user
 from services.storage import S3Storage
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 settings = get_settings()
 router = APIRouter(prefix="/api/generate", tags=["generate"])
 
-# In-memory storage for generation tasks (use Redis in production)
-generation_tasks: Dict[str, dict] = {}
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
 
 
@@ -31,11 +31,17 @@ def create_task_id() -> str:
     return str(uuid.uuid4())
 
 
-def update_task_progress(task_id: str, progress: int, message: str):
-    """Update task progress"""
-    if task_id in generation_tasks:
-        generation_tasks[task_id]["progress"] = progress
-        generation_tasks[task_id]["status_message"] = message
+async def update_task_progress(task_id: str, progress: int, message: str):
+    """Update task progress in database"""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(GenerationTask).where(GenerationTask.task_id == task_id)
+        )
+        task = result.scalar_one_or_none()
+        if task:
+            task.progress = progress
+            task.status_message = message
+            await db.commit()
 
 
 async def run_generation(task_id: str, image_bytes: bytes, mime_type: str):
@@ -46,49 +52,69 @@ async def run_generation(task_id: str, image_bytes: bytes, mime_type: str):
     1. Studio photo (realistic render from schema)
     2. Body paint muscles visualization
     """
-    try:
-        generation_tasks[task_id]["status"] = GenerateStatus.PROCESSING
-        generation_tasks[task_id]["progress"] = 5
-        generation_tasks[task_id]["status_message"] = "Initializing..."
+    async with AsyncSessionLocal() as db:
+        try:
+            # Get task from DB
+            result = await db.execute(
+                select(GenerationTask).where(GenerationTask.task_id == task_id)
+            )
+            task = result.scalar_one_or_none()
+            if not task:
+                return
 
-        storage = S3Storage.get_instance()
+            task.status = GenerateStatus.PROCESSING.value
+            task.progress = 5
+            task.status_message = "Initializing..."
+            await db.commit()
 
-        def progress_callback(progress: int, message: str):
-            update_task_progress(task_id, progress, message)
+            storage = S3Storage.get_instance()
 
-        from services.google_generator import GoogleGeminiGenerator
+            async def progress_callback(progress: int, message: str):
+                task.progress = progress
+                task.status_message = message
+                await db.commit()
 
-        generator = GoogleGeminiGenerator.get_instance()
+            from services.google_generator import GoogleGeminiGenerator
 
-        result = await generator.generate_all_from_image(
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-            task_id=task_id,
-            progress_callback=progress_callback,
-        )
+            generator = GoogleGeminiGenerator.get_instance()
 
-        photo_key = f"generated/{task_id}_photo.png"
-        muscles_key = f"generated/{task_id}_muscles.png"
+            result_gen = await generator.generate_all_from_image(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                task_id=task_id,
+                progress_callback=progress_callback,
+            )
 
-        generation_tasks[task_id]["photo_url"] = await storage.upload_bytes(
-            result.photo_bytes, photo_key, "image/png"
-        )
-        generation_tasks[task_id]["muscles_url"] = await storage.upload_bytes(
-            result.muscles_bytes, muscles_key, "image/png"
-        )
-        generation_tasks[task_id]["quota_warning"] = result.used_placeholders
+            photo_key = f"generated/{task_id}_photo.png"
+            muscles_key = f"generated/{task_id}_muscles.png"
 
-        generation_tasks[task_id]["status"] = GenerateStatus.COMPLETED
-        generation_tasks[task_id]["progress"] = 100
-        generation_tasks[task_id]["status_message"] = "Completed!"
+            task.photo_url = await storage.upload_bytes(
+                result_gen.photo_bytes, photo_key, "image/png"
+            )
+            task.muscles_url = await storage.upload_bytes(
+                result_gen.muscles_bytes, muscles_key, "image/png"
+            )
+            task.quota_warning = result_gen.used_placeholders
+            task.status = GenerateStatus.COMPLETED.value
+            task.progress = 100
+            task.status_message = "Completed!"
+            await db.commit()
 
-    except Exception as e:
-        import traceback
+        except Exception as e:
+            import traceback
 
-        traceback.print_exc()
-        generation_tasks[task_id]["status"] = GenerateStatus.FAILED
-        generation_tasks[task_id]["error_message"] = str(e)
-        generation_tasks[task_id]["status_message"] = "Generation failed"
+            traceback.print_exc()
+
+            # Re-fetch task in case session was invalidated
+            result = await db.execute(
+                select(GenerationTask).where(GenerationTask.task_id == task_id)
+            )
+            task = result.scalar_one_or_none()
+            if task:
+                task.status = GenerateStatus.FAILED.value
+                task.error_message = str(e)
+                task.status_message = "Generation failed"
+                await db.commit()
 
 
 @router.post("", response_model=GenerateResponse)
@@ -98,6 +124,7 @@ async def generate(
         ..., description="Schema image file (PNG, JPG, WEBP)"
     ),
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Generate all layers from uploaded schema image.
@@ -111,10 +138,10 @@ async def generate(
     if schema_file.content_type not in allowed_types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid file type. Allowed: PNG, JPG, WEBP",
+            detail="Invalid file type. Allowed: PNG, JPG, WEBP",
         )
 
-    # Read uploaded file into memory (no local storage)
+    # Read uploaded file into memory
     task_id = create_task_id()
 
     try:
@@ -133,17 +160,18 @@ async def generate(
 
     mime_type = schema_file.content_type or "image/png"
 
-    generation_tasks[task_id] = {
-        "user_id": current_user.id,
-        "status": GenerateStatus.PENDING,
-        "progress": 0,
-        "status_message": "In queue...",
-        "error_message": None,
-        "photo_url": None,
-        "muscles_url": None,
-        "quota_warning": False,
-    }
+    # Create task in database
+    task = GenerationTask(
+        task_id=task_id,
+        user_id=current_user.id,
+        status=GenerateStatus.PENDING.value,
+        progress=0,
+        status_message="In queue...",
+    )
+    db.add(task)
+    await db.commit()
 
+    # Start background generation
     background_tasks.add_task(run_generation, task_id, content, mime_type)
 
     return GenerateResponse(
@@ -155,27 +183,34 @@ async def generate(
 
 
 @router.get("/status/{task_id}", response_model=GenerateResponse)
-async def get_status(task_id: str, current_user: User = Depends(get_current_user)):
+async def get_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Check generation status"""
+    result = await db.execute(
+        select(GenerationTask).where(GenerationTask.task_id == task_id)
+    )
+    task = result.scalar_one_or_none()
 
-    if task_id not in generation_tasks:
+    if not task:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Task not found"
         )
 
-    task = generation_tasks[task_id]
-    if task.get("user_id") != current_user.id:
+    if task.user_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Task not found"
         )
 
     return GenerateResponse(
         task_id=task_id,
-        status=task["status"],
-        progress=task["progress"],
-        status_message=task.get("status_message"),
-        error_message=task.get("error_message"),
-        photo_url=task.get("photo_url"),
-        muscles_url=task.get("muscles_url"),
-        quota_warning=task.get("quota_warning", False),
+        status=GenerateStatus(task.status),
+        progress=task.progress,
+        status_message=task.status_message,
+        error_message=task.error_message,
+        photo_url=task.photo_url,
+        muscles_url=task.muscles_url,
+        quota_warning=task.quota_warning,
     )
