@@ -1,8 +1,11 @@
 import React from "react";
 import { motion } from "framer-motion";
 import { Heart, Sparkles } from "../icons";
+import { useI18n } from "../../i18n";
 
 export const Footer: React.FC = () => {
+  const { t } = useI18n();
+
   return (
     <motion.footer
       initial={{ opacity: 0, y: 20 }}
@@ -29,7 +32,7 @@ export const Footer: React.FC = () => {
             <Sparkles size={14} className="text-yoga-sage" />
           </motion.div>
           <span className="font-medium bg-gradient-to-r from-yoga-deep to-yoga-sage bg-clip-text text-transparent">
-            Yoga Pose Platform
+            {t("footer.brand")}
           </span>
           <span className="text-gray-400">v1.0.0</span>
         </motion.div>
@@ -38,7 +41,7 @@ export const Footer: React.FC = () => {
           className="flex items-center gap-1"
           whileHover={{ scale: 1.02 }}
         >
-          <span>Made with</span>
+          <span>{t("footer.made_with")}</span>
           <motion.div
             animate={{ scale: [1, 1.15, 1] }}
             transition={{

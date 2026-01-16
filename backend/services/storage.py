@@ -1,10 +1,10 @@
 import asyncio
-import asyncio
 import logging
-from typing import Optional
+import os
+from pathlib import Path
+from typing import Optional, Protocol
 
-import boto3
-from botocore.config import Config
+import aiofiles
 
 from config import get_settings
 
@@ -13,6 +13,84 @@ logger = logging.getLogger(__name__)
 
 # Presigned URL expiration time (7 days in seconds)
 PRESIGNED_URL_EXPIRATION = 7 * 24 * 60 * 60
+
+
+class StorageBackend(Protocol):
+    """Protocol for storage backends."""
+
+    async def upload_bytes(self, data: bytes, key: str, content_type: str) -> str:
+        """Upload bytes and return URL."""
+        ...
+
+    def get_presigned_url(
+        self, key: str, expiration: int = PRESIGNED_URL_EXPIRATION
+    ) -> str:
+        """Get URL for existing file."""
+        ...
+
+
+class LocalStorage:
+    """Local filesystem storage for development."""
+
+    _instance: Optional["LocalStorage"] = None
+
+    def __new__(cls) -> "LocalStorage":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialize()
+        return cls._instance
+
+    @classmethod
+    def get_instance(cls) -> "LocalStorage":
+        return cls()
+
+    def _initialize(self) -> None:
+        # Base directory for uploads (relative to backend folder)
+        self.base_dir = Path(__file__).parent.parent / "storage"
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Local storage initialized at %s", self.base_dir)
+
+    async def upload_bytes(self, data: bytes, key: str, content_type: str) -> str:
+        """Upload bytes to local filesystem."""
+        key = key.lstrip("/")
+        file_path = self.base_dir / key
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        async with aiofiles.open(file_path, "wb") as f:
+            await f.write(data)
+
+        logger.info("Saved file locally: %s", file_path)
+        # Return relative URL that will be served by FastAPI
+        return f"/storage/{key}"
+
+    def get_presigned_url(
+        self, key: str, expiration: int = PRESIGNED_URL_EXPIRATION
+    ) -> str:
+        """Get URL for local file (just returns the path)."""
+        key = key.lstrip("/")
+        # Remove /storage/ prefix if present
+        if key.startswith("storage/"):
+            key = key[8:]
+        return f"/storage/{key}"
+
+
+def get_storage() -> StorageBackend:
+    """Get the appropriate storage backend based on settings."""
+    if settings.STORAGE_BACKEND == "local":
+        return LocalStorage.get_instance()
+    else:
+        return S3Storage.get_instance()
+
+
+try:
+    import boto3
+    from botocore.config import Config
+
+    HAS_BOTO3 = True
+except ImportError:
+    HAS_BOTO3 = False
+    boto3 = None  # type: ignore
+    Config = None  # type: ignore
 
 
 class S3Storage:
@@ -31,6 +109,10 @@ class S3Storage:
     _instance: Optional["S3Storage"] = None
 
     def __new__(cls) -> "S3Storage":
+        if not HAS_BOTO3:
+            raise RuntimeError(
+                "boto3 is required for S3 storage. Install it with: pip install boto3"
+            )
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialize()

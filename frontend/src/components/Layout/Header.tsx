@@ -7,6 +7,7 @@ import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 import { getImageProxyUrl } from "../../services/api";
 import { useAuthStore } from "../../store/useAuthStore";
+import { useI18n } from "../../i18n";
 
 
 export const Header: React.FC = () => {
@@ -15,6 +16,7 @@ export const Header: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [showResults, setShowResults] = useState(false);
   const { user, logout } = useAuthStore();
+  const { t, locale, setLocale } = useI18n();
 
   const handleLogout = useCallback(() => {
     logout();
@@ -48,18 +50,19 @@ export const Header: React.FC = () => {
         <div className="flex-1 max-w-lg relative">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Пошук поз..."
-              className="pl-9 bg-secondary/50 border-transparent focus:bg-background focus:border-input transition-all"
-              value={searchQuery}
-              onChange={handleSearch}
-              onFocus={() => {
-                searchQuery && setShowResults(true);
-              }}
-              onBlur={() => {
-                setTimeout(() => setShowResults(false), 200);
-              }}
-            />
+              <Input
+                placeholder={t("header.search_placeholder")}
+                className="pl-9 bg-secondary/50 border-transparent focus:bg-background focus:border-input transition-all"
+                value={searchQuery}
+                onChange={handleSearch}
+                onFocus={() => {
+                  searchQuery && setShowResults(true);
+                }}
+                onBlur={() => {
+                  setTimeout(() => setShowResults(false), 200);
+                }}
+              />
+
             {isSearching && (
               <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
             )}
@@ -97,7 +100,7 @@ export const Header: React.FC = () => {
                 ))
               ) : (
                 <div className="p-4 text-center text-sm text-muted-foreground">
-                  Нічого не знайдено
+                  {t("header.no_results")}
                 </div>
               )}
             </div>
@@ -106,6 +109,14 @@ export const Header: React.FC = () => {
 
         {/* Right Actions - User Menu */}
         <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setLocale(locale === "ua" ? "en" : "ua")}
+            className="text-stone-500 hover:text-stone-700 hover:bg-stone-100"
+          >
+            {t("app.language_toggle")}
+          </Button>
           {user && (
             <div className="flex items-center gap-3">
               <div className="hidden sm:flex items-center gap-2 text-sm">
@@ -123,7 +134,7 @@ export const Header: React.FC = () => {
                 className="text-stone-500 hover:text-stone-700 hover:bg-stone-100"
               >
                 <LogOut className="w-4 h-4" />
-                <span className="hidden sm:inline ml-2">Logout</span>
+                <span className="hidden sm:inline ml-2">{t("app.logout")}</span>
               </Button>
             </div>
           )}

@@ -3,6 +3,7 @@ import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, X, FileImage, CheckCircle, AlertTriangle } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { useI18n } from "../../i18n";
 
 interface DropzoneProps {
   onFileSelect: (file: File) => void;
@@ -20,6 +21,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
   maxSize = 10 * 1024 * 1024,
 }) => {
   const [preview, setPreview] = useState<string | null>(null);
+  const { t } = useI18n();
 
   React.useEffect(() => {
     if (selectedFile) {
@@ -80,10 +82,10 @@ export const Dropzone: React.FC<DropzoneProps> = ({
 
                 <div className="space-y-1">
                   <p className="font-semibold text-lg text-foreground">
-                    {isDragActive ? "Drop file here" : "Click or drag file"}
+                    {isDragActive ? t("upload.drop_active") : t("upload.drop_idle")}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Supports SVG, PNG, JPG (max 10MB)
+                    {t("upload.supports")}
                   </p>
                 </div>
               </div>
@@ -116,7 +118,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
           >
             <div className="relative w-20 h-20 rounded-lg overflow-hidden flex-shrink-0 bg-muted/20 border border-white/10">
               {preview ? (
-                <img src={preview} alt="Preview" className="w-full h-full object-cover" />
+                <img src={preview} alt={t("upload.preview_alt")} className="w-full h-full object-cover" />
               ) : (
                 <FileImage size={24} className="m-auto text-muted-foreground" />
               )}
@@ -125,10 +127,10 @@ export const Dropzone: React.FC<DropzoneProps> = ({
             <div className="flex-1 min-w-0">
               <p className="font-medium truncate">{selectedFile.name}</p>
               <p className="text-xs text-muted-foreground">
-                {(selectedFile.size / 1024 / 1024).toFixed(2)} MB • Ready to upload
+                {(selectedFile.size / 1024 / 1024).toFixed(2)} MB • {t("upload.file_ready")}
               </p>
               <div className="flex items-center gap-1 mt-1 text-emerald-500 text-xs font-medium">
-                <CheckCircle size={12} /> Validated
+                <CheckCircle size={12} /> {t("upload.validated")}
               </div>
             </div>
 

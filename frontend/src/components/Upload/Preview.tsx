@@ -1,6 +1,7 @@
 import React from 'react';
 import { Loader2, SadFace, Palette } from '../icons';
 import { clsx } from 'clsx';
+import { useI18n } from '../../i18n';
 
 interface PreviewProps {
   imageUrl: string | null;
@@ -19,6 +20,7 @@ export const Preview: React.FC<PreviewProps> = ({
   placeholder,
   className,
 }) => {
+  const { t } = useI18n();
   if (error) {
     return (
       <div
@@ -28,7 +30,7 @@ export const Preview: React.FC<PreviewProps> = ({
         )}
       >
         <SadFace size={56} className="mb-4 text-red-400" />
-        <p className="text-red-600 font-medium">Помилка генерації</p>
+        <p className="text-red-600 font-medium">{t("preview.error")}</p>
         <p className="text-sm text-red-500 mt-2">{error}</p>
       </div>
     );
@@ -43,7 +45,7 @@ export const Preview: React.FC<PreviewProps> = ({
         )}
       >
         <Loader2 className="w-12 h-12 text-yoga-sage animate-spin mb-4" />
-        <p className="text-gray-600 font-medium">Генерація зображення...</p>
+        <p className="text-gray-600 font-medium">{t("preview.loading")}</p>
         {progress > 0 && (
           <div className="w-48 mt-4">
             <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -64,7 +66,7 @@ export const Preview: React.FC<PreviewProps> = ({
       <div className={clsx('aspect-pose bg-gray-100 rounded-xl overflow-hidden', className)}>
         <img
           src={imageUrl}
-          alt="Generated result"
+          alt={t("preview.generated")}
           className="w-full h-full object-contain"
         />
       </div>
@@ -81,7 +83,7 @@ export const Preview: React.FC<PreviewProps> = ({
       {placeholder || (
         <>
           <Palette size={64} className="mb-4" />
-          <p>Результат з'явиться тут</p>
+          <p>{t("preview.placeholder")}</p>
         </>
       )}
     </div>

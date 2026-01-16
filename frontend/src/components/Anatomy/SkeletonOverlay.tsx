@@ -1,5 +1,6 @@
 import React from 'react';
 import { clsx } from 'clsx';
+import { useI18n } from '../../i18n';
 
 interface SkeletonOverlayProps {
   imagePath: string | null;
@@ -10,6 +11,8 @@ export const SkeletonOverlay: React.FC<SkeletonOverlayProps> = ({
   imagePath,
   className,
 }) => {
+  const { t } = useI18n();
+
   if (!imagePath) {
     return (
       <div
@@ -20,7 +23,7 @@ export const SkeletonOverlay: React.FC<SkeletonOverlayProps> = ({
       >
         <div className="text-center p-8">
           <span className="text-6xl block mb-4">🦴</span>
-          <p>Скелетне зображення недоступне</p>
+          <p>{t("skeleton.unavailable")}</p>
         </div>
       </div>
     );

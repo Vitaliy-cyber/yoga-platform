@@ -15,6 +15,7 @@ from pathlib import Path
 
 class Colors:
     """ANSI colors for terminal"""
+
     RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
@@ -26,10 +27,20 @@ class Colors:
     WHITE = "\033[97m"
 
 
-def info(msg): print(f"{Colors.BLUE}[INFO]{Colors.RESET} {msg}")
-def success(msg): print(f"{Colors.GREEN}[OK]{Colors.RESET} {msg}")
-def warn(msg): print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {msg}")
-def error(msg): print(f"{Colors.RED}[ERROR]{Colors.RESET} {msg}")
+def info(msg):
+    print(f"{Colors.BLUE}[INFO]{Colors.RESET} {msg}")
+
+
+def success(msg):
+    print(f"{Colors.GREEN}[OK]{Colors.RESET} {msg}")
+
+
+def warn(msg):
+    print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {msg}")
+
+
+def error(msg):
+    print(f"{Colors.RED}[ERROR]{Colors.RESET} {msg}")
 
 
 class YogaPlatform:
@@ -47,6 +58,8 @@ class YogaPlatform:
         self.backend_process = None
         self._shutdown_requested = False
 
+        self.required_python_packages = ["uvicorn", "fastapi"]
+
     def print_banner(self):
         """Print startup banner"""
         print(f"\n{Colors.CYAN}{Colors.BOLD}")
@@ -62,9 +75,58 @@ class YogaPlatform:
             subprocess.run(
                 [sys.executable, "-m", "venv", str(self.venv_path)],
                 check=True,
-                capture_output=True
+                capture_output=True,
             )
             success("Virtual environment created")
+        return True
+
+    def _ensure_pip(self) -> bool:
+        """Ensure pip is available in the virtual environment."""
+        check = subprocess.run(
+            [str(self.venv_python), "-m", "pip", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        if check.returncode == 0:
+            return True
+
+        warn("pip not found in venv, installing with ensurepip...")
+        ensure = subprocess.run(
+            [str(self.venv_python), "-m", "ensurepip", "--upgrade"],
+            capture_output=True,
+            text=True,
+        )
+        if ensure.returncode != 0:
+            error(f"Failed to bootstrap pip: {ensure.stderr}")
+            return False
+
+        upgrade = subprocess.run(
+            [str(self.venv_python), "-m", "pip", "install", "--upgrade", "pip", "-q"],
+            capture_output=True,
+            text=True,
+        )
+        if upgrade.returncode != 0:
+            error(f"Failed to upgrade pip: {upgrade.stderr}")
+            return False
+
+        return True
+
+    def _verify_python_deps(self) -> bool:
+        """Check for critical Python packages in venv."""
+        missing_packages = []
+        for package in self.required_python_packages:
+            check = subprocess.run(
+                [str(self.venv_python), "-m", "pip", "show", package],
+                capture_output=True,
+                text=True,
+            )
+            if check.returncode != 0:
+                missing_packages.append(package)
+
+        if missing_packages:
+            warn(f"Missing Python packages: {', '.join(missing_packages)}")
+            return False
+
         return True
 
     def install_python_deps(self):
@@ -75,34 +137,81 @@ class YogaPlatform:
         # Check if already installed and requirements didn't change
         if marker.exists():
             if requirements.stat().st_mtime < marker.stat().st_mtime:
-                success("Python dependencies up to date")
-                return True
+                if self._ensure_pip() and self._verify_python_deps():
+                    success("Python dependencies up to date")
+                    return True
+                warn("Python dependencies incomplete, reinstalling...")
 
         info("Installing Python dependencies...")
 
+        if not self._ensure_pip():
+            return False
+
         # Upgrade pip silently
         subprocess.run(
-            [str(self.venv_pip), "install", "--upgrade", "pip", "-q"],
-            capture_output=True
+            [str(self.venv_python), "-m", "pip", "install", "--upgrade", "pip", "-q"],
+            capture_output=True,
         )
 
         # Install requirements
         result = subprocess.run(
             [
-                str(self.venv_pip), "install", "-r", str(requirements),
-                "-q", "--disable-pip-version-check", "--no-input"
+                str(self.venv_python),
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                str(requirements),
+                "-q",
+                "--disable-pip-version-check",
+                "--no-input",
             ],
             capture_output=True,
-            text=True
+            text=True,
         )
 
-        if result.returncode == 0:
-            marker.touch()
-            success("Python dependencies installed")
-            return True
-        else:
+        if result.returncode != 0:
             error(f"Failed to install dependencies: {result.stderr}")
             return False
+
+        if not self._verify_python_deps():
+            missing_packages = [
+                pkg
+                for pkg in self.required_python_packages
+                if subprocess.run(
+                    [str(self.venv_python), "-m", "pip", "show", pkg],
+                    capture_output=True,
+                    text=True,
+                ).returncode
+                != 0
+            ]
+
+            if missing_packages:
+                extra_install = subprocess.run(
+                    [
+                        str(self.venv_python),
+                        "-m",
+                        "pip",
+                        "install",
+                        *missing_packages,
+                        "-q",
+                        "--disable-pip-version-check",
+                        "--no-input",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if extra_install.returncode != 0:
+                    error(f"Failed to install dependencies: {extra_install.stderr}")
+                    return False
+
+                if not self._verify_python_deps():
+                    error("Python dependencies still missing after install")
+                    return False
+
+        marker.touch()
+        success("Python dependencies installed")
+        return True
 
     def install_node_deps(self):
         """Install Node.js dependencies automatically"""
@@ -115,11 +224,18 @@ class YogaPlatform:
         info("Installing Node.js dependencies...")
 
         result = subprocess.run(
-            ["npm", "install", "--silent", "--no-audit", "--no-fund", "--legacy-peer-deps"],
+            [
+                "npm",
+                "install",
+                "--silent",
+                "--no-audit",
+                "--no-fund",
+                "--legacy-peer-deps",
+            ],
             cwd=self.frontend_path,
             capture_output=True,
             text=True,
-            env={**os.environ, "CI": "true", "npm_config_yes": "true"}
+            env={**os.environ, "CI": "true", "npm_config_yes": "true"},
         )
 
         if result.returncode == 0:
@@ -130,7 +246,7 @@ class YogaPlatform:
             result = subprocess.run(
                 ["npm", "install", "--force", "--silent"],
                 cwd=self.frontend_path,
-                capture_output=True
+                capture_output=True,
             )
             if result.returncode == 0:
                 success("Node.js dependencies installed")
@@ -213,7 +329,10 @@ USE_GOOGLE_AI=true
 
         print(f"\n{Colors.YELLOW}Stopping servers...{Colors.RESET}")
 
-        for name, proc in [("Frontend", self.frontend_process), ("Backend", self.backend_process)]:
+        for name, proc in [
+            ("Frontend", self.frontend_process),
+            ("Backend", self.backend_process),
+        ]:
             if proc:
                 try:
                     proc.terminate()
@@ -248,13 +367,13 @@ USE_GOOGLE_AI=true
             cwd=self.frontend_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            env={**os.environ, "FORCE_COLOR": "1"}
+            env={**os.environ, "FORCE_COLOR": "1"},
         )
 
         frontend_thread = threading.Thread(
             target=self._stream_output,
             args=(self.frontend_process, "FRONTEND", Colors.CYAN),
-            daemon=True
+            daemon=True,
         )
         frontend_thread.start()
 
@@ -265,11 +384,19 @@ USE_GOOGLE_AI=true
         print(f"{Colors.DIM}{'-' * 60}{Colors.RESET}\n")
 
         self.backend_process = subprocess.Popen(
-            [str(self.venv_python), "-m", "uvicorn", "main:app", "--reload", "--port", "8000"],
+            [
+                str(self.venv_python),
+                "-m",
+                "uvicorn",
+                "main:app",
+                "--reload",
+                "--port",
+                "8000",
+            ],
             cwd=self.backend_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            env={**os.environ, "FORCE_COLOR": "1"}
+            env={**os.environ, "FORCE_COLOR": "1"},
         )
 
         # Stream backend in main thread
@@ -292,10 +419,18 @@ USE_GOOGLE_AI=true
         print(f"\n{Colors.DIM}Press Ctrl+C to stop{Colors.RESET}\n")
 
         self.backend_process = subprocess.Popen(
-            [str(self.venv_python), "-m", "uvicorn", "main:app", "--reload", "--port", "8000"],
+            [
+                str(self.venv_python),
+                "-m",
+                "uvicorn",
+                "main:app",
+                "--reload",
+                "--port",
+                "8000",
+            ],
             cwd=self.backend_path,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
         )
 
         self._stream_output(self.backend_process, "BACKEND", Colors.GREEN)
@@ -319,7 +454,7 @@ USE_GOOGLE_AI=true
             ["npm", "run", "dev"],
             cwd=self.frontend_path,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
         )
 
         self._stream_output(self.frontend_process, "FRONTEND", Colors.CYAN)
@@ -328,11 +463,12 @@ USE_GOOGLE_AI=true
     def run(self):
         """Main entry point - auto-start dev mode by default"""
         parser = argparse.ArgumentParser(
-            prog="yoga-platform",
-            description="Yoga Platform - Fully Automatic Launcher"
+            prog="yoga-platform", description="Yoga Platform - Fully Automatic Launcher"
         )
         parser.add_argument("--backend", action="store_true", help="Start backend only")
-        parser.add_argument("--frontend", action="store_true", help="Start frontend only")
+        parser.add_argument(
+            "--frontend", action="store_true", help="Start frontend only"
+        )
         parser.add_argument("--dev", action="store_true", help="Start both (default)")
 
         args = parser.parse_args()

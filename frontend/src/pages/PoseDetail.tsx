@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { ArrowLeft, Sparkles, Edit2, Save, X, Trash2, Eye, Activity, Download, Loader2, AlertCircle, RefreshCw } from "lucide-react";
 import { PoseViewer, GenerateModal } from "../components/Pose";
 import type { Pose, Category } from "../types";
+import { useI18n } from "../i18n";
 
 export const PoseDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -18,6 +19,7 @@ export const PoseDetail: React.FC = () => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useI18n();
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState({
     name: "",
@@ -48,7 +50,7 @@ export const PoseDetail: React.FC = () => {
           category_id: poseData.category_id ? String(poseData.category_id) : "",
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load pose");
+        setError(err instanceof Error ? err.message : t("pose.detail.not_found"));
       } finally {
         setIsLoading(false);
       }
@@ -75,7 +77,7 @@ export const PoseDetail: React.FC = () => {
 
   const handleDelete = async () => {
     if (!pose) return;
-    if (!window.confirm("Are you sure you want to delete this pose?")) return;
+    if (!window.confirm(t("pose.detail.delete_confirm"))) return;
     await posesApi.delete(pose.id);
     window.location.href = "/poses";
   };
@@ -124,9 +126,9 @@ export const PoseDetail: React.FC = () => {
       <div className="min-h-screen bg-stone-50 flex items-center justify-center">
         <div className="text-center">
           <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-          <h2 className="text-xl font-medium text-stone-800 mb-2">Pose not found</h2>
+          <h2 className="text-xl font-medium text-stone-800 mb-2">{t("pose.detail.not_found")}</h2>
           <Link to="/poses">
-            <Button variant="outline">Return to Gallery</Button>
+            <Button variant="outline">{t("pose.detail.back")}</Button>
           </Link>
         </div>
       </div>
@@ -148,7 +150,7 @@ export const PoseDetail: React.FC = () => {
                 <h1 className="text-xl font-semibold text-stone-800">{pose.name}</h1>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge className={pose.photo_path ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-600"}>
-                    {pose.photo_path ? "complete" : "draft"}
+                    {pose.photo_path ? t("pose.badge.complete") : t("pose.badge.draft")}
                   </Badge>
                   {pose.category_name && (
                     <Badge variant="outline" className="text-stone-500">
@@ -163,17 +165,17 @@ export const PoseDetail: React.FC = () => {
                 <>
                   <Button onClick={() => setShowViewer(true)} variant="outline">
                     <Eye className="w-4 h-4 mr-2" />
-                    Full View
+                    {t("pose.detail.full_view")}
                   </Button>
                   <Button onClick={() => setShowGenerateModal(true)} variant="outline">
                     <RefreshCw className="w-4 h-4 mr-2" />
-                    Regenerate
+                    {t("pose.detail.regenerate")}
                   </Button>
                 </>
               ) : (
                 <Button onClick={() => setShowGenerateModal(true)} className="bg-stone-800 hover:bg-stone-900">
                   <Sparkles className="w-4 h-4 mr-2" />
-                  Generate
+                  {t("pose.generate_cta")}
                 </Button>
               )}
               <Button
@@ -199,11 +201,11 @@ export const PoseDetail: React.FC = () => {
                     <TabsList className="grid grid-cols-2 bg-stone-100 p-1">
                       <TabsTrigger value="photo" className="text-sm">
                         <Eye className="w-4 h-4 mr-1" />
-                        Photo
+                        {t("pose.tabs.photo")}
                       </TabsTrigger>
                       <TabsTrigger value="muscles" disabled={!pose.muscle_layer_path} className="text-sm">
                         <Activity className="w-4 h-4 mr-1" />
-                        Muscles
+                        {t("pose.tabs.muscles")}
                       </TabsTrigger>
                     </TabsList>
                   </Tabs>
@@ -218,7 +220,7 @@ export const PoseDetail: React.FC = () => {
                 <div className="p-4 border-t border-stone-100 flex justify-end">
                   <Button variant="outline" onClick={handleDownload}>
                     <Download className="w-4 h-4 mr-2" />
-                    Download
+                    {t("pose.download")}
                   </Button>
                 </div>
               </div>
@@ -227,41 +229,42 @@ export const PoseDetail: React.FC = () => {
                 <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
                   <Sparkles className="w-8 h-8 text-stone-400" />
                 </div>
-                <h3 className="text-lg font-medium text-stone-800 mb-2">No generated image yet</h3>
-                <p className="text-stone-500">Generate a photorealistic image from your source</p>
+                <h3 className="text-lg font-medium text-stone-800 mb-2">{t("pose.detail.no_image")}</h3>
+                <p className="text-stone-500">{t("pose.detail.no_image_hint")}</p>
               </div>
             )}
 
-            {pose.schema_path && (
-              <div className="bg-white rounded-2xl border border-stone-200 p-6">
-                <h3 className="text-sm font-medium text-stone-600 mb-4">Source Schematic</h3>
-                <img
-                  src={getSchemaImage() || ''}
-                  alt="Source schematic"
-                  className="w-full rounded-xl border border-stone-100"
-                />
-              </div>
-            )}
+              {pose.schema_path && (
+                <div className="bg-white rounded-2xl border border-stone-200 p-6">
+                  <h3 className="text-sm font-medium text-stone-600 mb-4">{t("pose.detail.source_schematic")}</h3>
+                  <img
+                    src={getSchemaImage() || ''}
+                    alt={t("pose.file_alt")}
+                    className="w-full rounded-xl border border-stone-100"
+                  />
+                </div>
+              )}
+
           </div>
 
           <div className="space-y-6">
             <div className="bg-white rounded-2xl border border-stone-200 p-6">
               <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-medium text-stone-800">Pose Details</h3>
+                <h3 className="text-lg font-medium text-stone-800">{t("pose.detail.details")}</h3>
                 {!isEditing ? (
                   <Button variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
                     <Edit2 className="w-4 h-4 mr-2" />
-                    Edit
+                    {t("pose.detail.edit")}
                   </Button>
                 ) : (
                   <div className="flex gap-2">
                     <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)}>
                       <X className="w-4 h-4 mr-2" />
-                      Cancel
+                      {t("pose.detail.cancel")}
                     </Button>
                     <Button size="sm" onClick={handleSave}>
                       <Save className="w-4 h-4 mr-2" />
-                      Save
+                      {t("pose.detail.save")}
                     </Button>
                   </div>
                 )}
@@ -269,7 +272,7 @@ export const PoseDetail: React.FC = () => {
 
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label className="text-stone-600">Name</Label>
+                  <Label className="text-stone-600">{t("pose.detail.name")}</Label>
                   {isEditing ? (
                     <Input
                       value={editData.name}
@@ -281,7 +284,7 @@ export const PoseDetail: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-stone-600">Name (EN)</Label>
+                  <Label className="text-stone-600">{t("pose.detail.name_en")}</Label>
                   {isEditing ? (
                     <Input
                       value={editData.name_en}
@@ -293,17 +296,17 @@ export const PoseDetail: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-stone-600">Category</Label>
+                  <Label className="text-stone-600">{t("pose.detail.category")}</Label>
                   {isEditing ? (
                     <Select
                       value={editData.category_id}
                       onValueChange={(value) => setEditData({ ...editData, category_id: value })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select..." />
+                        <SelectValue placeholder={t("upload.category_placeholder")} />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">No Category</SelectItem>
+                        <SelectItem value="">{t("pose.uncategorized")}</SelectItem>
                         {categories.map((cat) => (
                           <SelectItem key={cat.id} value={String(cat.id)}>
                             {cat.name}
@@ -317,7 +320,7 @@ export const PoseDetail: React.FC = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-stone-600">Description</Label>
+                  <Label className="text-stone-600">{t("pose.detail.description")}</Label>
                   {isEditing ? (
                     <Textarea
                       value={editData.description}
@@ -325,7 +328,7 @@ export const PoseDetail: React.FC = () => {
                       rows={3}
                     />
                   ) : (
-                    <p className="text-stone-800">{pose.description || "No description"}</p>
+                    <p className="text-stone-800">{pose.description || t("pose.detail.no_description")}</p>
                   )}
                 </div>
               </div>

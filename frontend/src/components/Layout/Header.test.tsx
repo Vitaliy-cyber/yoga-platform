@@ -32,7 +32,7 @@ describe('Header', () => {
     await user.type(searchInput, 'Mountain')
 
     await waitFor(() => {
-      expect(screen.getByText('Пошук...')).toBeInTheDocument()
+      expect(screen.getByText('Нічого не знайдено')).toBeInTheDocument()
     }, { timeout: 100 }).catch(() => {
       // Search might complete quickly
     })

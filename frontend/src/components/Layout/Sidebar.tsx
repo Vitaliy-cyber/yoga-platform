@@ -12,17 +12,19 @@ import {
 import { useAppStore } from "../../store/useAppStore";
 import { categoriesApi } from "../../services/api";
 import { cn } from "../../lib/utils";
+import { useI18n } from "../../i18n";
 
 const navItems = [
-  { path: "/", icon: LayoutDashboard, label: "Головна" },
-  { path: "/poses", icon: Grid, label: "Галерея" },
-  { path: "/upload", icon: Upload, label: "Завантажити" },
-  { path: "/generate", icon: Wand2, label: "AI Генератор" },
-];
+  { path: "/", icon: LayoutDashboard, labelKey: "nav.dashboard" },
+  { path: "/poses", icon: Grid, labelKey: "nav.gallery" },
+  { path: "/upload", icon: Upload, labelKey: "nav.upload" },
+  { path: "/generate", icon: Wand2, labelKey: "nav.generate" },
+] as const;
 
 export const Sidebar: React.FC = () => {
   const location = useLocation();
   const { categories, setCategories } = useAppStore();
+  const { t } = useI18n();
 
   React.useEffect(() => {
     const fetchCategories = async () => {
@@ -30,11 +32,11 @@ export const Sidebar: React.FC = () => {
         const data = await categoriesApi.getAll();
         setCategories(data);
       } catch (error) {
-        console.error("Failed to fetch categories:", error);
+        console.error(t("categories.fetch_failed"), error);
       }
     };
     fetchCategories();
-  }, [setCategories]);
+  }, [setCategories, t]);
 
   return (
     <aside className="w-72 h-screen sticky top-0 flex flex-col glass border-r border-white/10 z-50 transition-all duration-300">
@@ -47,7 +49,7 @@ export const Sidebar: React.FC = () => {
           </div>
           <div>
             <h1 className="font-sans font-bold text-xl text-foreground tracking-tight">YogaFlow</h1>
-            <p className="text-xs text-muted-foreground">Premium Platform</p>
+            <p className="text-xs text-muted-foreground">{t("nav.premium")}</p>
           </div>
         </div>
       </div>
@@ -56,7 +58,8 @@ export const Sidebar: React.FC = () => {
       <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 scrollbar-hide">
         {/* Main Menu */}
         <section>
-          <h3 className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-4">Меню</h3>
+            <h3 className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-4">{t("nav.menu")}</h3>
+
           <ul className="space-y-2">
             {navItems.map((item) => (
               <li key={item.path}>
@@ -72,7 +75,7 @@ export const Sidebar: React.FC = () => {
                   }
                 >
                   <item.icon size={20} />
-                  <span className="font-medium">{item.label}</span>
+                  <span className="font-medium">{t(item.labelKey)}</span>
                 </NavLink>
               </li>
             ))}
@@ -81,7 +84,7 @@ export const Sidebar: React.FC = () => {
 
         {/* Categories */}
         <section>
-          <h3 className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-4">Категорії</h3>
+          <h3 className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-4">{t("nav.categories")}</h3>
           <ul className="space-y-1">
             {categories.map((category) => (
               <li key={category.id}>
@@ -119,8 +122,8 @@ export const Sidebar: React.FC = () => {
             T
           </div>
           <div className="flex-1">
-            <p className="text-sm font-medium text-foreground group-hover:text-primary transition-colors">Tetra User</p>
-            <p className="text-xs text-muted-foreground">Pro Plan</p>
+            <p className="text-sm font-medium text-foreground group-hover:text-primary transition-colors">{t("nav.user_name")}</p>
+            <p className="text-xs text-muted-foreground">{t("nav.user_plan")}</p>
           </div>
           <Settings size={18} className="text-muted-foreground group-hover:text-primary transition-colors" />
         </button>

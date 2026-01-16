@@ -16,7 +16,7 @@ from models.generation_task import GenerationTask
 from models.user import User
 from schemas.generate import GenerateResponse, GenerateStatus
 from services.auth import get_current_user
-from services.storage import S3Storage
+from services.storage import get_storage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,15 +63,15 @@ async def run_generation(task_id: str, image_bytes: bytes, mime_type: str):
                 return
 
             task.status = GenerateStatus.PROCESSING.value
-            task.progress = 5
+            task.progress = 0
             task.status_message = "Initializing..."
             await db.commit()
 
-            storage = S3Storage.get_instance()
+            storage = get_storage()
 
             async def progress_callback(progress: int, message: str):
-                task.progress = progress
-                task.status_message = message
+                task.progress = 0
+                task.status_message = "Finalizing..." if progress >= 100 else message
                 await db.commit()
 
             from services.google_generator import GoogleGeminiGenerator
@@ -133,6 +133,13 @@ async def generate(
 
     Accepts: PNG, JPG, WEBP images up to 10MB
     """
+    # Check if AI generation is configured
+    if not settings.GOOGLE_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI generation is not configured. Please set GOOGLE_API_KEY in .env",
+        )
+
     # Validate file type
     allowed_types = ["image/png", "image/jpeg", "image/webp", "image/jpg"]
     if schema_file.content_type not in allowed_types:

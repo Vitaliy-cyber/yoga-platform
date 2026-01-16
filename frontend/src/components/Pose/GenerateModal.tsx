@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
 import { useGenerate } from "../../hooks/useGenerate";
 import { posesApi, getImageProxyUrl } from "../../services/api";
+import { useI18n } from "../../i18n";
 
 // Backend progress values:
 // 5% - Initializing
@@ -17,10 +18,10 @@ import { posesApi, getImageProxyUrl } from "../../services/api";
 // 60% - Generating muscles (starts)
 // 100% - Completed
 const steps = [
-  { id: "analyzing", label: "Analyzing pose structure", icon: Lightbulb, progressThreshold: 10 },
-  { id: "generating_photo", label: "Generating photorealistic image", icon: Camera, progressThreshold: 30 },
-  { id: "generating_muscles", label: "Creating muscle visualization", icon: Activity, progressThreshold: 60 },
-];
+  { id: "analyzing", labelKey: "generate.modal_progress", icon: Lightbulb, progressThreshold: 10 },
+  { id: "generating_photo", labelKey: "generate.modal_progress", icon: Camera, progressThreshold: 30 },
+  { id: "generating_muscles", labelKey: "generate.modal_progress", icon: Activity, progressThreshold: 60 },
+] as const;
 
 // Determine which step is active based on progress
 function getStepState(stepIndex: number, progress: number, isComplete: boolean) {
@@ -66,6 +67,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, generate, reset } = useGenerate();
   const [generationStarted, setGenerationStarted] = useState(false);
+  const { t } = useI18n();
 
   // Track if generation is fully complete (100%)
   const isComplete = progress >= 100;
@@ -116,7 +118,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
         // Notify parent to refresh data
         onComplete?.();
       } catch (err) {
-        console.error("Failed to save generated images:", err);
+        console.error(t("generate.save_failed"), err);
         // Still notify parent - the images are generated, just not saved to pose
         onComplete?.();
       } finally {
@@ -144,7 +146,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
         const proxyUrl = getImageProxyUrl(pose.id, 'schema');
         const response = await fetch(proxyUrl);
         if (!response.ok) {
-          throw new Error(`Failed to fetch schema: ${response.status}`);
+          throw new Error(`${t("generate.schema_fetch_failed")}: ${response.status}`);
         }
         const blob = await response.blob();
         fileToGenerate = new File([blob], "schema.png", { type: blob.type || "image/png" });
@@ -181,9 +183,11 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-xl font-medium">Generate Images for "{pose.name}"</DialogTitle>
+          <DialogTitle className="text-xl font-medium">
+            {t("generate.tab_title", { pose: pose.name })}
+          </DialogTitle>
           <DialogDescription>
-            Generate photorealistic images from the source schematic using AI.
+            {t("generate.tab_description")}
           </DialogDescription>
         </DialogHeader>
 
@@ -191,7 +195,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
           <div className="space-y-6 pt-4">
             {/* Source schematic section */}
             <div>
-              <Label className="text-stone-600 mb-2 block">Source schematic</Label>
+              <Label className="text-stone-600 mb-2 block">{t("generate.source_schematic")}</Label>
               
               {/* Hidden file input */}
               <input
@@ -207,7 +211,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
                   <img
                     src={previewUrl}
-                    alt="Uploaded schematic"
+                    alt={t("generate.alt_schematic")}
                     className="max-h-48 mx-auto object-contain"
                   />
                   <button
@@ -222,7 +226,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
                   <img
                     src={getImageProxyUrl(pose.id, 'schema')}
-                    alt="Source schematic"
+                    alt={t("generate.alt_schematic")}
                     className="max-h-48 mx-auto object-contain"
                     onError={() => setSchemaLoadError(true)}
                   />
@@ -236,29 +240,29 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                   <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-3">
                     <Upload className="w-5 h-5 text-stone-400" />
                   </div>
-                  <p className="text-stone-600 font-medium">Upload a schematic</p>
-                  <p className="text-stone-400 text-sm mt-1">PNG, JPG or WEBP</p>
+                  <p className="text-stone-600 font-medium">{t("generate.upload_schematic_button")}</p>
+                  <p className="text-stone-400 text-sm mt-1">{t("generate.formats")}</p>
                 </div>
               )}
             </div>
 
             <div className="space-y-4">
-              <h3 className="text-sm font-medium text-stone-700">What to generate:</h3>
+              <h3 className="text-sm font-medium text-stone-700">{t("generate.options")}</h3>
               <div className="space-y-3">
                 <div className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl">
                   <Camera className="w-5 h-5 text-stone-600" />
                   <div className="flex-1">
-                    <p className="font-medium text-stone-800">Photorealistic Image</p>
-                    <p className="text-sm text-stone-500">Studio-quality photograph</p>
+                    <p className="font-medium text-stone-800">{t("generate.photo_label")}</p>
+                    <p className="text-sm text-stone-500">{t("generate.photo_hint")}</p>
                   </div>
-                  <div className="text-stone-400 text-sm">Required</div>
+                  <div className="text-stone-400 text-sm">{t("generate.required")}</div>
                 </div>
 
                 <label className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl cursor-pointer hover:bg-stone-100 transition-colors">
                   <Activity className="w-5 h-5 text-stone-600" />
                   <div className="flex-1">
-                    <p className="font-medium text-stone-800">Muscle Visualization</p>
-                    <p className="text-sm text-stone-500">Active muscle groups highlighted</p>
+                    <p className="font-medium text-stone-800">{t("generate.muscles_label")}</p>
+                    <p className="text-sm text-stone-500">{t("generate.muscles_hint")}</p>
                   </div>
                   <Checkbox
                     checked={generateMuscles}
@@ -269,11 +273,11 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
             </div>
 
             <div className="space-y-2">
-              <Label className="text-stone-600">Additional notes (optional)</Label>
+              <Label className="text-stone-600">{t("generate.notes")}</Label>
               <Textarea
                 value={additionalNotes}
                 onChange={(e) => setAdditionalNotes(e.target.value)}
-                placeholder="e.g., Male subject, athletic build, specific lighting preferences..."
+                placeholder={t("generate.notes_placeholder")}
                 className="border-stone-200 resize-none"
               />
             </div>
@@ -290,7 +294,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
               disabled={!canGenerate}
             >
               <Sparkles className="w-4 h-4 mr-2" />
-              Start Generation
+              {t("generate.start")}
             </Button>
           </div>
         ) : (
@@ -298,7 +302,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
             {/* Progress bar */}
             <div className="mb-6">
               <div className="flex justify-between text-xs text-stone-500 mb-2">
-                <span>{statusMessage || "Processing..."}</span>
+                <span>{statusMessage || t("generate.modal_progress")}</span>
                 <span>{Math.min(progress, 100)}%</span>
               </div>
               <div className="h-2 bg-stone-200 rounded-full overflow-hidden">
@@ -355,7 +359,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                           isPending && "text-stone-400"
                         )}
                       >
-                        {step.label}
+                        {t(step.labelKey)}
                       </p>
                     </div>
                   </div>
@@ -363,7 +367,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
               })}
             </div>
             <p className="text-center text-stone-500 text-sm mt-6">
-              This may take up to a minute. Please don't close this window.
+              {t("generate.modal_hint")}
             </p>
           </div>
         )}

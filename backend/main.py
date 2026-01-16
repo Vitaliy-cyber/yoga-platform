@@ -82,11 +82,13 @@ app.add_middleware(
 
 # Static files для завантажених та згенерованих зображень (лише для local storage)
 if settings.STORAGE_BACKEND == "local":
-    app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
-    app.mount(
-        "/generated", StaticFiles(directory=settings.GENERATED_DIR), name="generated"
-    )
-    app.mount("/layers", StaticFiles(directory=settings.LAYERS_DIR), name="layers")
+    import os
+    from pathlib import Path
+
+    # Create storage directory for local uploads
+    storage_dir = Path(__file__).parent / "storage"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/storage", StaticFiles(directory=str(storage_dir)), name="storage")
 
 # API Routes
 app.include_router(auth.router)

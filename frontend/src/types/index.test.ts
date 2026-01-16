@@ -204,7 +204,7 @@ describe('Type definitions', () => {
       const response: GenerateResponse = {
         task_id: 'task-123',
         status: 'failed',
-        progress: 30,
+        progress: 0,
         status_message: 'Error',
         error_message: 'Generation failed',
         photo_url: null,

@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Upload as UploadIcon, FileImage, Type, Loader2 } from "lucide-react";
 import { categoriesApi, posesApi } from "../services/api";
 import type { Category } from "../types";
+import { useI18n } from "../i18n";
 
 export const Upload: React.FC = () => {
   const navigate = useNavigate();
@@ -23,6 +24,7 @@ export const Upload: React.FC = () => {
   const [dragActive, setDragActive] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { t } = useI18n();
 
   React.useEffect(() => {
     categoriesApi.getAll().then(setCategories).catch(console.error);
@@ -82,29 +84,29 @@ export const Upload: React.FC = () => {
     <div className="min-h-screen bg-stone-50 py-8">
       <div className="max-w-4xl mx-auto px-6">
         <div className="bg-white rounded-2xl border border-stone-200 p-8">
-          <h2 className="text-xl font-medium text-stone-800 mb-6">Create New Pose</h2>
+          <h2 className="text-xl font-medium text-stone-800 mb-6">{t("upload.title")}</h2>
 
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label className="text-stone-600">Pose Name *</Label>
+                <Label className="text-stone-600">{t("upload.pose_name")}</Label>
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g., Warrior II"
+                  placeholder={t("upload.pose_name_placeholder")}
                   className="border-stone-200"
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-stone-600">Category</Label>
+                <Label className="text-stone-600">{t("upload.category")}</Label>
                 <Select value={category} onValueChange={setCategory}>
                   <SelectTrigger className="border-stone-200">
-                    <SelectValue placeholder="Select..." />
+                    <SelectValue placeholder={t("upload.category_placeholder")} />
                   </SelectTrigger>
                   <SelectContent>
                     {categories.length === 0 ? (
                       <div className="py-6 text-center text-sm text-stone-500">
-                        No categories available
+                        {t("upload.no_categories")}
                       </div>
                     ) : (
                       categories.map((cat) => (
@@ -119,11 +121,11 @@ export const Upload: React.FC = () => {
             </div>
 
             <div className="space-y-2">
-              <Label className="text-stone-600">Description (optional)</Label>
+              <Label className="text-stone-600">{t("upload.description")}</Label>
               <Textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Brief description of the pose and its benefits..."
+                placeholder={t("upload.description_placeholder")}
                 className="border-stone-200 min-h-[80px] resize-none"
               />
             </div>
@@ -132,11 +134,11 @@ export const Upload: React.FC = () => {
               <TabsList className="grid w-full grid-cols-2 bg-stone-100 p-1 rounded-xl">
                 <TabsTrigger value="schematic" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
                   <FileImage className="w-4 h-4 mr-2" />
-                  Upload Schematic
+                  {t("upload.upload_schematic")}
                 </TabsTrigger>
                 <TabsTrigger value="text" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
                   <Type className="w-4 h-4 mr-2" />
-                  Text Description
+                  {t("upload.text_description")}
                 </TabsTrigger>
               </TabsList>
 
@@ -185,8 +187,9 @@ export const Upload: React.FC = () => {
                       <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
                         <UploadIcon className="w-7 h-7 text-stone-400" />
                       </div>
-                      <p className="text-stone-600 font-medium">Drop your schematic drawing here</p>
-                      <p className="text-stone-400 text-sm mt-1">or click to browse files</p>
+                        <p className="text-stone-600 font-medium">{t("upload.drop_here")}</p>
+                        <p className="text-stone-400 text-sm mt-1">{t("upload.browse")}</p>
+
                     </div>
                   )}
                 </div>
@@ -196,7 +199,7 @@ export const Upload: React.FC = () => {
                 <Textarea
                   value={textDescription}
                   onChange={(e) => setTextDescription(e.target.value)}
-                  placeholder="Describe the pose in detail..."
+                  placeholder={t("upload.text_placeholder")}
                   className="border-stone-200 min-h-[200px] resize-none font-mono text-sm"
                 />
               </TabsContent>
@@ -210,10 +213,10 @@ export const Upload: React.FC = () => {
               {isUploading ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Creating Pose...
+                  {t("upload.creating")}
                 </>
               ) : (
-                "Create Pose"
+                t("upload.create")
               )}
             </Button>
           </div>

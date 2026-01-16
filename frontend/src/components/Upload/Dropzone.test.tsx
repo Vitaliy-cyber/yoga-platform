@@ -20,8 +20,8 @@ describe('Dropzone', () => {
         onClear={mockOnClear}
       />
     )
-    expect(screen.getByText('Click or drag file')).toBeInTheDocument()
-    expect(screen.getByText(/Supports SVG/)).toBeInTheDocument()
+    expect(screen.getByText('Натисніть або перетягніть файл')).toBeInTheDocument()
+    expect(screen.getByText(/SVG/)).toBeInTheDocument()
   })
 
   it('shows file format info', () => {
@@ -32,7 +32,7 @@ describe('Dropzone', () => {
         onClear={mockOnClear}
       />
     )
-    expect(screen.getByText(/max 10MB/)).toBeInTheDocument()
+    expect(screen.getByText(/10MB/)).toBeInTheDocument()
   })
 
   it('renders selected file preview', () => {
@@ -119,7 +119,7 @@ describe('Dropzone', () => {
       />
     )
 
-    const img = screen.getByAltText('Preview')
+    const img = screen.getByAltText('Попередній перегляд')
     expect(img).toBeInTheDocument()
   })
 

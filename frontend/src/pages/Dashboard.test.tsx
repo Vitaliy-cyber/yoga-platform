@@ -6,12 +6,12 @@ import { Dashboard } from "./Dashboard";
 describe("Dashboard", () => {
   it("renders header", () => {
     render(<Dashboard />);
-    expect(screen.getByText("Pose Studio")).toBeInTheDocument();
+    expect(screen.getByText("Студія Поз")).toBeInTheDocument();
   });
 
   it("renders stats cards", () => {
     render(<Dashboard />);
-    expect(screen.getByText("Total Poses")).toBeInTheDocument();
-    expect(screen.getByText("Complete")).toBeInTheDocument();
+    expect(screen.getByText("Всього поз")).toBeInTheDocument();
+    expect(screen.getByText("Завершені")).toBeInTheDocument();
   });
 });

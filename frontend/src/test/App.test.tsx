@@ -11,7 +11,7 @@ describe("App", () => {
 
   it("renders login screen when unauthenticated", async () => {
     rtlRender(<App />);
-    expect(await screen.findByText("Pose Studio")).toBeInTheDocument();
-    expect(screen.getByText("Welcome")).toBeInTheDocument();
+    expect(await screen.findByText("Студія Поз")).toBeInTheDocument();
+    expect(screen.getByText("Вітаємо")).toBeInTheDocument();
   });
 });

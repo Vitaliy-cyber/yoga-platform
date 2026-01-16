@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = "yoga-platform"
     JWT_AUDIENCE: str = "yoga-platform-users"
 
-    # Storage backend (S3 only for production)
-    STORAGE_BACKEND: str = "s3"
+    # Storage backend: "local" for dev, "s3" for production
+    STORAGE_BACKEND: str = "local"
 
     # S3 storage paths (prefixes)
     UPLOAD_DIR: str = "uploads"

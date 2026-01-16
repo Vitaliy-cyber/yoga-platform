@@ -6,6 +6,7 @@ import { VisuallyHidden } from "../ui/visually-hidden";
 import { Activity, Download, Eye, Layers, X } from "lucide-react";
 import type { Pose } from "../../types";
 import { getImageProxyUrl } from "../../services/api";
+import { useI18n } from "../../i18n";
 
 interface PoseViewerProps {
   pose: Pose;
@@ -14,13 +15,15 @@ interface PoseViewerProps {
 }
 
 const overlayTypes = [
-  { id: "photo", label: "Photo", icon: Eye },
-  { id: "muscles", label: "Muscles", icon: Activity },
-];
+  { id: "photo", labelKey: "pose.viewer.photo", icon: Eye },
+  { id: "muscles", labelKey: "pose.viewer.muscles", icon: Activity },
+] as const;
 
 export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose }) => {
   const [activeOverlay, setActiveOverlay] = useState<"photo" | "muscles">("photo");
   const [overlayOpacity, setOverlayOpacity] = useState(0.7);
+  const { t } = useI18n();
+  const overlayLabel = activeOverlay === "photo" ? t("pose.viewer.photo") : t("pose.viewer.muscles");
 
   const getActiveImage = () => {
     if (activeOverlay === "muscles" && pose.muscle_layer_path) {
@@ -53,7 +56,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
     } catch (error) {
-      console.error("Download failed:", error);
+      console.error(t("generate.download_failed"), error);
     }
   };
 
@@ -61,7 +64,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-6xl w-[95vw] h-[90vh] p-0 bg-stone-950 border-0 overflow-hidden" aria-describedby={undefined} hideCloseButton>
         <VisuallyHidden>
-          <DialogTitle>{pose.name} - Pose Viewer</DialogTitle>
+          <DialogTitle>{`${pose.name} - ${t("pose.viewer.title")}`}</DialogTitle>
         </VisuallyHidden>
         <div className="flex flex-col h-full">
           <div className="flex items-center justify-between px-6 py-4 border-b border-stone-800">
@@ -81,7 +84,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                 className="text-stone-400 hover:text-white hover:bg-stone-800"
               >
                 <Download className="w-4 h-4 mr-2" />
-                Download
+                {t("pose.viewer.download")}
               </Button>
               <Button
                 variant="ghost"
@@ -106,7 +109,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                 {activeOverlay !== "photo" && hasOverlay(activeOverlay) && (
                   <img
                     src={getActiveImage() || ""}
-                    alt={`${pose.name} - ${activeOverlay}`}
+                    alt={`${pose.name} - ${overlayLabel}`}
                     className="absolute inset-0 max-w-full max-h-full object-contain rounded-lg transition-opacity duration-200"
                     style={{ opacity: overlayOpacity }}
                   />
@@ -118,8 +121,9 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
               <div className="mb-8">
                 <div className="flex items-center gap-2 mb-4">
                   <Layers className="w-4 h-4 text-stone-400" />
-                  <h3 className="text-sm font-medium text-stone-300">Visualization Layer</h3>
+                  <h3 className="text-sm font-medium text-stone-300">{t("pose.viewer.layer")}</h3>
                 </div>
+
                 <div className="space-y-2">
                   {overlayTypes.map((overlay) => {
                     const Icon = overlay.icon;
@@ -138,10 +142,10 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                         }`}
                       >
                         <Icon className="w-5 h-5" />
-                        <span className="font-medium">{overlay.label}</span>
+                        <span className="font-medium">{t(overlay.labelKey)}</span>
                         {!available && overlay.id !== "photo" && (
                           <Badge className="ml-auto bg-stone-700 text-stone-400 text-xs">
-                            Not generated
+                            {t("pose.viewer.not_generated")}
                           </Badge>
                         )}
                       </button>
@@ -153,8 +157,9 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
               {activeOverlay !== "photo" && hasOverlay(activeOverlay) && (
                 <div className="mb-8">
                   <label className="text-sm font-medium text-stone-300 block mb-3">
-                    Overlay Opacity: {Math.round(overlayOpacity * 100)}%
+                    {t("pose.viewer.opacity", { value: Math.round(overlayOpacity * 100) })}
                   </label>
+
                   <input
                     type="range"
                     min="0"

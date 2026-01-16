@@ -3,13 +3,15 @@ import { Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { PoseCard, PoseFilters, PoseViewer, GenerateModal } from "../components/Pose";
 import { categoriesApi, posesApi, getImageProxyUrl } from "../services/api";
-import { Plus, Grid3X3, List, Image, Loader2 } from "lucide-react";
+import { Plus, Grid3X3, List, Image, Loader2, Globe } from "lucide-react";
 import type { Category, PoseListItem, Pose } from "../types";
+import { useI18n } from "../i18n";
 
 export const Dashboard: React.FC = () => {
   const [poses, setPoses] = useState<PoseListItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { t, locale, setLocale } = useI18n();
   const [filters, setFilters] = useState({
     search: "",
     category: "all",
@@ -29,7 +31,7 @@ export const Dashboard: React.FC = () => {
       setPoses(posesData);
       setCategories(categoriesData);
     } catch (error) {
-      console.error("Failed to fetch data:", error);
+      console.error(t("dashboard.fetch_failed"), error);
     } finally {
       setIsLoading(false);
     }
@@ -71,7 +73,7 @@ export const Dashboard: React.FC = () => {
       const fullPose = await posesApi.getById(pose.id);
       setSelectedPose(fullPose);
     } catch (error) {
-      console.error("Failed to load pose:", error);
+      console.error(t("pose.load_failed"), error);
     }
   };
 
@@ -81,17 +83,27 @@ export const Dashboard: React.FC = () => {
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-semibold text-stone-800">Pose Studio</h1>
+              <h1 className="text-2xl font-semibold text-stone-800">{t("app.name")}</h1>
               <p className="text-stone-500 text-sm mt-0.5">
-                Educational Pose Visualization System
+                {t("app.tagline")}
               </p>
             </div>
-            <Link to="/upload">
-              <Button className="bg-stone-800 hover:bg-stone-900 text-white rounded-xl h-11 px-5">
-                <Plus className="w-4 h-4 mr-2" />
-                New Pose
-              </Button>
-            </Link>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setLocale(locale === "ua" ? "en" : "ua")}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-stone-600 hover:text-stone-800 hover:bg-stone-100 rounded-lg transition-colors"
+                title={t("app.language_toggle")}
+              >
+                <Globe className="w-4 h-4" />
+                <span className="font-medium">{locale === "ua" ? "UA" : "EN"}</span>
+              </button>
+              <Link to="/upload">
+                <Button className="bg-stone-800 hover:bg-stone-900 text-white rounded-xl h-11 px-5">
+                  <Plus className="w-4 h-4 mr-2" />
+                  {t("dashboard.new_pose")}
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
       </header>
@@ -99,10 +111,10 @@ export const Dashboard: React.FC = () => {
       <main className="max-w-7xl mx-auto px-6 py-8">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           {[
-            { label: "Total Poses", value: stats.total, color: "bg-stone-100 text-stone-700" },
-            { label: "Complete", value: stats.complete, color: "bg-emerald-50 text-emerald-700" },
-            { label: "Drafts", value: stats.draft, color: "bg-amber-50 text-amber-700" },
-            { label: "Processing", value: stats.processing, color: "bg-blue-50 text-blue-700" },
+            { label: t("dashboard.total"), value: stats.total, color: "bg-stone-100 text-stone-700" },
+            { label: t("dashboard.complete"), value: stats.complete, color: "bg-emerald-50 text-emerald-700" },
+            { label: t("dashboard.drafts"), value: stats.draft, color: "bg-amber-50 text-amber-700" },
+            { label: t("dashboard.processing"), value: stats.processing, color: "bg-blue-50 text-blue-700" },
           ].map((stat, idx) => (
             <div
               key={stat.label}
@@ -125,7 +137,7 @@ export const Dashboard: React.FC = () => {
 
         <div className="flex items-center justify-between mb-6">
           <p className="text-stone-500 text-sm">
-            Showing {filteredPoses.length} of {poses.length} poses
+            {t("dashboard.showing", { shown: filteredPoses.length, total: poses.length })}
           </p>
           <div className="flex items-center gap-2 bg-white rounded-lg border border-stone-200 p-1">
             <button
@@ -156,15 +168,15 @@ export const Dashboard: React.FC = () => {
             <div className="w-20 h-20 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
               <Image className="w-10 h-10 text-stone-400" />
             </div>
-            <h3 className="text-lg font-medium text-stone-800 mb-2">No poses found</h3>
+            <h3 className="text-lg font-medium text-stone-800 mb-2">{t("dashboard.no_poses")}</h3>
             <p className="text-stone-500 mb-6">
-              {poses.length === 0 ? "Get started by creating your first pose" : "Try adjusting your filters"}
+              {poses.length === 0 ? t("dashboard.no_poses_hint") : t("dashboard.adjust_filters")}
             </p>
             {poses.length === 0 && (
               <Link to="/upload">
                 <Button className="bg-stone-800 hover:bg-stone-900">
                   <Plus className="w-4 h-4 mr-2" />
-                  Create First Pose
+                  {t("dashboard.create_first")}
                 </Button>
               </Link>
             )}
@@ -194,10 +206,10 @@ export const Dashboard: React.FC = () => {
                 />
                 <div className="flex-1">
                   <h3 className="font-semibold text-lg text-stone-800">{pose.name}</h3>
-                  <p className="text-stone-500 text-sm">#{pose.code} • {pose.category_name || "Uncategorized"}</p>
+                  <p className="text-stone-500 text-sm">#{pose.code} • {pose.category_name || t("pose.uncategorized")}</p>
                 </div>
                 <Button variant="outline" onClick={() => handleViewPose(pose)}>
-                  View
+                  {t("pose.view")}
                 </Button>
               </div>
             ))}

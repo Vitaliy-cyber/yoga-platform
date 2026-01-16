@@ -2,15 +2,10 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Eye, Sparkles, AlertCircle, CheckCircle2, ExternalLink, ImageIcon } from "lucide-react";
+import { Eye, Sparkles, CheckCircle2, ExternalLink, ImageIcon } from "lucide-react";
 import type { PoseListItem } from "../../types";
 import { getImageProxyUrl } from "../../services/api";
-
-const statusConfig = {
-  draft: { label: "Draft", color: "bg-stone-100 text-stone-600", icon: null },
-  complete: { label: "Complete", color: "bg-emerald-100 text-emerald-700", icon: CheckCircle2 },
-  error: { label: "Error", color: "bg-red-100 text-red-700", icon: AlertCircle },
-};
+import { useI18n } from "../../i18n";
 
 interface PoseCardProps {
   pose: PoseListItem;
@@ -20,9 +15,12 @@ interface PoseCardProps {
 
 export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) => {
   const [imageError, setImageError] = useState(false);
-  
-  const status = pose.photo_path ? statusConfig.complete : statusConfig.draft;
-  const StatusIcon = status.icon;
+  const { t } = useI18n();
+
+  const status = pose.photo_path ? "complete" : "draft";
+  const statusLabel = t(status === "complete" ? "pose.status.complete" : "pose.status.draft");
+  const statusColor = status === "complete" ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-600";
+  const StatusIcon = status === "complete" ? CheckCircle2 : null;
   
   // Check for actual non-empty paths
   const hasGeneratedPhoto = Boolean(pose.photo_path && pose.photo_path.trim());
@@ -59,44 +57,45 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
               <div className="w-14 h-14 rounded-xl bg-white/90 shadow-sm flex items-center justify-center mx-auto mb-3">
                 <ImageIcon className="w-6 h-6 text-stone-400" />
               </div>
-              <p className="text-stone-500 text-sm font-medium">No image</p>
-              <p className="text-stone-400 text-xs mt-0.5">Hover to generate</p>
+              <p className="text-stone-500 text-sm font-medium">{t("pose.no_image")}</p>
+              <p className="text-stone-400 text-xs mt-0.5">{t("pose.hover_generate")}</p>
             </div>
           </div>
         )}
 
         <div className="absolute top-3 left-3">
-          <Badge className={`${status.color} border-0 font-medium`}>
+          <Badge className={`${statusColor} border-0 font-medium`}>
             {StatusIcon && <StatusIcon className="w-3 h-3 mr-1" />}
-            {status.label}
+            {statusLabel}
           </Badge>
         </div>
 
-        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-          <div className="absolute bottom-4 left-4 right-4 flex gap-2">
-            {hasGeneratedPhoto && onView && (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => onView(pose)}
-                className="flex-1 bg-white/90 backdrop-blur-sm hover:bg-white"
-              >
-                <Eye className="w-4 h-4 mr-1" />
-                View
-              </Button>
-            )}
-            {!hasGeneratedPhoto && onGenerate && (
-              <Button
-                size="sm"
-                onClick={() => onGenerate(pose)}
-                className="flex-1 bg-stone-800 hover:bg-stone-900 text-white"
-              >
-                <Sparkles className="w-4 h-4 mr-1" />
-                {hasSchema ? "Generate" : "Upload & Generate"}
-              </Button>
-            )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            <div className="absolute bottom-4 left-4 right-4 flex gap-2">
+              {hasGeneratedPhoto && onView && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onView(pose)}
+                  className="flex-1 bg-white/90 backdrop-blur-sm hover:bg-white"
+                >
+                  <Eye className="w-4 h-4 mr-1" />
+                  {t("pose.view")}
+                </Button>
+              )}
+              {!hasGeneratedPhoto && onGenerate && (
+                <Button
+                  size="sm"
+                  onClick={() => onGenerate(pose)}
+                  className="flex-1 bg-stone-800 hover:bg-stone-900 text-white"
+                >
+                  <Sparkles className="w-4 h-4 mr-1" />
+                  {hasSchema ? t("pose.generate") : t("pose.upload_generate")}
+                </Button>
+              )}
+            </div>
           </div>
-        </div>
+
       </div>
 
       <div className="p-4">

@@ -1,6 +1,7 @@
 import React, { ReactElement } from "react";
 import { render, RenderOptions } from "@testing-library/react";
 import { MemoryRouter, MemoryRouterProps } from "react-router-dom";
+import { I18nProvider } from "../i18n";
 
 interface WrapperProps {
   children: React.ReactNode;
@@ -12,7 +13,11 @@ interface CustomRenderOptions extends Omit<RenderOptions, "wrapper"> {
 
 const createWrapper = (routerProps?: MemoryRouterProps) => {
   const AllTheProviders = ({ children }: WrapperProps) => {
-    return <MemoryRouter {...routerProps}>{children}</MemoryRouter>;
+    return (
+      <I18nProvider>
+        <MemoryRouter {...routerProps}>{children}</MemoryRouter>
+      </I18nProvider>
+    );
   };
   return AllTheProviders;
 };

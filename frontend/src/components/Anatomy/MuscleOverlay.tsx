@@ -1,6 +1,7 @@
 import React from 'react';
 import type { PoseMuscle } from '../../types';
 import { cn } from '../../lib/utils';
+import { useI18n } from '../../i18n';
 
 interface MuscleOverlayProps {
   muscles: PoseMuscle[];
@@ -8,6 +9,7 @@ interface MuscleOverlayProps {
 }
 
 export const MuscleOverlay: React.FC<MuscleOverlayProps> = ({ muscles, className }) => {
+  const { t } = useI18n();
   const groupedMuscles = muscles.reduce((acc, muscle) => {
     const part = muscle.body_part || 'other';
     if (!acc[part]) acc[part] = [];
@@ -16,13 +18,13 @@ export const MuscleOverlay: React.FC<MuscleOverlayProps> = ({ muscles, className
   }, {} as Record<string, PoseMuscle[]>);
 
   const bodyPartLabels: Record<string, string> = {
-    back: 'Спина',
-    core: 'Корпус',
-    legs: 'Ноги',
-    arms: 'Руки',
-    shoulders: 'Плечі',
-    chest: 'Груди',
-    other: 'Інше',
+    back: t('muscle.part.back'),
+    core: t('muscle.part.core'),
+    legs: t('muscle.part.legs'),
+    arms: t('muscle.part.arms'),
+    shoulders: t('muscle.part.shoulders'),
+    chest: t('muscle.part.chest'),
+    other: t('muscle.part.other'),
   };
 
   const getActivationClass = (level: number): string => {

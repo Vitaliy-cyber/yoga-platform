@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { generateApi } from "../services/api";
 import { useAppStore } from "../store/useAppStore";
 import type { GenerateStatus } from "../types";
+import { useI18n } from "../i18n";
 
 interface GenerationState {
   isGenerating: boolean;
@@ -31,6 +32,7 @@ export function useGenerate() {
   const [state, setState] = useState<GenerationState>(initialState);
 
   const { addToast } = useAppStore();
+  const { t } = useI18n();
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const taskIdRef = useRef<string | null>(null);
 
@@ -66,14 +68,14 @@ export function useGenerate() {
           return;
         }
 
-        const serverProgress = response.progress ?? 0;
+        const normalizedProgress = response.status === "completed" ? 100 : 0;
 
         if (response.status === "completed") {
           clearPolling();
           setState((prev) => ({
             ...prev,
             isGenerating: false,
-            progress: 100,
+            progress: normalizedProgress,
             status: response.status,
             statusMessage: response.status_message,
             photoUrl: response.photo_url,
@@ -81,29 +83,30 @@ export function useGenerate() {
             quotaWarning: response.quota_warning ?? false,
           }));
           if (response.quota_warning) {
-            addToast({ type: "warning", message: "Показано placeholder зображення. API квота вичерпана." });
+            addToast({ type: "warning", message: t("generate.toast_placeholder") });
           } else {
-            addToast({ type: "success", message: "Генерація завершена!" });
+            addToast({ type: "success", message: t("generate.toast_complete") });
           }
         } else if (response.status === "failed") {
           clearPolling();
+          const fallbackError = t("generate.error_failed");
           setState((prev) => ({
             ...prev,
             isGenerating: false,
-            progress: prev.progress,
+            progress: normalizedProgress,
             status: response.status,
             statusMessage: response.status_message,
-            error: response.error_message || "Помилка генерації",
+            error: response.error_message || fallbackError,
           }));
           addToast({
             type: "error",
-            message: response.error_message || "Помилка генерації",
+            message: response.error_message || fallbackError,
           });
         } else {
           // Processing or pending - update progress (never go backwards)
           setState((prev) => ({
             ...prev,
-            progress: Math.max(prev.progress, serverProgress),
+            progress: normalizedProgress,
             status: response.status,
             statusMessage: response.status_message,
           }));
@@ -115,8 +118,9 @@ export function useGenerate() {
         }
         
         clearPolling();
+        const fallbackMessage = t("generate.status_failed");
         const message =
-          err instanceof Error ? err.message : "Помилка перевірки статусу";
+          err instanceof Error ? err.message : fallbackMessage;
         setState((prev) => ({
           ...prev,
           isGenerating: false,
@@ -124,7 +128,7 @@ export function useGenerate() {
         }));
       }
     },
-    [addToast, clearPolling],
+    [addToast, clearPolling, t],
   );
 
   const generate = useCallback(
@@ -137,7 +141,7 @@ export function useGenerate() {
         ...initialState,
         isGenerating: true,
         status: "pending",
-        statusMessage: "Запуск генерації...",
+        statusMessage: t("generate.modal_progress"),
       });
 
       try {
@@ -146,7 +150,7 @@ export function useGenerate() {
         // Store task ID for this generation
         taskIdRef.current = response.task_id;
 
-        addToast({ type: "info", message: "Генерація розпочата..." });
+        addToast({ type: "info", message: t("generate.toast_start") });
 
         // Start polling for status
         pollStatus(response.task_id);
@@ -155,7 +159,7 @@ export function useGenerate() {
         }, 1500); // Poll every 1.5 seconds
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : "Помилка запуску генерації";
+          err instanceof Error ? err.message : t("generate.error_failed");
         setState((prev) => ({
           ...prev,
           isGenerating: false,
@@ -164,7 +168,7 @@ export function useGenerate() {
         addToast({ type: "error", message });
       }
     },
-    [addToast, pollStatus, clearPolling],
+    [addToast, pollStatus, clearPolling, t],
   );
 
   const reset = useCallback(() => {

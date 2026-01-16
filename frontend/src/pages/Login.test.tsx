@@ -6,6 +6,7 @@ import { Login } from './Login';
 import { useAuthStore } from '../store/useAuthStore';
 import { server } from '../test/setup';
 import { http, HttpResponse } from 'msw';
+import { I18nProvider } from '../i18n';
 
 // Mock useNavigate
 const mockNavigate = vi.fn();
@@ -19,9 +20,11 @@ vi.mock('react-router-dom', async () => {
 
 const renderLogin = () => {
   return render(
-    <BrowserRouter>
-      <Login />
-    </BrowserRouter>
+    <I18nProvider>
+      <BrowserRouter>
+        <Login />
+      </BrowserRouter>
+    </I18nProvider>
   );
 };
 
@@ -39,27 +42,27 @@ describe('Login', () => {
   describe('Rendering', () => {
     it('renders login page with title', () => {
       renderLogin();
-      expect(screen.getByText('Pose Studio')).toBeInTheDocument();
+      expect(screen.getByText('Студія Поз')).toBeInTheDocument();
     });
 
     it('renders welcome message', () => {
       renderLogin();
-      expect(screen.getByText('Welcome')).toBeInTheDocument();
+      expect(screen.getByText('Вітаємо')).toBeInTheDocument();
     });
 
     it('renders token input field', () => {
       renderLogin();
-      expect(screen.getByPlaceholderText(/enter your unique token/i)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/введіть ваш токен/i)).toBeInTheDocument();
     });
 
     it('renders sign in button', () => {
       renderLogin();
-      expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /увійти/i })).toBeInTheDocument();
     });
 
     it('renders instructions text', () => {
       renderLogin();
-      expect(screen.getByText(/new tokens create new accounts/i)).toBeInTheDocument();
+      expect(screen.getByText(/нові токени створюють акаунт/i)).toBeInTheDocument();
     });
   });
 
@@ -68,15 +71,15 @@ describe('Login', () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       await user.click(button);
 
-      expect(screen.getByText(/please enter an access token/i)).toBeInTheDocument();
+      expect(screen.getByText(/введіть токен доступу/i)).toBeInTheDocument();
     });
 
     it('button is disabled when token is empty', () => {
       renderLogin();
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       expect(button).toBeDisabled();
     });
 
@@ -84,10 +87,10 @@ describe('Login', () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
       await user.type(input, 'my-token');
 
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       expect(button).not.toBeDisabled();
     });
   });
@@ -115,24 +118,24 @@ describe('Login', () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
       await user.type(input, 'test-token');
 
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       await user.click(button);
 
       // Should show loading text
-      expect(screen.getByText(/signing in/i)).toBeInTheDocument();
+      expect(screen.getByText(/вхід/i)).toBeInTheDocument();
     });
 
     it('navigates to home on successful login', async () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
       await user.type(input, 'valid-token');
 
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       await user.click(button);
 
       await waitFor(() => {
@@ -144,10 +147,10 @@ describe('Login', () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
       await user.type(input, 'valid-token');
 
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       await user.click(button);
 
       await waitFor(() => {
@@ -170,11 +173,12 @@ describe('Login', () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
-      await user.type(input, 'invalid-token');
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
+      await user.type(input, 'valid-token');
 
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       await user.click(button);
+
 
       await waitFor(() => {
         expect(screen.getByText(/invalid token/i)).toBeInTheDocument();
@@ -194,11 +198,12 @@ describe('Login', () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
-      await user.type(input, 'test-token');
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
+      await user.type(input, 'valid-token');
 
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       await user.click(button);
+
 
       await waitFor(() => {
         expect(screen.getByText(/error/i)).toBeInTheDocument();
@@ -232,10 +237,10 @@ describe('Login', () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
       await user.type(input, '  my-token  ');
 
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       await user.click(button);
 
       await waitFor(() => {
@@ -247,10 +252,10 @@ describe('Login', () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
       await user.type(input, 'token-with_special.chars!@#');
 
-      const button = screen.getByRole('button', { name: /sign in/i });
+      const button = screen.getByRole('button', { name: /увійти/i });
       await user.click(button);
 
       await waitFor(() => {
@@ -262,20 +267,20 @@ describe('Login', () => {
   describe('Accessibility', () => {
     it('focuses input on load', () => {
       renderLogin();
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
       expect(document.activeElement).toBe(input);
     });
 
     it('has accessible form labels', () => {
       renderLogin();
-      expect(screen.getByLabelText(/access token/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/токен доступу/i)).toBeInTheDocument();
     });
 
     it('can submit form with Enter key', async () => {
       renderLogin();
       const user = userEvent.setup();
       
-      const input = screen.getByPlaceholderText(/enter your unique token/i);
+      const input = screen.getByPlaceholderText(/введіть ваш токен/i);
       await user.type(input, 'test-token');
       await user.keyboard('{Enter}');
 

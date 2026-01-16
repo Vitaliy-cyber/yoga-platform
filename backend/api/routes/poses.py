@@ -13,7 +13,7 @@ from models.user import User
 from schemas.muscle import PoseMuscleResponse
 from schemas.pose import PoseCreate, PoseListResponse, PoseResponse, PoseUpdate
 from services.auth import get_current_user, get_current_user_from_request
-from services.storage import S3Storage
+from services.storage import get_storage
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -41,7 +41,7 @@ async def save_upload_file(file: UploadFile, subdir: str = "") -> str:
 
     content_type = file.content_type or "image/png"
 
-    storage = S3Storage.get_instance()
+    storage = get_storage()
     return await storage.upload_bytes(content, key, content_type)
 
 
@@ -550,7 +550,46 @@ async def get_pose_image(
             detail=f"No {image_type} image for this pose",
         )
 
-    # Fetch image from S3
+    # Check if it's a local file path (starts with /storage/)
+    if image_url.startswith("/storage/"):
+        from pathlib import Path
+        import aiofiles
+        import mimetypes
+
+        # Build local file path
+        local_path = (
+            Path(__file__).parent.parent.parent / "storage" / image_url[9:]
+        )  # Remove "/storage/" prefix
+
+        if not local_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Image file not found: {image_url}",
+            )
+
+        try:
+            async with aiofiles.open(local_path, "rb") as f:
+                content = await f.read()
+
+            # Guess content type from file extension
+            content_type, _ = mimetypes.guess_type(str(local_path))
+            if not content_type:
+                content_type = "image/png"
+
+            return Response(
+                content=content,
+                media_type=content_type,
+                headers={
+                    "Cache-Control": "public, max-age=86400",
+                },
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to read local file: {str(e)}",
+            )
+
+    # Fetch image from S3 (remote URL)
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(image_url, timeout=30.0)

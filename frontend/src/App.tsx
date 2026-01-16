@@ -5,6 +5,7 @@ import { Dashboard, PoseGallery, PoseDetail, Upload, Generate, Login } from './p
 import { authApi } from './services/api';
 import { useAuthStore } from './store/useAuthStore';
 import { Loader2 } from 'lucide-react';
+import { I18nProvider } from './i18n';
 
 // Protected route wrapper - redirects to login if not authenticated
 const ProtectedRoute: React.FC = () => {
@@ -127,7 +128,11 @@ const App: React.FC = () => {
     };
   }, [_hasHydrated, accessToken, setAuth, logout, setLoading]);
 
-  return <RouterProvider router={router} future={{ v7_startTransition: true }} />;
+  return (
+    <I18nProvider>
+      <RouterProvider router={router} future={{ v7_startTransition: true }} />
+    </I18nProvider>
+  );
 };
 
 export default App;

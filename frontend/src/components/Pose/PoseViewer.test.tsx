@@ -31,8 +31,8 @@ describe("PoseViewer", () => {
 
   it("switches to muscles layer", () => {
     render(<PoseViewer pose={mockPose} isOpen onClose={() => {}} />);
-    fireEvent.click(screen.getByText("Muscles"));
-    const img = screen.getByAltText(/Тадасана - muscles/i);
+    fireEvent.click(screen.getByText("М'язи"));
+    const img = screen.getByAltText(/Тадасана - М'язи/i);
     expect(img.getAttribute("src")).toContain("/api/poses/1/image/muscle_layer");
   });
 });

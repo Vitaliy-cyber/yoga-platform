@@ -5,6 +5,7 @@ import { categoriesApi, posesApi, getImageProxyUrl } from "../services/api";
 import { Button } from "../components/ui/button";
 import { Grid3X3, List, Loader2, Image, Plus } from "lucide-react";
 import type { Category, PoseListItem, Pose } from "../types";
+import { useI18n } from "../i18n";
 
 export const PoseGallery: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -14,6 +15,7 @@ export const PoseGallery: React.FC = () => {
   const [poses, setPoses] = useState<PoseListItem[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { t } = useI18n();
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filters, setFilters] = useState({
     search: "",
@@ -80,7 +82,7 @@ export const PoseGallery: React.FC = () => {
       const fullPose = await posesApi.getById(pose.id);
       setSelectedPose(fullPose);
     } catch (error) {
-      console.error("Failed to load pose:", error);
+      console.error(t("pose.load_failed"), error);
     }
   };
 
@@ -89,15 +91,15 @@ export const PoseGallery: React.FC = () => {
       <header className="bg-white border-b border-stone-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-stone-800">Pose Library</h1>
+            <h1 className="text-2xl font-semibold text-stone-800">{t("gallery.title")}</h1>
             <p className="text-stone-500 text-sm mt-0.5">
-              {filteredPoses.length} poses • {categories.length} categories
+              {t("gallery.summary", { poses: filteredPoses.length, categories: categories.length })}
             </p>
           </div>
           <Link to="/upload">
             <Button className="bg-stone-800 hover:bg-stone-900 text-white rounded-xl h-11 px-5">
               <Plus className="w-4 h-4 mr-2" />
-              New Pose
+              {t("gallery.new_pose")}
             </Button>
           </Link>
         </div>
@@ -110,7 +112,7 @@ export const PoseGallery: React.FC = () => {
 
         <div className="flex items-center justify-between mb-6">
           <p className="text-stone-500 text-sm">
-            Showing {filteredPoses.length} of {poses.length} poses
+            {t("gallery.showing", { shown: filteredPoses.length, total: poses.length })}
           </p>
           <div className="flex items-center gap-2 bg-white rounded-lg border border-stone-200 p-1">
             <button
@@ -141,8 +143,8 @@ export const PoseGallery: React.FC = () => {
             <div className="w-20 h-20 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
               <Image className="w-10 h-10 text-stone-400" />
             </div>
-            <h3 className="text-lg font-medium text-stone-800 mb-2">No poses found</h3>
-            <p className="text-stone-500 mb-6">Try adjusting your filters</p>
+            <h3 className="text-lg font-medium text-stone-800 mb-2">{t("gallery.no_poses")}</h3>
+            <p className="text-stone-500 mb-6">{t("gallery.adjust_filters")}</p>
           </div>
         ) : viewMode === "grid" ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -169,10 +171,10 @@ export const PoseGallery: React.FC = () => {
                 />
                 <div className="flex-1">
                   <h3 className="font-semibold text-lg text-stone-800">{pose.name}</h3>
-                  <p className="text-stone-500 text-sm">#{pose.code} • {pose.category_name || "Uncategorized"}</p>
+                  <p className="text-stone-500 text-sm">#{pose.code} • {pose.category_name || t("pose.uncategorized")}</p>
                 </div>
                 <Button variant="outline" onClick={() => handleViewPose(pose)}>
-                  View
+                  {t("pose.view")}
                 </Button>
               </div>
             ))}

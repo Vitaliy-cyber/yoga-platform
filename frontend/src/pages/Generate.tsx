@@ -12,12 +12,13 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { VisuallyHidden } from '@/components/ui/visually-hidden';
 import { cn } from '@/lib/utils';
 import { useGenerate } from '@/hooks/useGenerate';
+import { useI18n } from '@/i18n';
 
 const steps = [
-  { id: 'analyzing', label: 'Analyzing pose structure...', icon: Lightbulb, minProgress: 0, maxProgress: 30 },
-  { id: 'generating_photo', label: 'Generating photorealistic image...', icon: Camera, minProgress: 30, maxProgress: 60 },
-  { id: 'generating_muscles', label: 'Creating muscle visualization...', icon: Activity, minProgress: 60, maxProgress: 100 },
-];
+  { id: 'analyzing', labelKey: 'generate.modal_progress', icon: Lightbulb, minProgress: 0, maxProgress: 30 },
+  { id: 'generating_photo', labelKey: 'generate.modal_progress', icon: Camera, minProgress: 30, maxProgress: 60 },
+  { id: 'generating_muscles', labelKey: 'generate.modal_progress', icon: Activity, minProgress: 60, maxProgress: 100 },
+] as const;
 
 export const Generate: React.FC = () => {
   const [inputType, setInputType] = useState<'schematic' | 'text'>('schematic');
@@ -30,6 +31,7 @@ export const Generate: React.FC = () => {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [activeOverlay, setActiveOverlay] = useState<'photo' | 'muscles'>('photo');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { t } = useI18n();
 
   const { 
     isGenerating, 
@@ -43,7 +45,7 @@ export const Generate: React.FC = () => {
 
   const hasResults = photoUrl || musclesUrl;
   // Determine current step based on progress
-  // Backend sends: 10% (analyzing), 30% (photo start), 60% (muscles start), 100% (done)
+  // Progress is either 0 or 100
   const currentStep = progress < 30 ? 0 : progress < 60 ? 1 : progress < 100 ? 2 : 2;
 
   const handleFileSelect = (file: File) => {
@@ -100,7 +102,7 @@ export const Generate: React.FC = () => {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(downloadUrl);
     } catch (error) {
-      console.error('Download failed:', error);
+      console.error(t("generate.download_failed"), error);
     }
   };
 
@@ -111,25 +113,25 @@ export const Generate: React.FC = () => {
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-2xl font-semibold text-stone-800">Generate Yoga Pose</h1>
-          <p className="text-stone-500 mt-1">Upload a schematic or describe a pose to generate photorealistic images</p>
+          <h1 className="text-2xl font-semibold text-stone-800">{t("generate.title")}</h1>
+          <p className="text-stone-500 mt-1">{t("generate.subtitle")}</p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Left Column - Input */}
           <div className="space-y-6">
             <div className="bg-white rounded-2xl border border-stone-200 p-6">
-              <h2 className="text-lg font-medium text-stone-800 mb-4">Source Input</h2>
+              <h2 className="text-lg font-medium text-stone-800 mb-4">{t("generate.source_input")}</h2>
               
               <Tabs value={inputType} onValueChange={(v) => setInputType(v as 'schematic' | 'text')} className="w-full">
                 <TabsList className="grid w-full grid-cols-2 bg-stone-100 p-1 rounded-xl">
                   <TabsTrigger value="schematic" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
                     <FileImage className="w-4 h-4 mr-2" />
-                    Upload Schematic
+                    {t("generate.upload_schematic")}
                   </TabsTrigger>
                   <TabsTrigger value="text" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
                     <Type className="w-4 h-4 mr-2" />
-                    Text Description
+                    {t("generate.text_description")}
                   </TabsTrigger>
                 </TabsList>
                 
@@ -157,9 +159,10 @@ export const Generate: React.FC = () => {
                         <div className="relative aspect-[4/3] max-h-[300px] mx-auto">
                           <img 
                             src={previewUrl} 
-                            alt="Schematic preview" 
+                            alt={t("generate.alt_schematic")} 
                             className="w-full h-full object-contain rounded-lg"
                           />
+
                           <button
                             onClick={() => {
                               setUploadedFile(null);
@@ -183,10 +186,10 @@ export const Generate: React.FC = () => {
                           <Upload className="w-7 h-7 text-stone-400" />
                         </div>
                         <p className="text-stone-600 font-medium">
-                          Drop your schematic drawing here
+                          {t("generate.drop_here")}
                         </p>
                         <p className="text-stone-400 text-sm mt-1">
-                          or click to browse files
+                          {t("generate.browse")}
                         </p>
                       </div>
                     )}
@@ -197,9 +200,9 @@ export const Generate: React.FC = () => {
                   <Textarea
                     value={textDescription}
                     onChange={(e) => setTextDescription(e.target.value)}
-                    placeholder="Describe the pose in detail...
+                    placeholder={`${t("generate.describe_placeholder")}
 
-Example: Standing pose with feet wide apart, approximately 4 feet. Right foot turned out 90 degrees, left foot slightly inward. Arms extended horizontally at shoulder height."
+${t("generate.describe_example")}`}
                     className="min-h-[200px] resize-none font-mono text-sm"
                   />
                 </TabsContent>
@@ -208,23 +211,23 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
 
             {/* Options */}
             <div className="bg-white rounded-2xl border border-stone-200 p-6">
-              <h3 className="text-sm font-medium text-stone-700 mb-4">What to generate:</h3>
+              <h3 className="text-sm font-medium text-stone-700 mb-4">{t("generate.options")}</h3>
               
               <div className="space-y-3">
                 <div className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl">
                   <Camera className="w-5 h-5 text-stone-600" />
                   <div className="flex-1">
-                    <p className="font-medium text-stone-800">Photorealistic Image</p>
-                    <p className="text-sm text-stone-500">Studio-quality photograph</p>
+                    <p className="font-medium text-stone-800">{t("generate.photo_title")}</p>
+                    <p className="text-sm text-stone-500">{t("generate.photo_desc")}</p>
                   </div>
-                  <div className="text-stone-400 text-sm">Required</div>
+                  <div className="text-stone-400 text-sm">{t("generate.required")}</div>
                 </div>
 
                 <label className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl cursor-pointer hover:bg-stone-100 transition-colors">
                   <Activity className="w-5 h-5 text-stone-600" />
                   <div className="flex-1">
-                    <p className="font-medium text-stone-800">Muscle Visualization</p>
-                    <p className="text-sm text-stone-500">Active muscle groups highlighted in red</p>
+                    <p className="font-medium text-stone-800">{t("generate.muscles_title")}</p>
+                    <p className="text-sm text-stone-500">{t("generate.muscles_desc")}</p>
                   </div>
                   <Checkbox 
                     checked={generateMuscles}
@@ -236,11 +239,11 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
 
             {/* Additional notes */}
             <div className="bg-white rounded-2xl border border-stone-200 p-6">
-              <Label className="text-stone-600">Additional notes (optional)</Label>
+              <Label className="text-stone-600">{t("generate.notes")}</Label>
               <Textarea
                 value={additionalNotes}
                 onChange={(e) => setAdditionalNotes(e.target.value)}
-                placeholder="e.g., Male subject, athletic build, specific lighting preferences..."
+                placeholder={t("generate.notes_placeholder")}
                 className="mt-2 resize-none"
               />
             </div>
@@ -259,12 +262,12 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
               {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Generating...
+                  {t("generate.generating")}
                 </>
               ) : (
                 <>
                   <Sparkles className="w-4 h-4 mr-2" />
-                  Start Generation
+                  {t("generate.start")}
                 </>
               )}
             </Button>
@@ -275,7 +278,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                 variant="outline"
                 className="w-full h-12 rounded-xl"
               >
-                Reset & Start Over
+                {t("generate.reset")}
               </Button>
             )}
           </div>
@@ -284,12 +287,12 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
           <div className="space-y-6">
             {isGenerating ? (
               <div className="bg-white rounded-2xl border border-stone-200 p-6">
-                <h2 className="text-lg font-medium text-stone-800 mb-6">Generation Progress</h2>
+                <h2 className="text-lg font-medium text-stone-800 mb-6">{t("generate.progress")}</h2>
                 
                 {/* Progress bar */}
                 <div className="mb-6">
                   <div className="flex justify-between text-xs text-stone-500 mb-2">
-                    <span>Progress</span>
+                    <span>{t("generate.progress_label")}</span>
                     <span>{progress}%</span>
                   </div>
                   <div className="h-2 bg-stone-200 rounded-full overflow-hidden">
@@ -305,7 +308,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                     const Icon = step.icon;
                     const isActive = index === currentStep && progress < 100;
                     const isComplete = index < currentStep || progress >= 100;
-                    
+
                     if (step.id === 'generating_muscles' && !generateMuscles) return null;
 
                     return (
@@ -339,7 +342,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                             isComplete && "text-emerald-700",
                             !isActive && !isComplete && "text-stone-500"
                           )}>
-                            {step.label}
+                            {t(step.labelKey)}
                           </p>
                         </div>
                       </div>
@@ -347,7 +350,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                   })}
                 </div>
                 <p className="text-center text-stone-500 text-sm mt-6">
-                  This may take a few minutes. Please don't close this window.
+                  {t("generate.progress_hint")}
                 </p>
               </div>
             ) : hasResults ? (
@@ -357,12 +360,12 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                   {photoUrl && (
                     <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden animate-fade-in">
                       <div className="aspect-square relative bg-stone-50">
-                        <img src={photoUrl} alt="Generated photo" className="w-full h-full object-contain" />
+                        <img src={photoUrl} alt={t("generate.alt_photo")} className="w-full h-full object-contain" />
                       </div>
                       <div className="p-4 flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Camera className="w-4 h-4 text-stone-500" />
-                          <span className="text-sm font-medium text-stone-700">Photo</span>
+                          <span className="text-sm font-medium text-stone-700">{t("generate.results_photo")}</span>
                         </div>
                         <div className="flex gap-2">
                           <Button size="sm" variant="ghost" onClick={() => { setActiveOverlay('photo'); setViewerOpen(true); }}>
@@ -382,12 +385,12 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                       style={{ animationDelay: '50ms' }}
                     >
                       <div className="aspect-square relative bg-stone-50">
-                        <img src={musclesUrl} alt="Muscle visualization" className="w-full h-full object-contain" />
+                        <img src={musclesUrl} alt={t("generate.alt_muscles")} className="w-full h-full object-contain" />
                       </div>
                       <div className="p-4 flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Activity className="w-4 h-4 text-red-500" />
-                          <span className="text-sm font-medium text-stone-700">Muscles</span>
+                          <span className="text-sm font-medium text-stone-700">{t("generate.results_muscles")}</span>
                         </div>
                         <div className="flex gap-2">
                           <Button size="sm" variant="ghost" onClick={() => { setActiveOverlay('muscles'); setViewerOpen(true); }}>
@@ -409,7 +412,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                   className="w-full h-12 rounded-xl"
                 >
                   <Layers className="w-4 h-4 mr-2" />
-                  Open Full Viewer
+                  {t("generate.viewer")}
                 </Button>
               </>
             ) : (
@@ -417,9 +420,9 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                 <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
                   <Sparkles className="w-7 h-7 text-stone-400" />
                 </div>
-                <h3 className="text-lg font-medium text-stone-700 mb-2">Ready to Generate</h3>
+                <h3 className="text-lg font-medium text-stone-700 mb-2">{t("generate.ready")}</h3>
                 <p className="text-stone-500 text-sm">
-                  Upload a schematic image or describe a pose to get started
+                  {t("generate.ready_hint")}
                 </p>
               </div>
             )}
@@ -431,11 +434,11 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
       <Dialog open={viewerOpen} onOpenChange={setViewerOpen}>
         <DialogContent className="max-w-5xl w-[95vw] h-[85vh] p-0 bg-stone-950 border-0 overflow-hidden" aria-describedby={undefined} hideCloseButton>
           <VisuallyHidden>
-            <DialogTitle>Pose Viewer</DialogTitle>
+            <DialogTitle>{t("pose.viewer.title")}</DialogTitle>
           </VisuallyHidden>
           <div className="flex flex-col h-full">
             <div className="flex items-center justify-between px-6 py-4 border-b border-stone-800">
-              <h2 className="text-xl font-medium text-white">Pose Viewer</h2>
+              <h2 className="text-xl font-medium text-white">{t("pose.viewer.title")}</h2>
               <div className="flex items-center gap-3">
                 <Button
                   variant="ghost"
@@ -444,7 +447,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                   className="text-stone-400 hover:text-white hover:bg-stone-800"
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  Download
+                  {t("pose.viewer.download")}
                 </Button>
                 <Button
                   variant="ghost"
@@ -461,7 +464,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
               <div className="flex-1 relative flex items-center justify-center p-8 bg-stone-900">
                 <img
                   src={activeOverlay === 'photo' ? photoUrl || '' : musclesUrl || ''}
-                  alt="Pose"
+                  alt={t("generate.alt_pose")}
                   className="max-w-full max-h-full object-contain rounded-lg transition-opacity duration-200"
                 />
               </div>
@@ -469,7 +472,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
               <div className="w-72 bg-stone-900 border-l border-stone-800 p-6">
                 <div className="flex items-center gap-2 mb-4">
                   <Layers className="w-4 h-4 text-stone-400" />
-                  <h3 className="text-sm font-medium text-stone-300">Visualization Layer</h3>
+                  <h3 className="text-sm font-medium text-stone-300">{t("pose.viewer.layer")}</h3>
                 </div>
                 <div className="space-y-2">
                   <button
@@ -480,7 +483,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                     )}
                   >
                     <Camera className="w-5 h-5" />
-                    <span className="font-medium">Photo</span>
+                    <span className="font-medium">{t("pose.viewer.photo")}</span>
                   </button>
                   {musclesUrl && (
                     <button
@@ -491,7 +494,7 @@ Example: Standing pose with feet wide apart, approximately 4 feet. Right foot tu
                       )}
                     >
                       <Activity className="w-5 h-5" />
-                      <span className="font-medium">Muscles</span>
+                      <span className="font-medium">{t("pose.viewer.muscles")}</span>
                     </button>
                   )}
                 </div>
