@@ -64,6 +64,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [schemaLoadError, setSchemaLoadError] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, generate, reset } = useGenerate();
   const [generationStarted, setGenerationStarted] = useState(false);
@@ -95,16 +96,18 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     };
   }, [previewUrl]);
 
-  const handleFileSelect = (file: File) => {
+  const handleFileSelect = useCallback((file: File) => {
     if (file && file.type.startsWith("image/")) {
       // Revoke previous URL before creating new one
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-      }
+      setPreviewUrl((prev) => {
+        if (prev) {
+          URL.revokeObjectURL(prev);
+        }
+        return URL.createObjectURL(file);
+      });
       setUploadedFile(file);
-      setPreviewUrl(URL.createObjectURL(file));
     }
-  };
+  }, []);
 
   // Check if pose has existing schema (and it loaded successfully)
   const hasExistingSchema = Boolean(pose?.schema_path && pose.schema_path.trim()) && !schemaLoadError;
@@ -150,6 +153,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
 
   const handleGenerate = async () => {
     let fileToGenerate: File | null = null;
+    setLocalError(null);
     
     try {
       if (uploadedFile) {
@@ -166,6 +170,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       }
       
       if (!fileToGenerate) {
+        setLocalError(t("generate.error_failed"));
         return;
       }
       
@@ -175,6 +180,9 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       // onComplete will be called by useEffect when photoUrl is set
     } catch (err) {
       console.error("Generation error:", err);
+      const message = err instanceof Error ? err.message : t("generate.error_failed");
+      setLocalError(message);
+      setGenerationStarted(false);
     }
   };
 
@@ -298,9 +306,9 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
               />
             </div>
 
-            {error && (
+            {(error || localError) && (
               <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm">
-                {error}
+                {error || localError}
               </div>
             )}
 
