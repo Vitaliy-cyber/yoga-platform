@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -26,12 +26,25 @@ export const Upload: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { t } = useI18n();
 
-  React.useEffect(() => {
+  useEffect(() => {
     categoriesApi.getAll().then(setCategories).catch(console.error);
   }, []);
 
+  // Cleanup preview URL on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
   const handleFileSelect = (file: File) => {
     if (file && file.type.startsWith("image/")) {
+      // Revoke previous URL before creating new one
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
       setUploadedFile(file);
       setPreviewUrl(URL.createObjectURL(file));
     }

@@ -86,8 +86,21 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     });
   }, []);
 
+  // Cleanup preview URL on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
   const handleFileSelect = (file: File) => {
     if (file && file.type.startsWith("image/")) {
+      // Revoke previous URL before creating new one
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
       setUploadedFile(file);
       setPreviewUrl(URL.createObjectURL(file));
     }
@@ -165,7 +178,10 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     }
   };
 
-  const handleClose = useCallback(() => {
+  const handleClose = useCallback((open: boolean) => {
+    // Only handle close events (open=false), not open events
+    if (open) return;
+    
     // Only close if not currently saving
     if (savingRef.current) {
       return;

@@ -61,7 +61,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-6xl w-[95vw] h-[90vh] p-0 bg-stone-950 border-0 overflow-hidden" aria-describedby={undefined} hideCloseButton>
         <VisuallyHidden>
           <DialogTitle>{`${pose.name} - ${t("pose.viewer.title")}`}</DialogTitle>

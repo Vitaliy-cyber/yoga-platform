@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Loader2, Sparkles, Camera, Activity, Lightbulb, Upload, 
   FileImage, Type, Eye, Download, Layers, X, Check
@@ -48,8 +48,21 @@ export const Generate: React.FC = () => {
   // Progress is either 0 or 100
   const currentStep = progress < 30 ? 0 : progress < 60 ? 1 : progress < 100 ? 2 : 2;
 
+  // Cleanup preview URL on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
   const handleFileSelect = (file: File) => {
     if (file && file.type.startsWith('image/')) {
+      // Revoke previous URL before creating new one
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
       setUploadedFile(file);
       setPreviewUrl(URL.createObjectURL(file));
     }

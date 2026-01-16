@@ -299,14 +299,14 @@ export const PoseDetail: React.FC = () => {
                   <Label className="text-stone-600">{t("pose.detail.category")}</Label>
                   {isEditing ? (
                     <Select
-                      value={editData.category_id}
-                      onValueChange={(value) => setEditData({ ...editData, category_id: value })}
+                      value={editData.category_id || "__none__"}
+                      onValueChange={(value) => setEditData({ ...editData, category_id: value === "__none__" ? "" : value })}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder={t("upload.category_placeholder")} />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">{t("pose.uncategorized")}</SelectItem>
+                        <SelectItem value="__none__">{t("pose.uncategorized")}</SelectItem>
                         {categories.map((cat) => (
                           <SelectItem key={cat.id} value={String(cat.id)}>
                             {cat.name}
@@ -348,11 +348,11 @@ export const PoseDetail: React.FC = () => {
           onClose={() => setShowGenerateModal(false)}
           onComplete={async () => {
             // Refresh pose data after generation
+            // Note: GenerateModal handles closing via onClose(), so we only refresh data here
             if (id) {
               const updatedPose = await posesApi.getById(parseInt(id, 10));
               setPose(updatedPose);
             }
-            setShowGenerateModal(false);
           }}
         />
       )}
