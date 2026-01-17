@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
 import { useGenerate } from "../../hooks/useGenerate";
 import { posesApi, getImageProxyUrl } from "../../services/api";
+import { getAuthToken } from "../../store/useAuthStore";
 import { useI18n } from "../../i18n";
 
 // Backend progress values:
@@ -168,7 +169,11 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       } else if (pose?.schema_path) {
         // Fetch existing schema via proxy to avoid CORS issues with S3/storage
         const proxyUrl = getImageProxyUrl(pose.id, 'schema');
-        const response = await fetch(proxyUrl);
+        const authToken = getAuthToken();
+        
+        const response = await fetch(proxyUrl, {
+          headers: authToken ? { 'Authorization': `Bearer ${authToken}` } : {},
+        });
         if (!response.ok) {
           throw new Error(`${t("generate.schema_fetch_failed")}: ${response.status}`);
         }
