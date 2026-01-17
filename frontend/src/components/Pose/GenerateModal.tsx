@@ -151,15 +151,22 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     saveGeneratedImages();
   }, [photoUrl, musclesUrl, isGenerating, pose, generationStarted, onComplete, onClose, reset, handleClearFile]);
 
+  /**
+   * Handles the generation process:
+   * 1. Uses uploaded file if available, otherwise fetches existing schema via proxy
+   * 2. Converts schema to File object for the generate API
+   * 3. Shows errors to user via localError state if fetch or generation fails
+   */
   const handleGenerate = async () => {
     let fileToGenerate: File | null = null;
     setLocalError(null);
     
     try {
+      // Priority: use newly uploaded file, fallback to existing schema from database
       if (uploadedFile) {
         fileToGenerate = uploadedFile;
       } else if (pose?.schema_path) {
-        // Use proxy URL to avoid CORS issues
+        // Fetch existing schema via proxy to avoid CORS issues with S3/storage
         const proxyUrl = getImageProxyUrl(pose.id, 'schema');
         const response = await fetch(proxyUrl);
         if (!response.ok) {
