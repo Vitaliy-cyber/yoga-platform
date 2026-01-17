@@ -189,6 +189,95 @@ async def generate(
     )
 
 
+@router.post("/from-pose/{pose_id}", response_model=GenerateResponse)
+async def generate_from_pose(
+    pose_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate layers from existing pose schema.
+
+    This endpoint fetches the schema from the pose directly on the server,
+    avoiding CORS issues with client-side fetch.
+    """
+    from models.pose import Pose
+    from sqlalchemy import and_
+
+    # Check if AI generation is configured
+    if not settings.GOOGLE_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI generation is not configured. Please set GOOGLE_API_KEY in .env",
+        )
+
+    # Get pose and verify ownership
+    result = await db.execute(
+        select(Pose).where(and_(Pose.id == pose_id, Pose.user_id == current_user.id))
+    )
+    pose = result.scalar_one_or_none()
+
+    if not pose:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pose not found",
+        )
+
+    if not pose.schema_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pose has no schema image",
+        )
+
+    # Get schema image bytes from storage
+    storage = get_storage()
+    try:
+        image_bytes = await storage.download_bytes(pose.schema_path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch schema image: {str(e)}",
+        )
+
+    if len(image_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Schema image too large. Max size is 10MB",
+        )
+
+    # Determine mime type from file extension
+    mime_type = "image/png"
+    if pose.schema_path.lower().endswith(".jpg") or pose.schema_path.lower().endswith(
+        ".jpeg"
+    ):
+        mime_type = "image/jpeg"
+    elif pose.schema_path.lower().endswith(".webp"):
+        mime_type = "image/webp"
+
+    # Create task
+    task_id = create_task_id()
+    task = GenerationTask(
+        task_id=task_id,
+        user_id=current_user.id,
+        status=GenerateStatus.PENDING.value,
+        progress=0,
+        status_message="In queue...",
+    )
+    db.add(task)
+    await db.commit()
+
+    # Start background generation
+    background_tasks.add_task(run_generation, task_id, image_bytes, mime_type)
+
+    return GenerateResponse(
+        task_id=task_id,
+        status=GenerateStatus.PENDING,
+        progress=0,
+        status_message="In queue...",
+    )
+
+
 @router.get("/status/{task_id}", response_model=GenerateResponse)
 async def get_status(
     task_id: str,

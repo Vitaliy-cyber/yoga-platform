@@ -287,6 +287,19 @@ export const generateApi = {
     }
   },
 
+  /**
+   * Генерація зображень з існуючої схеми пози (server-side fetch)
+   * Обходить CORS проблеми - сервер сам завантажує схему
+   */
+  generateFromPose: async (poseId: number): Promise<GenerateResponse> => {
+    try {
+      const response = await api.post<GenerateResponse>(`/api/generate/from-pose/${poseId}`);
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
+    }
+  },
+
   getStatus: async (taskId: string): Promise<GenerateResponse> => {
     try {
       const response = await api.get<GenerateResponse>(`/api/generate/status/${taskId}`);

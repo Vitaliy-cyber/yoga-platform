@@ -22,6 +22,10 @@ class StorageBackend(Protocol):
         """Upload bytes and return URL."""
         ...
 
+    async def download_bytes(self, url_or_path: str) -> bytes:
+        """Download file and return bytes."""
+        ...
+
     def get_presigned_url(
         self, key: str, expiration: int = PRESIGNED_URL_EXPIRATION
     ) -> str:
@@ -62,6 +66,20 @@ class LocalStorage:
         logger.info("Saved file locally: %s", file_path)
         # Return relative URL that will be served by FastAPI
         return f"/storage/{key}"
+
+    async def download_bytes(self, url_or_path: str) -> bytes:
+        """Download file from local filesystem."""
+        # Remove /storage/ prefix if present
+        path = url_or_path.lstrip("/")
+        if path.startswith("storage/"):
+            path = path[8:]
+
+        file_path = self.base_dir / path
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        async with aiofiles.open(file_path, "rb") as f:
+            return await f.read()
 
     def get_presigned_url(
         self, key: str, expiration: int = PRESIGNED_URL_EXPIRATION
@@ -217,6 +235,41 @@ class S3Storage:
                 self.bucket,
                 s3_key,
                 self.endpoint_url,
+                str(e),
+            )
+            raise
+
+    async def download_bytes(self, url_or_path: str) -> bytes:
+        """Download file from S3."""
+        import urllib.parse
+
+        # If it's a presigned URL, extract the key
+        if url_or_path.startswith("http"):
+            parsed = urllib.parse.urlparse(url_or_path)
+            # Extract key from path, removing bucket name if present
+            path = parsed.path.lstrip("/")
+            if path.startswith(self.bucket + "/"):
+                path = path[len(self.bucket) + 1 :]
+            s3_key = path
+        else:
+            # It's a path/key
+            s3_key = self._build_key(url_or_path)
+
+        try:
+            logger.info("Downloading from S3: bucket=%s, key=%s", self.bucket, s3_key)
+            response = await asyncio.to_thread(
+                self.client.get_object,
+                Bucket=self.bucket,
+                Key=s3_key,
+            )
+            data = response["Body"].read()
+            logger.info("Download successful: %d bytes", len(data))
+            return data
+        except Exception as e:
+            logger.error(
+                "S3 download failed: bucket=%s, key=%s, error=%s",
+                self.bucket,
+                s3_key,
                 str(e),
             )
             raise

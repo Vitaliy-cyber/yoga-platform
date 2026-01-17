@@ -171,6 +171,50 @@ export function useGenerate() {
     [addToast, pollStatus, clearPolling, t],
   );
 
+  /**
+   * Generate from existing pose schema (server-side fetch)
+   * This avoids CORS issues by having the server fetch the schema
+   */
+  const generateFromPose = useCallback(
+    async (poseId: number) => {
+      // Clear any existing polling
+      clearPolling();
+
+      // Reset state for new generation
+      setState({
+        ...initialState,
+        isGenerating: true,
+        status: "pending",
+        statusMessage: t("generate.modal_progress"),
+      });
+
+      try {
+        const response = await generateApi.generateFromPose(poseId);
+        
+        // Store task ID for this generation
+        taskIdRef.current = response.task_id;
+
+        addToast({ type: "info", message: t("generate.toast_start") });
+
+        // Start polling for status
+        pollStatus(response.task_id);
+        pollingRef.current = setInterval(() => {
+          pollStatus(response.task_id);
+        }, 1500); // Poll every 1.5 seconds
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : t("generate.error_failed");
+        setState((prev) => ({
+          ...prev,
+          isGenerating: false,
+          error: message,
+        }));
+        addToast({ type: "error", message });
+      }
+    },
+    [addToast, pollStatus, clearPolling, t],
+  );
+
   const reset = useCallback(() => {
     clearPolling();
     setState(initialState);
@@ -179,6 +223,7 @@ export function useGenerate() {
   return {
     ...state,
     generate,
+    generateFromPose,
     reset,
   };
 }

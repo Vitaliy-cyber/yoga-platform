@@ -9,7 +9,6 @@ import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
 import { useGenerate } from "../../hooks/useGenerate";
 import { posesApi, getImageProxyUrl } from "../../services/api";
-import { getAuthToken } from "../../store/useAuthStore";
 import { useI18n } from "../../i18n";
 
 // Backend progress values:
@@ -67,7 +66,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const [schemaLoadError, setSchemaLoadError] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, generate, reset } = useGenerate();
+  const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, generate, generateFromPose, reset } = useGenerate();
   const [generationStarted, setGenerationStarted] = useState(false);
   const { t } = useI18n();
 
@@ -154,41 +153,28 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
 
   /**
    * Handles the generation process:
-   * 1. Uses uploaded file if available, otherwise fetches existing schema via proxy
-   * 2. Converts schema to File object for the generate API
-   * 3. Shows errors to user via localError state if fetch or generation fails
+   * 1. If user uploaded a file, use it directly
+   * 2. If pose has existing schema, use server-side fetch (avoids CORS)
+   * 3. Shows errors to user via localError state if generation fails
    */
   const handleGenerate = async () => {
-    let fileToGenerate: File | null = null;
     setLocalError(null);
     
     try {
-      // Priority: use newly uploaded file, fallback to existing schema from database
-      if (uploadedFile) {
-        fileToGenerate = uploadedFile;
-      } else if (pose?.schema_path) {
-        // Fetch existing schema via proxy to avoid CORS issues with S3/storage
-        const proxyUrl = getImageProxyUrl(pose.id, 'schema');
-        const authToken = getAuthToken();
-        
-        const response = await fetch(proxyUrl, {
-          headers: authToken ? { 'Authorization': `Bearer ${authToken}` } : {},
-        });
-        if (!response.ok) {
-          throw new Error(`${t("generate.schema_fetch_failed")}: ${response.status}`);
-        }
-        const blob = await response.blob();
-        fileToGenerate = new File([blob], "schema.png", { type: blob.type || "image/png" });
-      }
-      
-      if (!fileToGenerate) {
-        setLocalError(t("generate.error_failed"));
-        return;
-      }
-      
       // Mark that generation started in this session
       setGenerationStarted(true);
-      await generate(fileToGenerate);
+      
+      if (uploadedFile) {
+        // User uploaded a new file - use it directly
+        await generate(uploadedFile);
+      } else if (pose?.schema_path) {
+        // Use server-side fetch to avoid CORS issues
+        await generateFromPose(pose.id);
+      } else {
+        setLocalError(t("generate.error_failed"));
+        setGenerationStarted(false);
+        return;
+      }
       // onComplete will be called by useEffect when photoUrl is set
     } catch (err) {
       console.error("Generation error:", err);
