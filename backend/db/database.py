@@ -171,6 +171,58 @@ async def _migrate_sqlite_users_table(conn):
     return True
 
 
+async def _seed_default_muscles():
+    """
+    Seed the muscles table with default data if empty.
+
+    This runs on every startup to ensure production has the same
+    muscles as development without manual intervention.
+    """
+    from models.muscle import Muscle
+    from sqlalchemy import select, func
+
+    default_muscles = [
+        {"name": "erector_spinae", "name_ua": "Прямий м'яз спини", "body_part": "back"},
+        {"name": "latissimus_dorsi", "name_ua": "Найширший м'яз спини", "body_part": "back"},
+        {"name": "trapezius", "name_ua": "Трапецієподібний м'яз", "body_part": "back"},
+        {"name": "rhomboids", "name_ua": "Ромбоподібні м'язи", "body_part": "back"},
+        {"name": "rectus_abdominis", "name_ua": "Прямий м'яз живота", "body_part": "core"},
+        {"name": "obliques", "name_ua": "Косі м'язи живота", "body_part": "core"},
+        {"name": "transverse_abdominis", "name_ua": "Поперечний м'яз живота", "body_part": "core"},
+        {"name": "quadriceps", "name_ua": "Чотириголовий м'яз стегна", "body_part": "legs"},
+        {"name": "hamstrings", "name_ua": "Задня поверхня стегна", "body_part": "legs"},
+        {"name": "gluteus_maximus", "name_ua": "Великий сідничний м'яз", "body_part": "legs"},
+        {"name": "gluteus_medius", "name_ua": "Середній сідничний м'яз", "body_part": "legs"},
+        {"name": "calves", "name_ua": "Литкові м'язи", "body_part": "legs"},
+        {"name": "hip_flexors", "name_ua": "Згиначі стегна", "body_part": "legs"},
+        {"name": "deltoids", "name_ua": "Дельтоподібний м'яз", "body_part": "shoulders"},
+        {"name": "rotator_cuff", "name_ua": "Ротаторна манжета", "body_part": "shoulders"},
+        {"name": "biceps", "name_ua": "Біцепс", "body_part": "arms"},
+        {"name": "triceps", "name_ua": "Тріцепс", "body_part": "arms"},
+        {"name": "forearms", "name_ua": "М'язи передпліччя", "body_part": "arms"},
+        {"name": "pectoralis", "name_ua": "Грудні м'язи", "body_part": "chest"},
+        {"name": "serratus_anterior", "name_ua": "Передній зубчастий м'яз", "body_part": "chest"},
+    ]
+
+    async with AsyncSessionLocal() as db:
+        # Check if muscles table is empty
+        result = await db.execute(select(func.count(Muscle.id)))
+        count = result.scalar()
+
+        if count > 0:
+            logging.info(f"Muscles table already has {count} entries, skipping seed")
+            return
+
+        logging.info("Seeding default muscles...")
+
+        for muscle_data in default_muscles:
+            muscle = Muscle(**muscle_data)
+            db.add(muscle)
+
+        await db.commit()
+        logging.info(f"Seeded {len(default_muscles)} default muscles")
+
+
 async def init_db():
     """Ініціалізація бази даних"""
     from sqlalchemy import text
@@ -364,5 +416,8 @@ async def init_db():
                 logging.info("Migration: user_id columns ensured")
             except Exception as e:
                 logging.warning(f"Migration warning (may be normal): {e}")
+
+    # Seed default muscles if table is empty
+    await _seed_default_muscles()
 
     logging.info("Database initialized successfully")
