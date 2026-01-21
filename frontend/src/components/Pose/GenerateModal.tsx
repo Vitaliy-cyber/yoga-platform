@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -8,8 +9,37 @@ import { Loader2, Sparkles, Camera, Activity, Lightbulb, Check, Upload, X } from
 import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
 import { useGenerate } from "../../hooks/useGenerate";
-import { posesApi, getImageProxyUrl } from "../../services/api";
+import { posesApi, getImageUrl } from "../../services/api";
 import { useI18n } from "../../i18n";
+
+// Animation variants
+const fadeInUp = {
+  hidden: { opacity: 0, y: 20 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.3 } },
+};
+
+const staggerContainer = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: { staggerChildren: 0.1, delayChildren: 0.1 },
+  },
+};
+
+const scaleIn = {
+  hidden: { opacity: 0, scale: 0.95 },
+  visible: {
+    opacity: 1,
+    scale: 1,
+    transition: { type: "spring" as const, stiffness: 300, damping: 24 }
+  },
+};
+
+const progressBarSpring = {
+  type: "spring" as const,
+  stiffness: 100,
+  damping: 15,
+};
 
 // Backend progress values:
 // 5% - Initializing
@@ -18,9 +48,9 @@ import { useI18n } from "../../i18n";
 // 60% - Generating muscles (starts)
 // 100% - Completed
 const steps = [
-  { id: "analyzing", labelKey: "generate.modal_progress", icon: Lightbulb, progressThreshold: 10 },
-  { id: "generating_photo", labelKey: "generate.modal_progress", icon: Camera, progressThreshold: 30 },
-  { id: "generating_muscles", labelKey: "generate.modal_progress", icon: Activity, progressThreshold: 60 },
+  { id: "analyzing", labelKey: "generate.step_analyzing", icon: Lightbulb, progressThreshold: 10 },
+  { id: "generating_photo", labelKey: "generate.step_photo", icon: Camera, progressThreshold: 30 },
+  { id: "generating_muscles", labelKey: "generate.step_muscles", icon: Activity, progressThreshold: 60 },
 ] as const;
 
 // Determine which step is active based on progress
@@ -66,7 +96,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const [schemaLoadError, setSchemaLoadError] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, generate, generateFromPose, reset } = useGenerate();
+  const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, analyzedMuscles, generate, generateFromPose, reset } = useGenerate();
   const [generationStarted, setGenerationStarted] = useState(false);
   const { t } = useI18n();
 
@@ -125,12 +155,13 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       savingRef.current = true;
       
       try {
-        // Update the pose with the generated image URLs
+        // Update the pose with the generated image URLs and analyzed muscles
         await posesApi.update(pose.id, {
           photo_path: photoUrl,
           ...(musclesUrl && { muscle_layer_path: musclesUrl }),
+          ...(analyzedMuscles && analyzedMuscles.length > 0 && { analyzed_muscles: analyzedMuscles }),
         });
-        
+
         // Notify parent to refresh data
         onComplete?.();
       } catch (err) {
@@ -138,9 +169,12 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
         // Still notify parent - the images are generated, just not saved to pose
         onComplete?.();
       } finally {
-        // Reset and close
+        // Reset all states and close
         savingRef.current = false;
         setGenerationStarted(false);
+        setLocalError(null);
+        setAdditionalNotes("");
+        setGenerateMuscles(true);
         reset();
         handleClearFile();
         setSchemaLoadError(false);
@@ -149,7 +183,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     };
     
     saveGeneratedImages();
-  }, [photoUrl, musclesUrl, isGenerating, pose, generationStarted, onComplete, onClose, reset, handleClearFile]);
+  }, [photoUrl, musclesUrl, analyzedMuscles, isGenerating, pose, generationStarted, onComplete, onClose, reset, handleClearFile, t]);
 
   /**
    * Handles the generation process:
@@ -166,10 +200,10 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       
       if (uploadedFile) {
         // User uploaded a new file - use it directly
-        await generate(uploadedFile);
+        await generate(uploadedFile, additionalNotes);
       } else if (pose?.schema_path) {
         // Use server-side fetch to avoid CORS issues
-        await generateFromPose(pose.id);
+        await generateFromPose(pose.id, additionalNotes);
       } else {
         setLocalError(t("generate.error_failed"));
         setGenerationStarted(false);
@@ -187,38 +221,42 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const handleClose = useCallback((open: boolean) => {
     // Only handle close events (open=false), not open events
     if (open) return;
-    
-    // Only close if not currently saving
-    if (savingRef.current) {
+
+    // Don't close if currently saving or generating
+    if (savingRef.current || isGenerating) {
       return;
     }
+    // Reset all states
     reset();
     handleClearFile();
     setSchemaLoadError(false);
     setGenerationStarted(false);
+    setLocalError(null);
+    setAdditionalNotes("");
+    setGenerateMuscles(true);
     onClose();
-  }, [reset, handleClearFile, onClose]);
+  }, [reset, handleClearFile, onClose, isGenerating]);
 
   if (!pose) return null;
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="text-xl font-medium">
+      <DialogContent className="max-w-lg" mobileFullscreen>
+        <DialogHeader className="pr-10">
+          <DialogTitle className="text-lg sm:text-xl font-medium">
             {t("generate.tab_title", { pose: pose.name })}
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="text-sm">
             {t("generate.tab_description")}
           </DialogDescription>
         </DialogHeader>
 
         {!isGenerating ? (
-          <div className="space-y-6 pt-4">
+          <div className="space-y-4 sm:space-y-6 pt-2 sm:pt-4">
             {/* Source schematic section */}
             <div>
-              <Label className="text-stone-600 mb-2 block">{t("generate.source_schematic")}</Label>
-              
+              <Label className="text-muted-foreground mb-2 block text-sm sm:text-base">{t("generate.source_schematic")}</Label>
+
               {/* Hidden file input */}
               <input
                 ref={fileInputRef}
@@ -227,29 +265,29 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
                 className="hidden"
               />
-              
+
               {/* Show uploaded file preview */}
               {previewUrl ? (
-                <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
+                <div className="relative rounded-xl overflow-hidden bg-muted p-3 sm:p-4">
                   <img
                     src={previewUrl}
                     alt={t("generate.alt_schematic")}
-                    className="max-h-48 mx-auto object-contain"
+                    className="max-h-36 sm:max-h-48 mx-auto object-contain"
                   />
                   <button
                     onClick={handleClearFile}
-                    className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full p-1.5 shadow-sm hover:bg-white transition-colors"
+                    className="absolute top-2 right-2 bg-card/90 backdrop-blur-sm rounded-full p-2 shadow-sm hover:bg-card transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center touch-manipulation"
                   >
-                    <X className="w-4 h-4 text-stone-600" />
+                    <X className="w-4 h-4 text-muted-foreground" />
                   </button>
                 </div>
               ) : hasExistingSchema ? (
                 /* Show existing schema */
-                <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
+                <div className="relative rounded-xl overflow-hidden bg-muted p-3 sm:p-4">
                   <img
-                    src={getImageProxyUrl(pose.id, 'schema')}
+                    src={getImageUrl(pose.schema_path, pose.id, 'schema')}
                     alt={t("generate.alt_schematic")}
-                    className="max-h-48 mx-auto object-contain"
+                    className="max-h-36 sm:max-h-48 mx-auto object-contain"
                     onError={() => setSchemaLoadError(true)}
                   />
                 </div>
@@ -257,62 +295,67 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 /* Upload area when no schema exists */
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-stone-200 rounded-xl p-8 text-center cursor-pointer hover:border-stone-300 hover:bg-stone-50 transition-colors"
+                  className="border-2 border-dashed border-border rounded-xl p-6 sm:p-8 text-center cursor-pointer hover:border-border/80 hover:bg-muted active:bg-accent transition-colors touch-manipulation"
                 >
-                  <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-3">
-                    <Upload className="w-5 h-5 text-stone-400" />
+                  <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mx-auto mb-3">
+                    <Upload className="w-5 h-5 text-muted-foreground/70" />
                   </div>
-                  <p className="text-stone-600 font-medium">{t("generate.upload_schematic_button")}</p>
-                  <p className="text-stone-400 text-sm mt-1">{t("generate.formats")}</p>
+                  <p className="text-muted-foreground font-medium">{t("generate.upload_schematic_button")}</p>
+                  <p className="text-muted-foreground/70 text-sm mt-1">{t("generate.formats")}</p>
                 </div>
               )}
             </div>
 
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-stone-700">{t("generate.options")}</h3>
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl">
-                  <Camera className="w-5 h-5 text-stone-600" />
-                  <div className="flex-1">
-                    <p className="font-medium text-stone-800">{t("generate.photo_label")}</p>
-                    <p className="text-sm text-stone-500">{t("generate.photo_hint")}</p>
+            <div className="space-y-3 sm:space-y-4">
+              <h3 className="text-sm font-medium text-foreground">{t("generate.options")}</h3>
+              <div className="space-y-2 sm:space-y-3">
+                <div className="flex items-center gap-3 p-3 bg-muted rounded-xl min-h-[56px]">
+                  <Camera className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-foreground text-sm sm:text-base">{t("generate.photo_label")}</p>
+                    <p className="text-xs sm:text-sm text-muted-foreground truncate">{t("generate.photo_hint")}</p>
                   </div>
-                  <div className="text-stone-400 text-sm">{t("generate.required")}</div>
+                  <div className="text-muted-foreground/70 text-xs sm:text-sm flex-shrink-0">{t("generate.required")}</div>
                 </div>
 
-                <label className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl cursor-pointer hover:bg-stone-100 transition-colors">
-                  <Activity className="w-5 h-5 text-stone-600" />
-                  <div className="flex-1">
-                    <p className="font-medium text-stone-800">{t("generate.muscles_label")}</p>
-                    <p className="text-sm text-stone-500">{t("generate.muscles_hint")}</p>
+                <label className="flex items-center gap-3 p-3 bg-muted rounded-xl cursor-pointer hover:bg-muted active:bg-muted transition-colors min-h-[56px] touch-manipulation">
+                  <Activity className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-foreground text-sm sm:text-base">{t("generate.muscles_label")}</p>
+                    <p className="text-xs sm:text-sm text-muted-foreground truncate">{t("generate.muscles_hint")}</p>
                   </div>
                   <Checkbox
                     checked={generateMuscles}
                     onCheckedChange={(checked) => setGenerateMuscles(checked as boolean)}
+                    className="h-5 w-5"
                   />
                 </label>
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label className="text-stone-600">{t("generate.notes")}</Label>
+              <Label className="text-muted-foreground text-sm sm:text-base">{t("generate.notes")}</Label>
               <Textarea
                 value={additionalNotes}
                 onChange={(e) => setAdditionalNotes(e.target.value)}
                 placeholder={t("generate.notes_placeholder")}
-                className="border-stone-200 resize-none"
+                className="border-border resize-none min-h-[70px] sm:min-h-[80px] text-sm sm:text-base"
+                rows={3}
               />
+              <p className="text-xs text-muted-foreground/70">
+                {t("generate.notes_hint")}
+              </p>
             </div>
 
             {(error || localError) && (
-              <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm">
+              <div className="p-3 sm:p-4 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-xl text-sm">
                 {error || localError}
               </div>
             )}
 
             <Button
               onClick={handleGenerate}
-              className="w-full bg-stone-800 hover:bg-stone-900 text-white h-12 rounded-xl"
+              className="w-full bg-primary hover:bg-primary/90 active:bg-primary/80 text-primary-foreground h-12 sm:h-12 rounded-xl min-h-[48px] touch-manipulation active:scale-[0.98] transition-transform"
               disabled={!canGenerate}
             >
               <Sparkles className="w-4 h-4 mr-2" />
@@ -320,78 +363,141 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
             </Button>
           </div>
         ) : (
-          <div className="py-8">
+          <motion.div
+            className="py-8"
+            initial="hidden"
+            animate="visible"
+            variants={scaleIn}
+          >
             {/* Progress bar */}
             <div className="mb-6">
-              <div className="flex justify-between text-xs text-stone-500 mb-2">
-                <span>{statusMessage || t("generate.modal_progress")}</span>
-                <span>{Math.min(progress, 100)}%</span>
+              <div className="flex justify-between text-xs mb-2">
+                <span className={cn(
+                  "font-medium transition-colors duration-500",
+                  progress < 30 && "text-amber-600",
+                  progress >= 30 && progress < 70 && "text-blue-600",
+                  progress >= 70 && "text-emerald-600"
+                )}>{statusMessage || t("generate.modal_progress")}</span>
+                <motion.span
+                  key={progress}
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={cn(
+                    "font-bold transition-colors duration-500",
+                    progress < 30 && "text-amber-600",
+                    progress >= 30 && progress < 70 && "text-blue-600",
+                    progress >= 70 && "text-emerald-600"
+                  )}
+                >
+                  {Math.min(progress, 100)}%
+                </motion.span>
               </div>
-              <div className="h-2 bg-stone-200 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-stone-800 rounded-full transition-all duration-700 ease-out"
-                  style={{ width: `${Math.min(progress, 100)}%` }}
-                />
+              <div className="h-3 bg-muted rounded-full overflow-hidden">
+                <motion.div
+                  className={cn(
+                    "h-full rounded-full relative",
+                    progress < 30 && "bg-gradient-to-r from-amber-400 to-amber-500",
+                    progress >= 30 && progress < 70 && "bg-gradient-to-r from-blue-400 to-blue-500",
+                    progress >= 70 && "bg-gradient-to-r from-emerald-400 to-emerald-500"
+                  )}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(progress, 100)}%` }}
+                  transition={progressBarSpring}
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent animate-progress-shimmer" />
+                </motion.div>
               </div>
             </div>
 
-            <div className="space-y-3">
+            <motion.div
+              className="space-y-3"
+              variants={staggerContainer}
+              initial="hidden"
+              animate="visible"
+            >
               {steps.map((step, index) => {
                 const Icon = step.icon;
                 const stepState = getStepState(index, progress, isComplete);
                 const isActive = stepState === "active";
                 const isStepComplete = stepState === "complete";
                 const isPending = stepState === "pending";
-                
+
                 // Hide muscles step if not generating muscles
                 if (step.id === "generating_muscles" && !generateMuscles) return null;
 
                 return (
-                  <div
+                  <motion.div
                     key={step.id}
+                    variants={fadeInUp}
+                    layout
                     className={cn(
-                      "flex items-center gap-4 p-4 rounded-xl transition-all duration-300",
-                      isActive && "bg-stone-100",
-                      isStepComplete && "bg-emerald-50",
-                      isPending && "bg-stone-50 opacity-50"
+                      "flex items-center gap-4 p-4 rounded-xl transition-colors duration-300",
+                      isActive && "bg-muted",
+                      isStepComplete && "bg-emerald-50 dark:bg-emerald-900/30",
+                      isPending && "bg-muted opacity-50"
                     )}
                   >
-                    <div
+                    <motion.div
                       className={cn(
-                        "w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300",
-                        isActive && "bg-stone-800",
+                        "w-10 h-10 rounded-full flex items-center justify-center transition-colors duration-300",
+                        isActive && "bg-primary",
                         isStepComplete && "bg-emerald-500",
-                        isPending && "bg-stone-200"
+                        isPending && "bg-muted"
                       )}
+                      animate={isStepComplete ? { scale: [1, 1.2, 1] } : {}}
+                      transition={{ duration: 0.3 }}
                     >
-                      {isActive ? (
-                        <Loader2 className="w-5 h-5 text-white animate-spin" />
-                      ) : isStepComplete ? (
-                        <Check className="w-5 h-5 text-white" />
-                      ) : (
-                        <Icon className="w-5 h-5 text-stone-400" />
-                      )}
-                    </div>
+                      <AnimatePresence mode="wait">
+                        {isActive ? (
+                          <motion.div
+                            key="loading"
+                            initial={{ opacity: 0, rotate: -180 }}
+                            animate={{ opacity: 1, rotate: 0 }}
+                            exit={{ opacity: 0, rotate: 180 }}
+                          >
+                            <Loader2 className="w-5 h-5 text-white animate-spin" />
+                          </motion.div>
+                        ) : isStepComplete ? (
+                          <motion.div
+                            key="check"
+                            initial={{ opacity: 0, scale: 0 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ type: "spring", stiffness: 500, damping: 25 }}
+                          >
+                            <Check className="w-5 h-5 text-white" />
+                          </motion.div>
+                        ) : (
+                          <motion.div key="icon" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                            <Icon className="w-5 h-5 text-muted-foreground/70" />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </motion.div>
                     <div className="flex-1">
                       <p
                         className={cn(
                           "font-medium transition-colors duration-300",
-                          isActive && "text-stone-800",
-                          isStepComplete && "text-emerald-700",
-                          isPending && "text-stone-400"
+                          isActive && "text-foreground",
+                          isStepComplete && "text-emerald-700 dark:text-emerald-400",
+                          isPending && "text-muted-foreground/70"
                         )}
                       >
                         {t(step.labelKey)}
                       </p>
                     </div>
-                  </div>
+                  </motion.div>
                 );
               })}
-            </div>
-            <p className="text-center text-stone-500 text-sm mt-6">
+            </motion.div>
+            <motion.p
+              className="text-center text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/30 text-sm mt-6 px-4 py-2 rounded-lg"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.5 }}
+            >
               {t("generate.modal_hint")}
-            </p>
-          </div>
+            </motion.p>
+          </motion.div>
         )}
       </DialogContent>
     </Dialog>
