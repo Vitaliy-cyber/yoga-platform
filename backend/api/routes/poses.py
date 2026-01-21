@@ -652,6 +652,9 @@ async def get_pose_image(
     """
     Proxy endpoint to serve S3 images avoiding CORS issues.
     image_type: schema, photo, muscle_layer, skeleton_layer
+
+    Note: This endpoint requires Authorization header. For <img> tags that can't
+    send headers, use the S3 presigned URLs returned in pose.photo_path etc.
     """
     # Validate image_type
     valid_types = ["schema", "photo", "muscle_layer", "skeleton_layer"]
