@@ -21,6 +21,7 @@ Limitations:
 For production, always use PostgreSQL with proper connection pooling.
 """
 
+import hashlib
 import logging
 
 from config import get_settings
@@ -227,11 +228,19 @@ async def init_db():
                 """))
                 has_token_hash = result.fetchone() is not None
 
+                # Also check if there are users with NULL token_hash that need migration
+                needs_hash_migration = False
+                if has_token_hash:
+                    result = await conn.execute(text("""
+                        SELECT EXISTS(SELECT 1 FROM users WHERE token_hash IS NULL LIMIT 1)
+                    """))
+                    needs_hash_migration = result.scalar()
+
                 if not has_token_hash:
                     logging.info("Migrating users table: adding token_hash column")
-                    # Add token_hash column
+                    # Add token_hash column (nullable initially)
                     await conn.execute(text("""
-                        ALTER TABLE users ADD COLUMN IF NOT EXISTS token_hash VARCHAR(64)
+                        ALTER TABLE users ADD COLUMN token_hash VARCHAR(64)
                     """))
 
                     # Check if old 'token' column exists and migrate data
@@ -242,22 +251,51 @@ async def init_db():
                     has_old_token = result.fetchone() is not None
 
                     if has_old_token:
-                        # Migrate existing tokens to hashes
-                        # PostgreSQL has encode(digest(...)) for SHA256
-                        await conn.execute(text("""
-                            UPDATE users SET token_hash = encode(digest(token, 'sha256'), 'hex')
-                            WHERE token IS NOT NULL AND token_hash IS NULL
+                        # Fetch users with old tokens and hash them in Python
+                        result = await conn.execute(text("""
+                            SELECT id, token FROM users WHERE token IS NOT NULL AND token_hash IS NULL
                         """))
-                        logging.info("Migrated existing user tokens to hashed format")
+                        users_to_migrate = result.fetchall()
 
-                    # Make token_hash NOT NULL and UNIQUE after migration
-                    await conn.execute(text("""
-                        ALTER TABLE users ALTER COLUMN token_hash SET NOT NULL
-                    """))
+                        for user_id, token in users_to_migrate:
+                            # Hash using Python's hashlib (same as model code)
+                            token_hash = hashlib.sha256(token.encode()).hexdigest()
+                            await conn.execute(
+                                text("UPDATE users SET token_hash = :hash WHERE id = :id"),
+                                {"hash": token_hash, "id": user_id}
+                            )
+                        logging.info(f"Migrated {len(users_to_migrate)} existing user tokens to SHA256 hashes")
+
+                    # Create unique index (allows NULL values)
                     await conn.execute(text("""
                         CREATE UNIQUE INDEX IF NOT EXISTS ix_users_token_hash ON users(token_hash)
                     """))
                     logging.info("Users table migration completed")
+
+                elif needs_hash_migration:
+                    # Column exists but some users have NULL token_hash - need to migrate
+                    logging.info("Migrating existing users with NULL token_hash")
+                    result = await conn.execute(text("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_name = 'users' AND column_name = 'token'
+                    """))
+                    has_old_token = result.fetchone() is not None
+
+                    if has_old_token:
+                        # Fetch users with old tokens and hash them in Python
+                        result = await conn.execute(text("""
+                            SELECT id, token FROM users WHERE token IS NOT NULL AND token_hash IS NULL
+                        """))
+                        users_to_migrate = result.fetchall()
+
+                        for user_id, token in users_to_migrate:
+                            # Hash using Python's hashlib (same as model code)
+                            token_hash = hashlib.sha256(token.encode()).hexdigest()
+                            await conn.execute(
+                                text("UPDATE users SET token_hash = :hash WHERE id = :id"),
+                                {"hash": token_hash, "id": user_id}
+                            )
+                        logging.info(f"Migrated {len(users_to_migrate)} users to SHA256 hashes")
 
                 # Add user_id to poses if not exists
                 await conn.execute(
