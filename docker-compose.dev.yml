@@ -18,6 +18,40 @@ services:
       timeout: 5s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    container_name: yoga-minio-dev
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data_dev:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Create bucket on startup
+  minio-setup:
+    image: minio/mc:latest
+    container_name: yoga-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/yoga-platform --ignore-existing;
+      mc anonymous set public myminio/yoga-platform;
+      echo 'Bucket created successfully';
+      exit 0;
+      "
+
   backend:
     build:
       context: ./backend
@@ -26,17 +60,27 @@ services:
     environment:
       - APP_MODE=dev
       - DATABASE_URL=postgresql://yoga_user:yoga_pass@db:5432/yoga_db
-      - SECRET_KEY=dev-secret-key
-      - ENABLE_AI_GENERATION=${ENABLE_AI_GENERATION:-false}
+      - SECRET_KEY=dev-secret-key-change-me
+      - ENABLE_AI_GENERATION=${ENABLE_AI_GENERATION:-true}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # S3/MinIO configuration (identical to prod setup)
+      - STORAGE_BACKEND=s3
+      - S3_BUCKET=yoga-platform
+      - S3_REGION=us-east-1
+      - S3_ACCESS_KEY_ID=minioadmin
+      - S3_SECRET_ACCESS_KEY=minioadmin
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_PUBLIC_URL=http://localhost:9000
     volumes:
       - ./backend:/app
-      - ./storage:/app/storage
       - ./ai/models:/app/ai/models
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
     # GPU support (optional, comment out if no GPU)
     # deploy:
     #   resources:
@@ -61,3 +105,4 @@ services:
 
 volumes:
   postgres_data_dev:
+  minio_data_dev:

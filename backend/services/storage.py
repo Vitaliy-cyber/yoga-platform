@@ -173,6 +173,8 @@ class S3Storage:
 
         # Get endpoint URL (for Railway, R2, MinIO etc.)
         self.endpoint_url = settings.S3_ENDPOINT_URL or settings.BUCKET_ENDPOINT or None
+        # Public URL for presigned URLs (MinIO in Docker: internal URL != public URL)
+        self.public_url = settings.S3_PUBLIC_URL or None
 
         # Build S3 client with signature version for compatibility
         client_kwargs = {
@@ -213,6 +215,9 @@ class S3Storage:
                 },
                 ExpiresIn=expiration,
             )
+            # Replace internal endpoint with public URL (for MinIO in Docker)
+            if self.public_url and self.endpoint_url:
+                url = url.replace(self.endpoint_url, self.public_url)
             return url
         except Exception as e:
             logger.error("Failed to generate presigned URL: %s", str(e))

@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     S3_PREFIX: str = ""
     # S3 endpoint (for Railway, Cloudflare R2, MinIO, etc.)
     S3_ENDPOINT_URL: str = ""
+    # Public URL for presigned URLs (for MinIO in Docker where internal != public URL)
+    S3_PUBLIC_URL: str = ""
 
     # Railway Object Storage (alternative names)
     BUCKET_NAME: str = ""  # Railway uses this
