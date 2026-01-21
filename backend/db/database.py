@@ -219,6 +219,46 @@ async def init_db():
         # Migration: Add user_id columns if they don't exist (for PostgreSQL)
         if not is_sqlite:
             try:
+                # Migrate users table: token -> token_hash (PostgreSQL)
+                # Check if token_hash column exists
+                result = await conn.execute(text("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'token_hash'
+                """))
+                has_token_hash = result.fetchone() is not None
+
+                if not has_token_hash:
+                    logging.info("Migrating users table: adding token_hash column")
+                    # Add token_hash column
+                    await conn.execute(text("""
+                        ALTER TABLE users ADD COLUMN IF NOT EXISTS token_hash VARCHAR(64)
+                    """))
+
+                    # Check if old 'token' column exists and migrate data
+                    result = await conn.execute(text("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_name = 'users' AND column_name = 'token'
+                    """))
+                    has_old_token = result.fetchone() is not None
+
+                    if has_old_token:
+                        # Migrate existing tokens to hashes
+                        # PostgreSQL has encode(digest(...)) for SHA256
+                        await conn.execute(text("""
+                            UPDATE users SET token_hash = encode(digest(token, 'sha256'), 'hex')
+                            WHERE token IS NOT NULL AND token_hash IS NULL
+                        """))
+                        logging.info("Migrated existing user tokens to hashed format")
+
+                    # Make token_hash NOT NULL and UNIQUE after migration
+                    await conn.execute(text("""
+                        ALTER TABLE users ALTER COLUMN token_hash SET NOT NULL
+                    """))
+                    await conn.execute(text("""
+                        CREATE UNIQUE INDEX IF NOT EXISTS ix_users_token_hash ON users(token_hash)
+                    """))
+                    logging.info("Users table migration completed")
+
                 # Add user_id to poses if not exists
                 await conn.execute(
                     text("""
