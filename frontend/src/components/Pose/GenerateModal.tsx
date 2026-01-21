@@ -8,7 +8,7 @@ import { Loader2, Sparkles, Camera, Activity, Lightbulb, Check, Upload, X } from
 import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
 import { useGenerate } from "../../hooks/useGenerate";
-import { posesApi, getImageProxyUrl } from "../../services/api";
+import { posesApi, getImageUrl } from "../../services/api";
 import { useI18n } from "../../i18n";
 
 // Backend progress values:
@@ -247,7 +247,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 /* Show existing schema */
                 <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
                   <img
-                    src={getImageProxyUrl(pose.id, 'schema')}
+                    src={getImageUrl(pose.schema_path, pose.id, 'schema')}
                     alt={t("generate.alt_schematic")}
                     className="max-h-48 mx-auto object-contain"
                     onError={() => setSchemaLoadError(true)}

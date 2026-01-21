@@ -4,7 +4,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Eye, Sparkles, CheckCircle2, ExternalLink, ImageIcon } from "lucide-react";
 import type { PoseListItem } from "../../types";
-import { getImageProxyUrl } from "../../services/api";
+import { getImageUrl } from "../../services/api";
 import { useI18n } from "../../i18n";
 
 interface PoseCardProps {
@@ -33,17 +33,17 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
         {/* Generated photo */}
         {hasGeneratedPhoto && !imageError && (
           <img
-            src={getImageProxyUrl(pose.id, 'photo')}
+            src={getImageUrl(pose.photo_path, pose.id, 'photo')}
             alt={pose.name}
             className="absolute inset-0 w-full h-full object-cover"
             onError={() => setImageError(true)}
           />
         )}
-        
+
         {/* Schema image */}
         {!hasGeneratedPhoto && hasSchema && !imageError && (
           <img
-            src={getImageProxyUrl(pose.id, 'schema')}
+            src={getImageUrl(pose.schema_path, pose.id, 'schema')}
             alt={pose.name}
             className="absolute inset-0 w-full h-full object-contain p-4 bg-white/90"
             onError={() => setImageError(true)}
