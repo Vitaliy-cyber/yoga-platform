@@ -617,7 +617,12 @@ export const posesApi = {
 
   reanalyzeMuscles: async (id: number): Promise<Pose> => {
     try {
-      const response = await api.post<Pose>(`${API_V1_PREFIX}/poses/${id}/reanalyze-muscles`);
+      // AI muscle analysis can take longer, use extended timeout (2 minutes)
+      const response = await api.post<Pose>(
+        `${API_V1_PREFIX}/poses/${id}/reanalyze-muscles`,
+        null,
+        { timeout: 120_000 }
+      );
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
