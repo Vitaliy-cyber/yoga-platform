@@ -20,7 +20,8 @@ describe('Dropzone', () => {
         onClear={mockOnClear}
       />
     )
-    expect(screen.getByText('Натисніть або перетягніть файл')).toBeInTheDocument()
+    // Default locale is English
+    expect(screen.getByText('Click or drag file')).toBeInTheDocument()
     expect(screen.getByText(/SVG/)).toBeInTheDocument()
   })
 
@@ -119,7 +120,8 @@ describe('Dropzone', () => {
       />
     )
 
-    const img = screen.getByAltText('Попередній перегляд')
+    // Preview image has alt text "Preview" in English locale (default)
+    const img = screen.getByAltText('Preview')
     expect(img).toBeInTheDocument()
   })
 

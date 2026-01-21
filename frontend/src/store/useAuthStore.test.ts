@@ -25,7 +25,6 @@ Object.defineProperty(window, 'localStorage', { value: localStorageMock });
 describe('useAuthStore', () => {
   const mockUser: User = {
     id: 1,
-    token: 'test-token-123',
     name: 'Test User',
     created_at: '2024-01-01T00:00:00Z',
     last_login: '2024-01-02T00:00:00Z',
@@ -179,7 +178,6 @@ describe('useAuthStore', () => {
 
       const user = useAuthStore.getState().user;
       expect(user?.id).toBe(mockUser.id);
-      expect(user?.token).toBe(mockUser.token);
       expect(user?.created_at).toBe(mockUser.created_at);
     });
 
@@ -223,8 +221,8 @@ describe('useAuthStore', () => {
 
   describe('Multiple Users', () => {
     it('can switch between users', () => {
-      const user1: User = { ...mockUser, id: 1, token: 'user1-token' };
-      const user2: User = { ...mockUser, id: 2, token: 'user2-token' };
+      const user1: User = { ...mockUser, id: 1 };
+      const user2: User = { ...mockUser, id: 2 };
 
       act(() => {
         useAuthStore.getState().setAuth(user1, 'jwt-1');

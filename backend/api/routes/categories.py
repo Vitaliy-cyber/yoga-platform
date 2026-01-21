@@ -1,3 +1,4 @@
+import logging
 from typing import List
 
 from db.database import get_db
@@ -10,7 +11,56 @@ from services.auth import get_current_user
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-router = APIRouter(prefix="/api/categories", tags=["categories"])
+router = APIRouter(prefix="/categories", tags=["categories"])
+logger = logging.getLogger(__name__)
+
+
+# Default categories to create for users
+DEFAULT_CATEGORIES = [
+    {"name": "Стоячі пози", "description": "Пози, що виконуються стоячи (Standing poses)"},
+    {"name": "Сидячі пози", "description": "Пози, що виконуються сидячи (Seated poses)"},
+    {"name": "Баланс", "description": "Пози на баланс (Balance poses)"},
+    {"name": "Прогини", "description": "Пози з прогином назад (Backbends)"},
+    {"name": "Нахили", "description": "Нахили вперед (Forward bends)"},
+    {"name": "Скручування", "description": "Пози зі скручуванням (Twists)"},
+    {"name": "Інверсії", "description": "Перевернуті пози (Inversions)"},
+    {"name": "Відновлювальні", "description": "Відновлювальні та розслаблюючі пози (Restorative)"},
+]
+
+
+async def ensure_default_categories(db: AsyncSession, user_id: int) -> int:
+    """
+    Ensure user has default categories. Creates them if missing.
+
+    Args:
+        db: Database session
+        user_id: ID of the user
+
+    Returns:
+        Number of categories created (0 if user already had categories)
+    """
+    # Check if user already has categories
+    count_query = select(func.count(Category.id)).where(Category.user_id == user_id)
+    result = await db.execute(count_query)
+    count = result.scalar() or 0
+
+    if count > 0:
+        return 0
+
+    # Create default categories
+    categories_created = 0
+    for cat_data in DEFAULT_CATEGORIES:
+        category = Category(
+            user_id=user_id,
+            name=cat_data["name"],
+            description=cat_data["description"],
+        )
+        db.add(category)
+        categories_created += 1
+
+    await db.flush()
+    logger.info(f"Created {categories_created} default categories for user {user_id}")
+    return categories_created
 
 
 @router.get("", response_model=List[CategoryResponse])
@@ -19,6 +69,11 @@ async def get_categories(
     db: AsyncSession = Depends(get_db),
 ):
     """Отримати список категорій поточного користувача"""
+    # Auto-create default categories if user has none
+    created = await ensure_default_categories(db, current_user.id)
+    if created > 0:
+        await db.commit()
+
     # Підзапит для підрахунку поз користувача
     pose_count_subq = (
         select(Pose.category_id, func.count(Pose.id).label("pose_count"))
@@ -114,6 +169,7 @@ async def create_category(
     db.add(category)
     await db.flush()
     await db.refresh(category)
+    await db.commit()
 
     return CategoryResponse(
         id=category.id,
@@ -172,6 +228,7 @@ async def update_category(
 
     await db.flush()
     await db.refresh(category)
+    await db.commit()
 
     # Підрахунок поз користувача
     pose_count_query = select(func.count(Pose.id)).where(
@@ -208,3 +265,4 @@ async def delete_category(
         )
 
     await db.delete(category)
+    await db.commit()

@@ -21,7 +21,8 @@ class UserResponse(BaseModel):
     """User info response"""
 
     id: int
-    token: str
+    # Note: token is not returned - user already knows their own token
+    # and we only store token_hash in the database for security
     name: Optional[str] = None
     created_at: datetime
     last_login: Optional[datetime] = None

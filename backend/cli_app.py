@@ -361,7 +361,7 @@ USE_GOOGLE_AI=true
         signal.signal(signal.SIGTERM, self._shutdown)
 
         # Start frontend
-        info("Frontend: http://localhost:5173")
+        info("Frontend: http://localhost:3000")
         self.frontend_process = subprocess.Popen(
             ["npm", "run", "dev"],
             cwd=self.frontend_path,
@@ -447,7 +447,7 @@ USE_GOOGLE_AI=true
         signal.signal(signal.SIGTERM, self._shutdown)
 
         print(f"\n{Colors.GREEN}{Colors.BOLD}Starting Frontend...{Colors.RESET}\n")
-        info("Frontend: http://localhost:5173")
+        info("Frontend: http://localhost:3000")
         print(f"\n{Colors.DIM}Press Ctrl+C to stop{Colors.RESET}\n")
 
         self.frontend_process = subprocess.Popen(
@@ -481,6 +481,9 @@ USE_GOOGLE_AI=true
             # Default: start both frontend and backend
             self.start_dev()
 
+
+# Alias for backward compatibility
+YogaPlatformCLI = YogaPlatform
 
 if __name__ == "__main__":
     app = YogaPlatform()

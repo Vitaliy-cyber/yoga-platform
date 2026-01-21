@@ -9,7 +9,7 @@ from services.auth import get_current_user
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-router = APIRouter(prefix="/api/muscles", tags=["muscles"])
+router = APIRouter(prefix="/muscles", tags=["muscles"])
 
 
 @router.get("", response_model=List[MuscleResponse])
@@ -73,6 +73,7 @@ async def create_muscle(
     db.add(muscle)
     await db.flush()
     await db.refresh(muscle)
+    await db.commit()
 
     return MuscleResponse.model_validate(muscle)
 
@@ -94,6 +95,7 @@ async def delete_muscle(
         )
 
     await db.delete(muscle)
+    await db.commit()
 
 
 @router.post("/seed", response_model=List[MuscleResponse])
@@ -179,4 +181,5 @@ async def seed_muscles(
     for muscle in created_muscles:
         await db.refresh(muscle)
 
+    await db.commit()
     return [MuscleResponse.model_validate(m) for m in created_muscles]

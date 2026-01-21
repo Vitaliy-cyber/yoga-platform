@@ -1,0 +1,5 @@
+# Playwright auth state
+.auth/
+
+# Test results
+test-results/

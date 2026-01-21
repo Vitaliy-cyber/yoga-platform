@@ -1,12 +1,18 @@
 import React, { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { VisuallyHidden } from "../ui/visually-hidden";
-import { Activity, Download, Eye, Layers, X } from "lucide-react";
+import { Activity, Download, Eye, Layers, Loader2, X } from "lucide-react";
 import type { Pose } from "../../types";
-import { getImageProxyUrl } from "../../services/api";
+import { getImageUrl } from "../../services/api";
 import { useI18n } from "../../i18n";
+import { useAppStore } from "../../store/useAppStore";
+import { MuscleOverlay } from "../Anatomy/MuscleOverlay";
+import { cn } from "../../lib/utils";
+import { logger } from "../../lib/logger";
+import { DEFAULT_OVERLAY_OPACITY } from "../../lib/constants";
 
 interface PoseViewerProps {
   pose: Pose;
@@ -21,16 +27,18 @@ const overlayTypes = [
 
 export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose }) => {
   const [activeOverlay, setActiveOverlay] = useState<"photo" | "muscles">("photo");
-  const [overlayOpacity, setOverlayOpacity] = useState(0.7);
+  const [overlayOpacity, setOverlayOpacity] = useState(DEFAULT_OVERLAY_OPACITY);
+  const [isDownloading, setIsDownloading] = useState(false);
   const { t } = useI18n();
+  const addToast = useAppStore((state) => state.addToast);
   const overlayLabel = activeOverlay === "photo" ? t("pose.viewer.photo") : t("pose.viewer.muscles");
 
   const getActiveImage = () => {
     if (activeOverlay === "muscles" && pose.muscle_layer_path) {
-      return getImageProxyUrl(pose.id, 'muscle_layer');
+      return getImageUrl(pose.muscle_layer_path, pose.id, 'muscle_layer');
     }
     if (pose.photo_path) {
-      return getImageProxyUrl(pose.id, 'photo');
+      return getImageUrl(pose.photo_path, pose.id, 'photo');
     }
     return null;
   };
@@ -42,89 +50,143 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
 
   const handleDownload = async () => {
     const imageUrl = getActiveImage();
-    if (!imageUrl) return;
+    logger.debug("Starting download, URL:", imageUrl);
+    if (!imageUrl) {
+      logger.warn("No image URL available for download");
+      addToast({
+        type: "error",
+        message: t("generate.download_failed"),
+      });
+      return;
+    }
 
+    setIsDownloading(true);
+    let objectUrl: string | null = null;
     try {
+      logger.debug("Fetching image...");
       const response = await fetch(imageUrl);
+      logger.debug("Response status:", response.status, response.ok);
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`);
+      }
       const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      logger.debug("Blob size:", blob.size, "type:", blob.type);
+      objectUrl = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
+      a.href = objectUrl;
       a.download = `${pose.name.replace(/\s+/g, "_")}_${activeOverlay}.jpg`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+      logger.debug("Download triggered successfully");
     } catch (error) {
-      console.error(t("generate.download_failed"), error);
+      logger.error("Download failed:", error);
+      addToast({
+        type: "error",
+        message: t("generate.download_failed"),
+      });
+    } finally {
+      if (objectUrl) {
+        window.URL.revokeObjectURL(objectUrl);
+      }
+      setIsDownloading(false);
     }
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-6xl w-[95vw] h-[90vh] p-0 bg-stone-950 border-0 overflow-hidden" aria-describedby={undefined} hideCloseButton>
+      <DialogContent
+        className="max-w-6xl w-full sm:w-[95vw] h-full sm:h-[90vh] p-0 bg-stone-950 border-0 overflow-hidden"
+        aria-describedby={undefined}
+        hideCloseButton
+        mobileFullscreen
+      >
         <VisuallyHidden>
           <DialogTitle>{`${pose.name} - ${t("pose.viewer.title")}`}</DialogTitle>
         </VisuallyHidden>
         <div className="flex flex-col h-full">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-stone-800">
-            <div className="flex items-center gap-4">
-              <h2 className="text-xl font-medium text-white">{pose.name}</h2>
+          {/* Header - responsive */}
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-stone-800 gap-2">
+            <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
+              <h2 className="text-base sm:text-xl font-medium text-white truncate">{pose.name}</h2>
               {pose.category_name && (
-                <Badge variant="outline" className="border-stone-600 text-stone-400">
+                <Badge variant="outline" className="border-stone-600 text-stone-400 hidden sm:inline-flex flex-shrink-0">
                   {pose.category_name}
                 </Badge>
               )}
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleDownload}
-                className="text-stone-400 hover:text-white hover:bg-stone-800"
+                disabled={isDownloading}
+                className="text-stone-400 hover:text-white hover:bg-stone-800 min-h-[44px] px-3 touch-manipulation disabled:opacity-50"
+                aria-label={t("pose.viewer.download")}
               >
-                <Download className="w-4 h-4 mr-2" />
-                {t("pose.viewer.download")}
+                {isDownloading ? (
+                  <Loader2 className="w-4 h-4 sm:mr-2 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4 sm:mr-2" />
+                )}
+                <span className="hidden sm:inline">{t("pose.viewer.download")}</span>
               </Button>
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={onClose}
-                className="text-stone-400 hover:text-white hover:bg-stone-800 rounded-full"
+                className="text-stone-400 hover:text-white hover:bg-stone-800 rounded-full min-h-[44px] min-w-[44px] touch-manipulation"
+                aria-label={t("common.close")}
               >
                 <X className="w-5 h-5" />
               </Button>
             </div>
           </div>
 
-          <div className="flex-1 flex overflow-hidden">
-            <div className="flex-1 relative flex items-center justify-center p-8 bg-stone-900">
+          {/* Main content - stack on mobile, side-by-side on desktop */}
+          <div className="flex-1 flex flex-col sm:flex-row overflow-hidden min-h-0">
+            {/* Image viewer */}
+            <div className="flex-1 relative flex items-center justify-center p-4 sm:p-8 bg-stone-900 min-h-[40vh] sm:min-h-0 overflow-hidden">
               <div className="relative max-w-full max-h-full">
-                <img
-                  src={pose.photo_path ? getImageProxyUrl(pose.id, 'photo') : ""}
-                  alt={pose.name}
-                  className="max-w-full max-h-[calc(90vh-180px)] object-contain rounded-lg transition-opacity duration-200"
-                />
-
-                {activeOverlay !== "photo" && hasOverlay(activeOverlay) && (
-                  <img
-                    src={getActiveImage() || ""}
-                    alt={`${pose.name} - ${overlayLabel}`}
-                    className="absolute inset-0 max-w-full max-h-full object-contain rounded-lg transition-opacity duration-200"
-                    style={{ opacity: overlayOpacity }}
+                <AnimatePresence mode="wait">
+                  <motion.img
+                    key={activeOverlay === "photo" ? "photo" : "base"}
+                    src={pose.photo_path ? getImageUrl(pose.photo_path, pose.id, 'photo') : ""}
+                    alt={pose.name}
+                    className="max-w-full max-h-full object-contain rounded-lg view-transition-image"
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 1.02 }}
+                    transition={{ duration: 0.3 }}
                   />
-                )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {activeOverlay !== "photo" && hasOverlay(activeOverlay) && (
+                    <motion.img
+                      key={activeOverlay}
+                      src={getActiveImage() || ""}
+                      alt={`${pose.name} - ${overlayLabel}`}
+                      className="absolute inset-0 w-full h-full object-contain rounded-lg"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: overlayOpacity }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.3 }}
+                    />
+                  )}
+                </AnimatePresence>
               </div>
             </div>
 
-            <div className="w-80 bg-stone-900 border-l border-stone-800 p-6 overflow-y-auto">
+            {/* Sidebar - bottom on mobile, right side on desktop */}
+            <div className="w-full sm:w-80 bg-stone-900 border-t sm:border-t-0 sm:border-l border-stone-800 p-4 sm:p-6 overflow-y-auto safe-area-pb">
               <div className="mb-8">
                 <div className="flex items-center gap-2 mb-4">
                   <Layers className="w-4 h-4 text-stone-400" />
                   <h3 className="text-sm font-medium text-stone-300">{t("pose.viewer.layer")}</h3>
                 </div>
 
-                <div className="space-y-2">
+                <div className="flex sm:flex-col gap-2">
                   {overlayTypes.map((overlay) => {
                     const Icon = overlay.icon;
                     const available = hasOverlay(overlay.id);
@@ -133,18 +195,19 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                         key={overlay.id}
                         onClick={() => available && setActiveOverlay(overlay.id as "photo" | "muscles")}
                         disabled={!available}
-                        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+                        className={cn(
+                          "flex-1 sm:flex-initial w-full flex items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 sm:px-4 py-3 rounded-xl transition-all min-h-[48px] touch-manipulation active:scale-[0.98]",
                           activeOverlay === overlay.id
                             ? "bg-white text-stone-900"
                             : available
-                              ? "bg-stone-800 text-stone-300 hover:bg-stone-700"
+                              ? "bg-stone-800 text-stone-300 hover:bg-stone-700 active:bg-stone-600"
                               : "bg-stone-800/50 text-stone-600 cursor-not-allowed"
-                        }`}
+                        )}
                       >
                         <Icon className="w-5 h-5" />
-                        <span className="font-medium">{t(overlay.labelKey)}</span>
+                        <span className="font-medium text-sm sm:text-base">{t(overlay.labelKey)}</span>
                         {!available && overlay.id !== "photo" && (
-                          <Badge className="ml-auto bg-stone-700 text-stone-400 text-xs">
+                          <Badge className="ml-auto bg-stone-700 text-stone-400 text-xs hidden sm:inline-flex">
                             {t("pose.viewer.not_generated")}
                           </Badge>
                         )}
@@ -155,7 +218,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
               </div>
 
               {activeOverlay !== "photo" && hasOverlay(activeOverlay) && (
-                <div className="mb-8">
+                <div className="mb-6 sm:mb-8">
                   <label className="text-sm font-medium text-stone-300 block mb-3">
                     {t("pose.viewer.opacity", { value: Math.round(overlayOpacity * 100) })}
                   </label>
@@ -166,8 +229,19 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                     max="100"
                     value={overlayOpacity * 100}
                     onChange={(e) => setOverlayOpacity(Number(e.target.value) / 100)}
-                    className="w-full accent-white"
+                    className="w-full accent-white h-2 cursor-pointer touch-manipulation"
                   />
+                </div>
+              )}
+
+              {/* Active Muscles Section */}
+              {pose.muscles && pose.muscles.length > 0 && (
+                <div className="mb-8">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Activity className="w-4 h-4 text-stone-400" />
+                    <h3 className="text-sm font-medium text-stone-300">{t("pose.viewer.active_muscles")}</h3>
+                  </div>
+                  <MuscleOverlay muscles={pose.muscles} className="[&_h4]:text-stone-500 [&_*]:text-stone-300" />
                 </div>
               )}
             </div>

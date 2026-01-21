@@ -58,6 +58,12 @@ class LocalStorage:
         """Upload bytes to local filesystem."""
         key = key.lstrip("/")
         file_path = self.base_dir / key
+
+        # SECURITY: Validate path to prevent directory traversal attacks
+        resolved_path = file_path.resolve()
+        if not str(resolved_path).startswith(str(self.base_dir.resolve())):
+            raise ValueError("Invalid key: path traversal attempt detected")
+
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
         async with aiofiles.open(file_path, "wb") as f:
@@ -75,6 +81,12 @@ class LocalStorage:
             path = path[8:]
 
         file_path = self.base_dir / path
+
+        # SECURITY: Validate path to prevent directory traversal attacks
+        resolved_path = file_path.resolve()
+        if not str(resolved_path).startswith(str(self.base_dir.resolve())):
+            raise ValueError("Invalid path: path traversal attempt detected")
+
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 

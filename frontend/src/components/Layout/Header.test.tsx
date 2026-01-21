@@ -19,7 +19,8 @@ describe('Header', () => {
 
   it('renders search input', () => {
     render(<Header />)
-    expect(screen.getByPlaceholderText('Пошук поз...')).toBeInTheDocument()
+    // Default locale is English in test environment
+    expect(screen.getByPlaceholderText('Search poses...')).toBeInTheDocument()
   })
 
 
@@ -28,11 +29,13 @@ describe('Header', () => {
     const user = userEvent.setup()
     render(<Header />)
 
-    const searchInput = screen.getByPlaceholderText('Пошук поз...')
+    // Default locale is English in test environment
+    const searchInput = screen.getByPlaceholderText('Search poses...')
     await user.type(searchInput, 'Mountain')
 
     await waitFor(() => {
-      expect(screen.getByText('Нічого не знайдено')).toBeInTheDocument()
+      // English: "No results"
+      expect(screen.getByText('No results')).toBeInTheDocument()
     }, { timeout: 100 }).catch(() => {
       // Search might complete quickly
     })

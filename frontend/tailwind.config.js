@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     container: {
@@ -10,6 +11,23 @@ export default {
       },
     },
     extend: {
+      /**
+       * Z-Index Scale (issue 6):
+       * - z-40: Sidebar (desktop navigation)
+       * - z-45: MobileNav hamburger button
+       * - z-50: CompareBar (fixed at bottom)
+       * - z-60: Sheet/Modal overlays
+       * - z-61: Sheet/Modal content
+       * - z-70: Dialog overlays
+       * - z-71: Dialog content
+       */
+      zIndex: {
+        '45': '45',
+        '60': '60',
+        '61': '61',
+        '70': '70',
+        '71': '71',
+      },
       colors: {
         border: "rgb(var(--border))",
         input: "rgb(var(--input))",
@@ -77,7 +95,40 @@ export default {
           "100%": {
             backgroundPosition: "350% 50%, 350% 50%",
           },
-        }
+        },
+        // Slide animations for Sheet/Drawer component
+        "slide-in-from-left": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(0)" },
+        },
+        "slide-out-to-left": {
+          "0%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(-100%)" },
+        },
+        "slide-in-from-right": {
+          "0%": { transform: "translateX(100%)" },
+          "100%": { transform: "translateX(0)" },
+        },
+        "slide-out-to-right": {
+          "0%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(100%)" },
+        },
+        "slide-in-from-top": {
+          "0%": { transform: "translateY(-100%)" },
+          "100%": { transform: "translateY(0)" },
+        },
+        "slide-out-to-top": {
+          "0%": { transform: "translateY(0)" },
+          "100%": { transform: "translateY(-100%)" },
+        },
+        "slide-in-from-bottom": {
+          "0%": { transform: "translateY(100%)" },
+          "100%": { transform: "translateY(0)" },
+        },
+        "slide-out-to-bottom": {
+          "0%": { transform: "translateY(0)" },
+          "100%": { transform: "translateY(100%)" },
+        },
       },
 
       animation: {
@@ -86,6 +137,15 @@ export default {
         "fade-in-up": "fade-in-up 0.5s ease-out forwards",
         "in-expo": "in-expo 0.4s cubic-bezier(0.19, 1, 0.22, 1) forwards",
         "pulse-slow": "pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        // Sheet slide animations
+        "slide-in-from-left": "slide-in-from-left 0.3s ease-out",
+        "slide-out-to-left": "slide-out-to-left 0.3s ease-out",
+        "slide-in-from-right": "slide-in-from-right 0.3s ease-out",
+        "slide-out-to-right": "slide-out-to-right 0.3s ease-out",
+        "slide-in-from-top": "slide-in-from-top 0.3s ease-out",
+        "slide-out-to-top": "slide-out-to-top 0.3s ease-out",
+        "slide-in-from-bottom": "slide-in-from-bottom 0.3s ease-out",
+        "slide-out-to-bottom": "slide-out-to-bottom 0.3s ease-out",
       },
     },
   },

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { posesApi } from '../services/api';
 import { useAppStore } from '../store/useAppStore';
 import type { Pose, PoseListItem } from '../types';
@@ -8,27 +8,83 @@ export function usePoses(categoryId?: number) {
   const { poses, setPoses, setIsLoading, addToast } = useAppStore();
   const [error, setError] = useState<string | null>(null);
   const { t } = useI18n();
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  const fetchPoses = useCallback(async () => {
+  useEffect(() => {
+    // Cancel previous request when categoryId changes
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    const fetchPoses = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const data = await posesApi.getAll(categoryId);
+        // Only update state if not aborted
+        if (!abortController.signal.aborted) {
+          setPoses(data);
+        }
+      } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === 'AbortError') {
+          return;
+        }
+        if (!abortController.signal.aborted) {
+          const message = err instanceof Error ? err.message : t("poses.error_fetch");
+          setError(message);
+          addToast({ type: 'error', message });
+        }
+      } finally {
+        if (!abortController.signal.aborted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    fetchPoses();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [categoryId, setPoses, setIsLoading, addToast, t]);
+
+  const refetch = useCallback(async () => {
+    // Cancel previous request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     setIsLoading(true);
     setError(null);
     try {
       const data = await posesApi.getAll(categoryId);
-      setPoses(data);
+      if (!abortController.signal.aborted) {
+        setPoses(data);
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : t("poses.error_fetch");
-      setError(message);
-      addToast({ type: 'error', message });
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
+      if (!abortController.signal.aborted) {
+        const message = err instanceof Error ? err.message : t("poses.error_fetch");
+        setError(message);
+        addToast({ type: 'error', message });
+      }
     } finally {
-      setIsLoading(false);
+      if (!abortController.signal.aborted) {
+        setIsLoading(false);
+      }
     }
   }, [categoryId, setPoses, setIsLoading, addToast, t]);
 
-  useEffect(() => {
-    fetchPoses();
-  }, [fetchPoses]);
-
-  return { poses, error, refetch: fetchPoses };
+  return { poses, error, refetch };
 }
 
 export function usePose(id: number | null) {
@@ -37,29 +93,89 @@ export function usePose(id: number | null) {
   const [error, setError] = useState<string | null>(null);
   const { addToast } = useAppStore();
   const { t } = useI18n();
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  const fetchPose = useCallback(async () => {
+  useEffect(() => {
+    if (id === null) {
+      setPose(null);
+      return;
+    }
+
+    // Cancel previous request when id changes
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    const fetchPose = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const data = await posesApi.getById(id);
+        if (!abortController.signal.aborted) {
+          setPose(data);
+        }
+      } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === 'AbortError') {
+          return;
+        }
+        if (!abortController.signal.aborted) {
+          const message = err instanceof Error ? err.message : t("poses.error_fetch_single");
+          setError(message);
+          addToast({ type: 'error', message });
+        }
+      } finally {
+        if (!abortController.signal.aborted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    fetchPose();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [id, addToast, t]);
+
+  const refetch = useCallback(async () => {
     if (id === null) return;
+
+    // Cancel previous request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
 
     setIsLoading(true);
     setError(null);
     try {
       const data = await posesApi.getById(id);
-      setPose(data);
+      if (!abortController.signal.aborted) {
+        setPose(data);
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : t("poses.error_fetch_single");
-      setError(message);
-      addToast({ type: 'error', message });
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
+      if (!abortController.signal.aborted) {
+        const message = err instanceof Error ? err.message : t("poses.error_fetch_single");
+        setError(message);
+        addToast({ type: 'error', message });
+      }
     } finally {
-      setIsLoading(false);
+      if (!abortController.signal.aborted) {
+        setIsLoading(false);
+      }
     }
   }, [id, addToast, t]);
 
-  useEffect(() => {
-    fetchPose();
-  }, [fetchPose]);
-
-  return { pose, isLoading, error, refetch: fetchPose };
+  return { pose, isLoading, error, refetch };
 }
 
 export function useSearchPoses() {
@@ -67,6 +183,8 @@ export function useSearchPoses() {
   const [isSearching, setIsSearching] = useState(false);
   const { addToast } = useAppStore();
   const { t } = useI18n();
+  // Track request ID to ensure only latest result is used (race condition fix)
+  const latestRequestRef = useRef(0);
 
   const search = useCallback(async (query: string) => {
     if (!query.trim()) {
@@ -74,16 +192,28 @@ export function useSearchPoses() {
       return;
     }
 
+    // Increment request ID and capture current request
+    const currentRequest = ++latestRequestRef.current;
+
     setIsSearching(true);
     try {
       const data = await posesApi.search(query);
-      setResults(data);
+      // Only update state if this is still the latest request
+      if (currentRequest === latestRequestRef.current) {
+        setResults(data);
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : t("poses.error_search");
-      addToast({ type: 'error', message });
-      setResults([]);
+      // Only update state if this is still the latest request
+      if (currentRequest === latestRequestRef.current) {
+        const message = err instanceof Error ? err.message : t("poses.error_search");
+        addToast({ type: 'error', message });
+        setResults([]);
+      }
     } finally {
-      setIsSearching(false);
+      // Only update isSearching if this is still the latest request
+      if (currentRequest === latestRequestRef.current) {
+        setIsSearching(false);
+      }
     }
   }, [addToast, t]);
 

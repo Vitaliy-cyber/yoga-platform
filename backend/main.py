@@ -1,12 +1,16 @@
 import logging
 from contextlib import asynccontextmanager
 
-from api.routes import auth, categories, generate, muscles, poses
+from api.routes import analytics, auth, categories, compare, export, generate, import_, muscles, poses, sequences, versions, websocket
+from fastapi import APIRouter
 from config import AppMode, get_settings
 from db.database import init_db
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from middleware.content_type import ContentTypeValidationMiddleware
+from middleware.rate_limit import RateLimitMiddleware
+from middleware.security import SecurityHeadersMiddleware
 
 settings = get_settings()
 
@@ -70,7 +74,23 @@ app = FastAPI(
     debug=(settings.APP_MODE == AppMode.DEV),
 )
 
-# CORS middleware
+# Security middlewares (order matters - first added = last executed)
+# 1. Security headers - adds security headers to all responses
+app.add_middleware(SecurityHeadersMiddleware)
+
+# 2. Content-Type validation - ensures proper content type for JSON endpoints
+app.add_middleware(ContentTypeValidationMiddleware)
+
+# 3. Rate limiting - protects against abuse
+app.add_middleware(RateLimitMiddleware)
+
+# 4. Request logging (development only)
+if settings.APP_MODE == AppMode.DEV:
+    from middleware.logging import RequestLoggingMiddleware, configure_request_logging
+    configure_request_logging(settings.LOG_LEVEL)
+    app.add_middleware(RequestLoggingMiddleware)
+
+# 5. CORS middleware - must be last (first to process incoming requests)
 allow_credentials = "*" not in settings.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
@@ -78,6 +98,7 @@ app.add_middleware(
     allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
 )
 
 # Static files для завантажених та згенерованих зображень (лише для local storage)
@@ -90,12 +111,43 @@ if settings.STORAGE_BACKEND == "local":
     storage_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/storage", StaticFiles(directory=str(storage_dir)), name="storage")
 
-# API Routes
-app.include_router(auth.router)
-app.include_router(poses.router)
-app.include_router(generate.router)
-app.include_router(categories.router)
-app.include_router(muscles.router)
+# API Routes - versioned under /api/v1/
+# Create a v1 router to group all API routes
+api_v1_router = APIRouter(prefix="/api/v1")
+
+# Include all route modules under the v1 router
+api_v1_router.include_router(auth.router)
+api_v1_router.include_router(poses.router)
+api_v1_router.include_router(generate.router)
+api_v1_router.include_router(categories.router)
+api_v1_router.include_router(muscles.router)
+api_v1_router.include_router(compare.router)
+api_v1_router.include_router(analytics.router)
+api_v1_router.include_router(sequences.router)
+api_v1_router.include_router(versions.router)
+api_v1_router.include_router(export.router)
+api_v1_router.include_router(import_.router)
+api_v1_router.include_router(websocket.router)
+
+# Mount the v1 API router
+app.include_router(api_v1_router)
+
+# Backward compatibility: Also mount routes at /api/ (deprecated)
+# This allows existing clients to continue working during migration
+api_compat_router = APIRouter(prefix="/api", deprecated=True)
+api_compat_router.include_router(auth.router)
+api_compat_router.include_router(poses.router)
+api_compat_router.include_router(generate.router)
+api_compat_router.include_router(categories.router)
+api_compat_router.include_router(muscles.router)
+api_compat_router.include_router(compare.router)
+api_compat_router.include_router(analytics.router)
+api_compat_router.include_router(sequences.router)
+api_compat_router.include_router(versions.router)
+api_compat_router.include_router(export.router)
+api_compat_router.include_router(import_.router)
+
+app.include_router(api_compat_router)
 
 
 @app.get("/")
@@ -140,12 +192,13 @@ async def debug_storage():
     }
 
 
-@app.get("/api/info")
+@app.get("/api/v1/info")
 async def api_info():
-    """Інформація про API"""
+    """API information endpoint."""
     return {
         "name": "Yoga Pose Platform",
         "version": "1.0.0",
+        "api_version": "v1",
         "mode": settings.APP_MODE.value,
         "features": {
             "ai_generation": True,
@@ -154,12 +207,28 @@ async def api_info():
             "layer_visualization": True,
         },
         "endpoints": {
-            "poses": "/api/poses",
-            "categories": "/api/categories",
-            "muscles": "/api/muscles",
-            "generate": "/api/generate",
+            "poses": "/api/v1/poses",
+            "categories": "/api/v1/categories",
+            "muscles": "/api/v1/muscles",
+            "generate": "/api/v1/generate",
+            "analytics": "/api/v1/analytics",
+            "sequences": "/api/v1/sequences",
+            "export": "/api/v1/export",
+            "import": "/api/v1/import",
+            "compare": "/api/v1/compare",
+            "auth": "/api/v1/auth",
+        },
+        "deprecated_endpoints": {
+            "note": "The /api/ prefix (without v1) is deprecated and will be removed in a future version",
         },
     }
+
+
+# Backward compatibility - deprecated endpoint
+@app.get("/api/info", deprecated=True)
+async def api_info_deprecated():
+    """API information endpoint (deprecated - use /api/v1/info)."""
+    return await api_info()
 
 
 if __name__ == "__main__":

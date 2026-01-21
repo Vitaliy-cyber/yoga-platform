@@ -16,12 +16,9 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
+        ws: true, // Enable WebSocket proxy for real-time generation updates
       },
-      "/uploads": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-      },
-      "/generated": {
+      "/storage": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },

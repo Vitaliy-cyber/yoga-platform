@@ -11,12 +11,12 @@ export const Footer: React.FC = () => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.5 }}
-      className="bg-white/80 backdrop-blur-sm border-t border-gray-200/50 py-4 px-6 relative overflow-hidden"
+      className="bg-card/80 backdrop-blur-sm border-t py-4 px-6 relative overflow-hidden"
     >
       {/* Decorative gradient */}
       <div className="absolute inset-0 bg-gradient-to-r from-yoga-sage/5 via-transparent to-yoga-terracotta/5 pointer-events-none" />
 
-      <div className="relative flex items-center justify-between text-sm text-gray-500">
+      <div className="relative flex items-center justify-between text-sm text-muted-foreground">
         <motion.div
           className="flex items-center gap-2"
           whileHover={{ scale: 1.02 }}
@@ -34,7 +34,7 @@ export const Footer: React.FC = () => {
           <span className="font-medium bg-gradient-to-r from-yoga-deep to-yoga-sage bg-clip-text text-transparent">
             {t("footer.brand")}
           </span>
-          <span className="text-gray-400">v1.0.0</span>
+          <span className="text-muted-foreground/70">v1.0.0</span>
         </motion.div>
 
         <motion.div

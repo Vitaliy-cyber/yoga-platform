@@ -35,6 +35,9 @@ class Pose(Base):
     photo_path = Column(String(500), nullable=True)
     muscle_layer_path = Column(String(500), nullable=True)
     skeleton_layer_path = Column(String(500), nullable=True)
+    # Optimistic locking: version number incremented on each update
+    # Prevents lost updates when multiple users edit the same pose concurrently
+    version = Column(Integer, nullable=False, default=1, server_default="1")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -46,6 +49,9 @@ class Pose(Base):
     pose_muscles = relationship(
         "PoseMuscle", back_populates="pose", cascade="all, delete-orphan"
     )
+    sequence_poses = relationship(
+        "SequencePose", back_populates="pose", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<Pose(id={self.id}, code='{self.code}', name='{self.name}')>"
@@ -54,11 +60,16 @@ class Pose(Base):
 class PoseMuscle(Base):
     __tablename__ = "pose_muscles"
 
+    # Adding index=True on foreign key columns for faster lookups and JOINs
+    # These indexes improve performance for:
+    # - Fetching all muscles for a pose (pose_id index)
+    # - Fetching all poses that use a muscle (muscle_id index)
+    # - DELETE operations when removing pose_muscles by pose_id
     pose_id = Column(
-        Integer, ForeignKey("poses.id", ondelete="CASCADE"), primary_key=True
+        Integer, ForeignKey("poses.id", ondelete="CASCADE"), primary_key=True, index=True
     )
     muscle_id = Column(
-        Integer, ForeignKey("muscles.id", ondelete="CASCADE"), primary_key=True
+        Integer, ForeignKey("muscles.id", ondelete="CASCADE"), primary_key=True, index=True
     )
     activation_level = Column(Integer, nullable=False, default=50)
 

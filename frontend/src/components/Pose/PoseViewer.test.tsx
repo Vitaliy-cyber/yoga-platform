@@ -17,6 +17,7 @@ const mockPose: Pose = {
   schema_path: "/uploads/schema.png",
   photo_path: "/generated/photo.png",
   muscle_layer_path: "/generated/muscles.png",
+  skeleton_layer_path: null,
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
   muscles: [],

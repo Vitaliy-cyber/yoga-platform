@@ -84,6 +84,7 @@ describe('Type definitions', () => {
         schema_path: null,
         photo_path: null,
         muscle_layer_path: null,
+        skeleton_layer_path: null,
         created_at: '2024-01-01T00:00:00Z',
         updated_at: '2024-01-01T00:00:00Z',
         muscles: [],
@@ -180,6 +181,7 @@ describe('Type definitions', () => {
         photo_url: null,
         muscles_url: null,
         quota_warning: false,
+        analyzed_muscles: null,
       }
       expect(response.task_id).toBe('task-123')
     })
@@ -194,6 +196,7 @@ describe('Type definitions', () => {
         photo_url: '/generated/photo.png',
         muscles_url: '/generated/muscles.png',
         quota_warning: false,
+        analyzed_muscles: [{ name: 'quadriceps', activation_level: 80 }],
       }
       expect(response.photo_url).toBe('/generated/photo.png')
       expect(response.muscles_url).toBe('/generated/muscles.png')
@@ -209,7 +212,8 @@ describe('Type definitions', () => {
         error_message: 'Generation failed',
         photo_url: null,
         muscles_url: null,
-        quota_warning: false
+        quota_warning: false,
+        analyzed_muscles: null,
       }
       expect(response.error_message).toBe('Generation failed')
     })

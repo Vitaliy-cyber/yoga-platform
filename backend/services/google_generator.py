@@ -19,12 +19,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class AnalyzedMuscle:
+    """Analyzed muscle with activation level"""
+    name: str  # muscle name from database (e.g., 'quadriceps', 'hamstrings')
+    activation_level: int  # 0-100
+
+
+@dataclass
 class GenerationResult:
     """Result of layer generation - studio photo and body paint muscles"""
 
     photo_bytes: bytes
     muscles_bytes: bytes
     used_placeholders: bool = False
+    analyzed_muscles: list[AnalyzedMuscle] | None = None
 
 
 class GoogleGeminiGenerator:
@@ -92,11 +100,15 @@ class GoogleGeminiGenerator:
             logger.error(f"Failed to initialize Google Gemini: {e}")
             raise
 
+    # Timeout for Google API calls (in seconds)
+    API_TIMEOUT_SECONDS = 120
+
     async def _analyze_pose_from_image(self, image_bytes: bytes, mime_type: str) -> str:
         """
         Analyze pose from schema image using Gemini vision.
         Returns a description of the yoga pose.
         """
+        import asyncio
         from google.genai import types
 
         logger.info("Analyzing pose from image bytes (%s)", mime_type)
@@ -105,7 +117,9 @@ class GoogleGeminiGenerator:
             raise RuntimeError("Google Gemini client not initialized")
 
         try:
-            response = self._client.models.generate_content(
+            # Wrap API call with timeout to prevent hanging indefinitely
+            api_call = asyncio.to_thread(
+                self._client.models.generate_content,
                 model=self.GEMINI_VISION_MODEL,
                 contents=[
                     types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
@@ -115,14 +129,115 @@ class GoogleGeminiGenerator:
                     "Example: 'warrior pose with right leg forward, arms raised overhead, torso upright'",
                 ],
             )
+            response = await asyncio.wait_for(api_call, timeout=self.API_TIMEOUT_SECONDS)
 
             pose_description = response.text.strip() if response.text else "yoga pose"
             logger.info(f"Detected pose: {pose_description}")
             return pose_description
 
+        except asyncio.TimeoutError:
+            logger.warning(f"Google API call timed out after {self.API_TIMEOUT_SECONDS}s")
+            return "yoga pose with arms extended"
         except Exception as e:
             logger.warning(f"Failed to analyze image: {e}")
             return "yoga pose with arms extended"
+
+    # Valid muscle names from database
+    VALID_MUSCLE_NAMES = [
+        "erector_spinae", "latissimus_dorsi", "trapezius", "rhomboids",
+        "rectus_abdominis", "obliques", "transverse_abdominis",
+        "quadriceps", "hamstrings", "gluteus_maximus", "gluteus_medius",
+        "calves", "hip_flexors", "deltoids", "rotator_cuff",
+        "biceps", "triceps", "forearms", "pectoralis", "serratus_anterior"
+    ]
+
+    async def _analyze_muscles_from_image(
+        self, image_bytes: bytes, mime_type: str, pose_description: str
+    ) -> list[AnalyzedMuscle]:
+        """
+        Analyze which muscles are active in the yoga pose using Gemini vision.
+        Returns a list of AnalyzedMuscle with name and activation_level (0-100).
+        """
+        import asyncio
+        import json
+        from google.genai import types
+
+        logger.info("Analyzing active muscles from pose image...")
+
+        if self._client is None:
+            raise RuntimeError("Google Gemini client not initialized")
+
+        valid_muscles_str = ", ".join(self.VALID_MUSCLE_NAMES)
+
+        try:
+            # Wrap API call with timeout to prevent hanging indefinitely
+            api_call = asyncio.to_thread(
+                self._client.models.generate_content,
+                model=self.GEMINI_VISION_MODEL,
+                contents=[
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                    f"""Analyze this yoga pose image and identify which muscles are actively engaged.
+
+Pose description: {pose_description}
+
+ONLY use muscle names from this list:
+{valid_muscles_str}
+
+For each active muscle, estimate the activation level from 0 to 100:
+- 70-100: Primary muscles doing most of the work (high activation)
+- 40-69: Secondary muscles providing support (medium activation)
+- 1-39: Stabilizing muscles with minor engagement (low activation)
+
+Return ONLY a JSON array with the active muscles. Example format:
+[{{"name": "quadriceps", "activation": 85}}, {{"name": "gluteus_maximus", "activation": 70}}, {{"name": "hamstrings", "activation": 45}}]
+
+Important rules:
+- Only include muscles that are actually active in this pose
+- Use EXACT names from the list above
+- Return ONLY valid JSON array, no other text
+- Typically 3-8 muscles are active in a yoga pose""",
+                ],
+            )
+            response = await asyncio.wait_for(api_call, timeout=self.API_TIMEOUT_SECONDS)
+
+            response_text = response.text.strip() if response.text else "[]"
+
+            # Clean up response - extract JSON if wrapped in markdown
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+
+            logger.info(f"Muscle analysis response: {response_text[:200]}")
+
+            # Parse JSON
+            muscles_data = json.loads(response_text)
+
+            analyzed_muscles = []
+            for muscle_data in muscles_data:
+                name = muscle_data.get("name", "").lower().strip()
+                activation = muscle_data.get("activation", 50)
+
+                # Validate muscle name
+                if name in self.VALID_MUSCLE_NAMES:
+                    # Clamp activation to 0-100
+                    activation = max(0, min(100, int(activation)))
+                    analyzed_muscles.append(AnalyzedMuscle(name=name, activation_level=activation))
+                else:
+                    logger.warning(f"Unknown muscle name from AI: {name}")
+
+            logger.info(f"Analyzed {len(analyzed_muscles)} active muscles")
+            return analyzed_muscles
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Google API call timed out after {self.API_TIMEOUT_SECONDS}s")
+            return []
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse muscle analysis JSON: {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to analyze muscles: {e}")
+            return []
 
     async def _generate_image(
         self,
@@ -162,13 +277,16 @@ class GoogleGeminiGenerator:
 
         for attempt in range(max_retries):
             try:
-                response = self._client.models.generate_content(
+                # Wrap API call with timeout to prevent hanging indefinitely
+                api_call = asyncio.to_thread(
+                    self._client.models.generate_content,
                     model=self.GEMINI_IMAGE_MODEL,
                     contents=contents,
                     config=types.GenerateContentConfig(
                         response_modalities=["IMAGE"],
                     ),
                 )
+                response = await asyncio.wait_for(api_call, timeout=self.API_TIMEOUT_SECONDS)
 
                 # Extract image from response using the new API
                 if response.parts:
@@ -183,6 +301,18 @@ class GoogleGeminiGenerator:
                             return pil_image, False
 
                 logger.warning("No image in response")
+
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Google API call timed out after {self.API_TIMEOUT_SECONDS}s "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+                # Timeout is treated similar to rate limiting - retry with backoff
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 5
+                    await asyncio.sleep(wait_time)
+                    continue
+                break
 
             except ClientError as e:
                 error_msg = str(e)
@@ -219,6 +349,7 @@ class GoogleGeminiGenerator:
         mime_type: str,
         task_id: str,
         progress_callback: Optional[Callable] = None,
+        additional_notes: Optional[str] = None,
     ) -> GenerationResult:
         """
         Generate 2 images from uploaded schema image.
@@ -226,6 +357,9 @@ class GoogleGeminiGenerator:
         1. Analyze pose from schema
         2. Generate realistic studio photo
         3. Generate body paint muscle visualization
+
+        Args:
+            additional_notes: Optional user instructions to customize generation
         """
 
         async def update_progress(progress: int, message: str):
@@ -235,16 +369,16 @@ class GoogleGeminiGenerator:
                 if hasattr(result, "__await__"):
                     await result
 
-        # Step 1: Analyze pose
-        await update_progress(0, "Analyzing pose...")
+        # Step 1: Analyze pose (5%)
+        await update_progress(5, "Analyzing pose...")
 
         pose_description = await self._analyze_pose_from_image(image_bytes, mime_type)
 
         used_placeholders = False
 
-        # Step 2: Generate studio photo
+        # Step 2: Generate studio photo (25%)
         # Use the schema as reference to ensure correct pose
-        await update_progress(0, "Generating studio photo...")
+        await update_progress(25, "Generating studio photo...")
 
         photo_prompt = f"""Professional yoga photography. Generate based on the reference pose image.
 
@@ -265,6 +399,13 @@ Lighting: Soft professional studio lighting
 
 DO NOT generate: extra limbs, fused fingers, distorted hands, extra fingers, mutated body parts"""
 
+        # Add user's additional instructions if provided
+        if additional_notes and additional_notes.strip():
+            photo_prompt += f"""
+
+ADDITIONAL USER INSTRUCTIONS (apply these modifications):
+{additional_notes.strip()}"""
+
         photo_img, is_placeholder = await self._generate_image(
             photo_prompt,
             reference_image_bytes=image_bytes,
@@ -274,9 +415,9 @@ DO NOT generate: extra limbs, fused fingers, distorted hands, extra fingers, mut
         used_placeholders = used_placeholders or is_placeholder
         logger.info("Photo generated")
 
-        # Step 3: Generate body paint muscle visualization
+        # Step 3: Generate body paint muscle visualization (55%)
         # Use the generated photo as reference to ensure consistent pose
-        await update_progress(0, "Generating muscle visualization...")
+        await update_progress(55, "Generating muscle visualization...")
 
         muscle_prompt = f"""Create an anatomical muscle and skeleton diagram based on EXACTLY this pose from the reference image.
 The figure MUST match the EXACT same pose, position, and angle as shown in the reference photo.
@@ -299,6 +440,13 @@ Color scheme:
 - Inactive muscles: GRAY
 - Outlines: BLACK"""
 
+        # Add user's additional instructions for muscle visualization if provided
+        if additional_notes and additional_notes.strip():
+            muscle_prompt += f"""
+
+ADDITIONAL USER INSTRUCTIONS (apply these modifications):
+{additional_notes.strip()}"""
+
         muscle_img, is_placeholder = await self._generate_image(
             muscle_prompt,
             reference_image_bytes=photo_bytes,
@@ -308,12 +456,20 @@ Color scheme:
         used_placeholders = used_placeholders or is_placeholder
         logger.info("Muscles generated")
 
+        # Step 4: Analyze which muscles are active in this pose (85%)
+        await update_progress(85, "Analyzing active muscles...")
+        analyzed_muscles = await self._analyze_muscles_from_image(
+            photo_bytes, "image/png", pose_description
+        )
+        logger.info(f"Muscle analysis complete: {len(analyzed_muscles)} muscles identified")
+
         await update_progress(100, "Completed!")
 
         return GenerationResult(
             photo_bytes=photo_bytes,
             muscles_bytes=muscle_bytes,
             used_placeholders=used_placeholders,
+            analyzed_muscles=analyzed_muscles,
         )
 
     async def generate_all(
@@ -322,7 +478,16 @@ Color scheme:
         task_id: str,
         progress_callback: Optional[Callable] = None,
     ) -> GenerationResult:
-        """Generate 2 images from text description"""
+        """
+        Generate 2 images from text description.
+
+        Progress stages:
+        - 5%: Starting generation
+        - 25%: Generating studio photo
+        - 55%: Generating muscle visualization
+        - 85%: Analyzing active muscles
+        - 100%: Completed
+        """
 
         async def update_progress(progress: int, message: str):
             if progress_callback:
@@ -333,7 +498,11 @@ Color scheme:
 
         used_placeholders = False
 
-        await update_progress(0, "Generating studio photo...")
+        # Step 1: Initial progress (5%)
+        await update_progress(5, "Starting generation...")
+
+        # Step 2: Generate studio photo (25%)
+        await update_progress(25, "Generating studio photo...")
 
         photo_img, is_placeholder = await self._generate_image(
             f"Professional yoga studio photograph, fit woman performing {pose_description}, "
@@ -341,8 +510,10 @@ Color scheme:
         )
         photo_bytes = self._image_to_bytes(photo_img)
         used_placeholders = used_placeholders or is_placeholder
+        logger.info("Photo generated")
 
-        await update_progress(0, "Generating muscle visualization...")
+        # Step 3: Generate muscle visualization (55%)
+        await update_progress(55, "Generating muscle visualization...")
 
         muscle_prompt = f"""Create an anatomical muscle and skeleton diagram based on EXACTLY this pose from the reference image.
 The figure MUST match the EXACT same pose, position, and angle as shown in the reference photo.
@@ -365,6 +536,14 @@ Requirements:
         )
         muscle_bytes = self._image_to_bytes(muscle_img)
         used_placeholders = used_placeholders or is_placeholder
+        logger.info("Muscles generated")
+
+        # Step 4: Analyze which muscles are active in this pose (85%)
+        await update_progress(85, "Analyzing active muscles...")
+        analyzed_muscles = await self._analyze_muscles_from_image(
+            photo_bytes, "image/png", pose_description
+        )
+        logger.info(f"Muscle analysis complete: {len(analyzed_muscles)} muscles identified")
 
         await update_progress(100, "Completed!")
 
@@ -372,4 +551,5 @@ Requirements:
             photo_bytes=photo_bytes,
             muscles_bytes=muscle_bytes,
             used_placeholders=used_placeholders,
+            analyzed_muscles=analyzed_muscles,
         )

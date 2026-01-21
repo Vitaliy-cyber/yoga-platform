@@ -3,6 +3,7 @@ import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, X, FileImage, CheckCircle, AlertTriangle } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { useViewTransition } from "../../hooks/useViewTransition";
 import { useI18n } from "../../i18n";
 
 interface DropzoneProps {
@@ -22,6 +23,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
 }) => {
   const [preview, setPreview] = useState<string | null>(null);
   const { t } = useI18n();
+  const { startTransition } = useViewTransition();
 
   React.useEffect(() => {
     if (selectedFile) {
@@ -135,7 +137,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
             </div>
 
             <button
-              onClick={(e) => { e.stopPropagation(); onClear(); }}
+              onClick={(e) => { e.stopPropagation(); startTransition(() => onClear()); }}
               className="p-2 hover:bg-destructive/10 text-muted-foreground hover:text-destructive rounded-full transition-colors"
             >
               <X size={20} />

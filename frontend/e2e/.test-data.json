@@ -1,0 +1,221 @@
+{
+  "categories": [
+    {
+      "name": "Balance Poses",
+      "description": "Poses that improve balance",
+      "id": 2,
+      "created_at": "2026-01-20T22:01:09",
+      "pose_count": 1
+    },
+    {
+      "name": "Seated Poses",
+      "description": "Poses performed while seated",
+      "id": 3,
+      "created_at": "2026-01-20T22:01:09",
+      "pose_count": 1
+    },
+    {
+      "name": "Standing Poses",
+      "description": "Poses performed while standing",
+      "id": 1,
+      "created_at": "2026-01-20T22:01:09",
+      "pose_count": 3
+    }
+  ],
+  "poses": [
+    {
+      "id": 7,
+      "code": "TEST_DOWNWARD_DOG",
+      "name": "Downward Dog",
+      "name_en": "Adho Mukha Svanasana",
+      "category_id": 1,
+      "category_name": "Standing Poses",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 8,
+      "code": "TEST_SEATED_FORWARD",
+      "name": "Seated Forward Bend",
+      "name_en": "Paschimottanasana",
+      "category_id": 3,
+      "category_name": "Seated Poses",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 6,
+      "code": "TEST_TREE",
+      "name": "Tree Pose",
+      "name_en": "Vrksasana",
+      "category_id": 2,
+      "category_name": "Balance Poses",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 4,
+      "code": "TEST_WARRIOR_I",
+      "name": "Warrior I",
+      "name_en": "Virabhadrasana I",
+      "category_id": 1,
+      "category_name": "Standing Poses",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 5,
+      "code": "TEST_WARRIOR_II",
+      "name": "Warrior II",
+      "name_en": "Virabhadrasana II",
+      "category_id": 1,
+      "category_name": "Standing Poses",
+      "schema_path": null,
+      "photo_path": null
+    }
+  ],
+  "sequences": [
+    {
+      "id": 1,
+      "name": "Morning Flow",
+      "description": "An energizing morning yoga sequence",
+      "difficulty": "beginner",
+      "duration_seconds": 180,
+      "pose_count": 4,
+      "created_at": "2026-01-20T22:01:09",
+      "updated_at": "2026-01-20T22:01:09"
+    },
+    {
+      "id": 2,
+      "name": "Strength Builder",
+      "description": "A sequence focused on building leg strength",
+      "difficulty": "intermediate",
+      "duration_seconds": 165,
+      "pose_count": 3,
+      "created_at": "2026-01-20T22:01:09",
+      "updated_at": "2026-01-20T22:01:09"
+    }
+  ],
+  "muscles": [
+    {
+      "name": "biceps",
+      "name_ua": "Біцепс",
+      "body_part": "arms",
+      "id": 16
+    },
+    {
+      "name": "forearms",
+      "name_ua": "М'язи передпліччя",
+      "body_part": "arms",
+      "id": 18
+    },
+    {
+      "name": "triceps",
+      "name_ua": "Тріцепс",
+      "body_part": "arms",
+      "id": 17
+    },
+    {
+      "name": "erector_spinae",
+      "name_ua": "Прямий м'яз спини",
+      "body_part": "back",
+      "id": 1
+    },
+    {
+      "name": "latissimus_dorsi",
+      "name_ua": "Найширший м'яз спини",
+      "body_part": "back",
+      "id": 2
+    },
+    {
+      "name": "rhomboids",
+      "name_ua": "Ромбоподібні м'язи",
+      "body_part": "back",
+      "id": 4
+    },
+    {
+      "name": "trapezius",
+      "name_ua": "Трапецієподібний м'яз",
+      "body_part": "back",
+      "id": 3
+    },
+    {
+      "name": "pectoralis",
+      "name_ua": "Грудні м'язи",
+      "body_part": "chest",
+      "id": 19
+    },
+    {
+      "name": "serratus_anterior",
+      "name_ua": "Передній зубчастий м'яз",
+      "body_part": "chest",
+      "id": 20
+    },
+    {
+      "name": "obliques",
+      "name_ua": "Косі м'язи живота",
+      "body_part": "core",
+      "id": 6
+    },
+    {
+      "name": "rectus_abdominis",
+      "name_ua": "Прямий м'яз живота",
+      "body_part": "core",
+      "id": 5
+    },
+    {
+      "name": "transverse_abdominis",
+      "name_ua": "Поперечний м'яз живота",
+      "body_part": "core",
+      "id": 7
+    },
+    {
+      "name": "calves",
+      "name_ua": "Литкові м'язи",
+      "body_part": "legs",
+      "id": 12
+    },
+    {
+      "name": "gluteus_maximus",
+      "name_ua": "Великий сідничний м'яз",
+      "body_part": "legs",
+      "id": 10
+    },
+    {
+      "name": "gluteus_medius",
+      "name_ua": "Середній сідничний м'яз",
+      "body_part": "legs",
+      "id": 11
+    },
+    {
+      "name": "hamstrings",
+      "name_ua": "Задня поверхня стегна",
+      "body_part": "legs",
+      "id": 9
+    },
+    {
+      "name": "hip_flexors",
+      "name_ua": "Згиначі стегна",
+      "body_part": "legs",
+      "id": 13
+    },
+    {
+      "name": "quadriceps",
+      "name_ua": "Чотириголовий м'яз стегна",
+      "body_part": "legs",
+      "id": 8
+    },
+    {
+      "name": "deltoids",
+      "name_ua": "Дельтоподібний м'яз",
+      "body_part": "shoulders",
+      "id": 14
+    },
+    {
+      "name": "rotator_cuff",
+      "name_ua": "Ротаторна манжета",
+      "body_part": "shoulders",
+      "id": 15
+    }
+  ]
+}

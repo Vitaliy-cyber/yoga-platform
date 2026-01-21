@@ -1,7 +1,13 @@
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, Field
+
+
+class AnalyzedMuscleResponse(BaseModel):
+    """Analyzed muscle with activation level"""
+    name: str
+    activation_level: int = Field(ge=0, le=100)
 
 
 class LayerType(str, Enum):
@@ -42,3 +48,5 @@ class GenerateResponse(BaseModel):
     muscles_url: Optional[str] = None
     # Warning when placeholders are used due to quota
     quota_warning: bool = False
+    # Analyzed muscles with activation levels
+    analyzed_muscles: Optional[List[AnalyzedMuscleResponse]] = None

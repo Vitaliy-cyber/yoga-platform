@@ -1,3 +1,4 @@
+import html
 import os
 import uuid
 from typing import List, Optional
@@ -11,17 +12,29 @@ from models.muscle import Muscle
 from models.pose import Pose, PoseMuscle
 from models.user import User
 from schemas.muscle import PoseMuscleResponse
-from schemas.pose import PoseCreate, PoseListResponse, PoseResponse, PoseUpdate
+from schemas.pose import PaginatedPoseResponse, PoseCreate, PoseListResponse, PoseResponse, PoseUpdate
 from services.auth import get_current_user, get_current_user_from_request
 from services.storage import get_storage
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-router = APIRouter(prefix="/api/poses", tags=["poses"])
+router = APIRouter(prefix="/poses", tags=["poses"])
 
 ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"]
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+def sanitize_html(text: Optional[str]) -> Optional[str]:
+    """
+    Sanitize text to prevent XSS attacks by escaping HTML special characters.
+
+    This is a defense-in-depth measure - even if frontend renders without escaping,
+    the backend will have already escaped dangerous characters.
+    """
+    if text is None:
+        return None
+    return html.escape(text)
 
 
 async def save_upload_file(file: UploadFile, subdir: str = "") -> str:
@@ -66,20 +79,23 @@ def build_pose_response(pose: Pose) -> PoseResponse:
         name_en=pose.name_en,
         category_id=pose.category_id,
         category_name=pose.category.name if pose.category else None,
-        description=pose.description,
-        effect=pose.effect,
-        breathing=pose.breathing,
+        # XSS protection: escape HTML in user-provided text fields
+        description=sanitize_html(pose.description),
+        effect=sanitize_html(pose.effect),
+        breathing=sanitize_html(pose.breathing),
         schema_path=pose.schema_path,
         photo_path=pose.photo_path,
         muscle_layer_path=pose.muscle_layer_path,
         skeleton_layer_path=pose.skeleton_layer_path,
+        # Optimistic locking version - client must send this back on update
+        version=pose.version or 1,
         created_at=pose.created_at,
         updated_at=pose.updated_at,
         muscles=muscles,
     )
 
 
-@router.get("", response_model=List[PoseListResponse])
+@router.get("", response_model=PaginatedPoseResponse)
 async def get_poses(
     category_id: Optional[int] = None,
     skip: int = Query(0, ge=0),
@@ -87,23 +103,36 @@ async def get_poses(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Отримати список поз поточного користувача"""
-    query = (
-        select(Pose)
-        .options(selectinload(Pose.category))
-        .where(Pose.user_id == current_user.id)
-        .order_by(Pose.code)
-    )
+    """
+    Get paginated list of poses for the current user.
+
+    Returns a standardized paginated response with items, total count,
+    skip offset, and limit.
+    """
+    # Base query for user's poses
+    base_query = select(Pose).where(Pose.user_id == current_user.id)
 
     if category_id:
-        query = query.where(Pose.category_id == category_id)
+        base_query = base_query.where(Pose.category_id == category_id)
 
-    query = query.offset(skip).limit(limit)
+    # Get total count
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # Get paginated items
+    query = (
+        base_query
+        .options(selectinload(Pose.category))
+        .order_by(Pose.code)
+        .offset(skip)
+        .limit(limit)
+    )
 
     result = await db.execute(query)
     poses = result.scalars().all()
 
-    return [
+    items = [
         PoseListResponse(
             id=p.id,
             code=p.code,
@@ -117,6 +146,28 @@ async def get_poses(
         for p in poses
     ]
 
+    return PaginatedPoseResponse(
+        items=items,
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+def escape_like_pattern(pattern: str) -> str:
+    """
+    Escape special characters for SQL LIKE patterns.
+
+    SQL LIKE uses % (any sequence), _ (any single char), and \ (escape).
+    These must be escaped to be treated as literals in search queries.
+    """
+    # Escape backslash first (since it's the escape character)
+    pattern = pattern.replace("\\", "\\\\")
+    # Escape LIKE wildcards
+    pattern = pattern.replace("%", "\\%")
+    pattern = pattern.replace("_", "\\_")
+    return pattern
+
 
 @router.get("/search", response_model=List[PoseListResponse])
 async def search_poses(
@@ -125,7 +176,9 @@ async def search_poses(
     db: AsyncSession = Depends(get_db),
 ):
     """Пошук поз за назвою або кодом"""
-    search_term = f"%{q}%"
+    # Escape LIKE special characters to prevent pattern injection
+    escaped_query = escape_like_pattern(q)
+    search_term = f"%{escaped_query}%"
 
     query = (
         select(Pose)
@@ -134,9 +187,9 @@ async def search_poses(
             and_(
                 Pose.user_id == current_user.id,
                 or_(
-                    Pose.name.ilike(search_term),
-                    Pose.name_en.ilike(search_term),
-                    Pose.code.ilike(search_term),
+                    Pose.name.ilike(search_term, escape="\\"),
+                    Pose.name_en.ilike(search_term, escape="\\"),
+                    Pose.code.ilike(search_term, escape="\\"),
                 ),
             )
         )
@@ -274,7 +327,7 @@ async def create_pose(
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail="Pose with this code already exists",
         )
 
@@ -299,22 +352,25 @@ async def create_pose(
     db.add(pose)
     await db.flush()
 
-    # Додавання м'язів
+    # Додавання м'язів (batch validation to avoid N+1 queries)
     if pose_data.muscles:
-        for muscle_data in pose_data.muscles:
-            # Перевірити чи м'яз існує
-            muscle = await db.execute(
-                select(Muscle).where(Muscle.id == muscle_data.muscle_id)
-            )
-            if not muscle.scalar_one_or_none():
-                continue
+        muscle_ids = [m.muscle_id for m in pose_data.muscles]
+        result = await db.execute(
+            select(Muscle.id).where(Muscle.id.in_(muscle_ids))
+        )
+        valid_muscle_ids = set(result.scalars().all())
 
-            pose_muscle = PoseMuscle(
+        # Batch create all pose_muscle associations
+        pose_muscles_to_add = [
+            PoseMuscle(
                 pose_id=pose.id,
                 muscle_id=muscle_data.muscle_id,
                 activation_level=muscle_data.activation_level,
             )
-            db.add(pose_muscle)
+            for muscle_data in pose_data.muscles
+            if muscle_data.muscle_id in valid_muscle_ids
+        ]
+        db.add_all(pose_muscles_to_add)
 
     await db.flush()
 
@@ -330,6 +386,7 @@ async def create_pose(
     result = await db.execute(query)
     pose = result.scalar_one()
 
+    await db.commit()
     return build_pose_response(pose)
 
 
@@ -340,9 +397,27 @@ async def update_pose(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Оновити позу"""
-    query = select(Pose).where(
-        and_(Pose.id == pose_id, Pose.user_id == current_user.id)
+    """
+    Оновити позу.
+
+    Implements optimistic locking to prevent lost updates:
+    - Client must send the current version number
+    - If version doesn't match, the update is rejected (409 Conflict)
+    - This prevents concurrent edits from overwriting each other
+
+    Uses nested transaction (savepoint) to ensure atomicity:
+    - If version creation succeeds but pose update fails, the version is rolled back
+    - This prevents orphan versions from being created
+    """
+    from services.versioning import versioning_service
+
+    # Get pose with all relationships for versioning
+    query = (
+        select(Pose)
+        .options(
+            selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle)
+        )
+        .where(and_(Pose.id == pose_id, Pose.user_id == current_user.id))
     )
     result = await db.execute(query)
     pose = result.scalar_one_or_none()
@@ -352,81 +427,142 @@ async def update_pose(
             status_code=status.HTTP_404_NOT_FOUND, detail="Pose not found"
         )
 
-    # Оновлення полів
-    update_data = pose_data.model_dump(exclude={"muscles"}, exclude_unset=True)
-
-    # Перевірка на унікальність коду для цього користувача
-    if "code" in update_data:
-        if update_data["code"] is None:
+    # OPTIMISTIC LOCKING: Check version to prevent concurrent edit conflicts
+    # If client sends a version, verify it matches current database version
+    if pose_data.version is not None:
+        current_version = pose.version or 1
+        if pose_data.version != current_version:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Pose code cannot be empty",
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Conflict: pose has been modified by another user. "
+                       f"Your version: {pose_data.version}, current version: {current_version}. "
+                       f"Please refresh and try again.",
             )
-        existing = await db.execute(
-            select(Pose).where(
-                and_(
-                    Pose.code == update_data["code"],
-                    Pose.user_id == current_user.id,
-                    Pose.id != pose_id,
+
+    # Use nested transaction (savepoint) for atomic version + update
+    # This ensures if the pose update fails, the version is also rolled back
+    async with db.begin_nested():
+        # Create version snapshot BEFORE making changes
+        # This preserves the current state so it can be restored later
+        await versioning_service.create_version(
+            db, pose, current_user.id,
+            change_note=pose_data.change_note,
+            check_for_changes=True  # Skip if nothing will change
+        )
+
+        # Оновлення полів (exclude version from update data - we manage it separately)
+        update_data = pose_data.model_dump(exclude={"muscles", "analyzed_muscles", "change_note", "version"}, exclude_unset=True)
+
+        # Перевірка на унікальність коду для цього користувача
+        if "code" in update_data:
+            if update_data["code"] is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Pose code cannot be empty",
+                )
+            existing = await db.execute(
+                select(Pose).where(
+                    and_(
+                        Pose.code == update_data["code"],
+                        Pose.user_id == current_user.id,
+                        Pose.id != pose_id,
+                    )
                 )
             )
-        )
-        if existing.scalar_one_or_none():
+            if existing.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Pose with this code already exists",
+                )
+
+        if "name" in update_data and update_data["name"] is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Pose with this code already exists",
+                detail="Pose name cannot be empty",
             )
 
-    if "name" in update_data and update_data["name"] is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Pose name cannot be empty",
-        )
-
-    # Перевірка категорії (якщо оновлюється)
-    if "category_id" in update_data and update_data["category_id"] is not None:
-        category = await db.execute(
-            select(Category).where(
-                and_(
-                    Category.id == update_data["category_id"],
-                    Category.user_id == current_user.id,
+        # Перевірка категорії (якщо оновлюється)
+        if "category_id" in update_data and update_data["category_id"] is not None:
+            category = await db.execute(
+                select(Category).where(
+                    and_(
+                        Category.id == update_data["category_id"],
+                        Category.user_id == current_user.id,
+                    )
                 )
             )
-        )
-        if not category.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Category not found",
+            if not category.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Category not found",
+                )
+
+        for field, value in update_data.items():
+            setattr(pose, field, value)
+
+        # Оновлення м'язів (за ID) - using batch operations for performance
+        if pose_data.muscles is not None:
+            # Bulk delete old associations (single DELETE statement)
+            await db.execute(
+                delete(PoseMuscle).where(PoseMuscle.pose_id == pose_id)
             )
+            # Clear the ORM relationship cache
+            pose.pose_muscles.clear()
 
-    for field, value in update_data.items():
-        setattr(pose, field, value)
-
-    # Оновлення м'язів
-    if pose_data.muscles is not None:
-        # Видалити старі зв'язки
-        await db.execute(select(PoseMuscle).where(PoseMuscle.pose_id == pose_id))
-        for pm in pose.pose_muscles:
-            await db.delete(pm)
-
-        # Додати нові
-        for muscle_data in pose_data.muscles:
-            muscle = await db.execute(
-                select(Muscle).where(Muscle.id == muscle_data.muscle_id)
+            # Batch validate muscle IDs (single SELECT instead of N queries)
+            muscle_ids = [m.muscle_id for m in pose_data.muscles]
+            result = await db.execute(
+                select(Muscle.id).where(Muscle.id.in_(muscle_ids))
             )
-            if not muscle.scalar_one_or_none():
-                continue
+            valid_muscle_ids = set(result.scalars().all())
 
-            pose_muscle = PoseMuscle(
-                pose_id=pose.id,
-                muscle_id=muscle_data.muscle_id,
-                activation_level=muscle_data.activation_level,
+            # Batch create new associations
+            pose_muscles_to_add = [
+                PoseMuscle(
+                    pose_id=pose.id,
+                    muscle_id=muscle_data.muscle_id,
+                    activation_level=muscle_data.activation_level,
+                )
+                for muscle_data in pose_data.muscles
+                if muscle_data.muscle_id in valid_muscle_ids
+            ]
+            db.add_all(pose_muscles_to_add)
+
+        # Оновлення м'язів за назвою (з AI-аналізу)
+        elif pose_data.analyzed_muscles is not None:
+            # Bulk delete old associations (single DELETE statement)
+            await db.execute(
+                delete(PoseMuscle).where(PoseMuscle.pose_id == pose_id)
             )
-            db.add(pose_muscle)
+            # Clear the ORM relationship cache
+            pose.pose_muscles.clear()
 
-    await db.flush()
+            # Batch запит для всіх м'язів (оптимізація N+1)
+            muscle_names = [m.name.lower() for m in pose_data.analyzed_muscles]
+            result = await db.execute(
+                select(Muscle).where(func.lower(Muscle.name).in_(muscle_names))
+            )
+            muscles_by_name = {m.name.lower(): m for m in result.scalars().all()}
 
-    # Отримати оновлену позу
+            # Batch create new associations
+            pose_muscles_to_add = [
+                PoseMuscle(
+                    pose_id=pose.id,
+                    muscle_id=muscles_by_name[analyzed.name.lower()].id,
+                    activation_level=analyzed.activation_level,
+                )
+                for analyzed in pose_data.analyzed_muscles
+                if analyzed.name.lower() in muscles_by_name
+            ]
+            db.add_all(pose_muscles_to_add)
+
+        # OPTIMISTIC LOCKING: Increment version on successful update
+        # This ensures the next update will see a different version
+        pose.version = (pose.version or 1) + 1
+
+        await db.flush()
+
+    # Отримати оновлену позу (outside nested transaction)
     query = (
         select(Pose)
         .options(
@@ -438,6 +574,7 @@ async def update_pose(
     result = await db.execute(query)
     pose = result.scalar_one()
 
+    await db.commit()
     return build_pose_response(pose)
 
 
@@ -460,6 +597,7 @@ async def delete_pose(
         )
 
     await db.delete(pose)
+    await db.commit()
 
 
 @router.post("/{pose_id}/schema", response_model=PoseResponse)
@@ -498,6 +636,7 @@ async def upload_pose_schema(
     pose.schema_path = file_path
 
     await db.flush()
+    await db.commit()
     await db.refresh(pose)
 
     return build_pose_response(pose)
@@ -557,9 +696,23 @@ async def get_pose_image(
         import mimetypes
 
         # Build local file path
-        local_path = (
-            Path(__file__).parent.parent.parent / "storage" / image_url[9:]
-        )  # Remove "/storage/" prefix
+        storage_base = Path(__file__).parent.parent.parent / "storage"
+        local_path = storage_base / image_url[9:]  # Remove "/storage/" prefix
+
+        # SECURITY: Validate resolved path is within storage directory to prevent path traversal
+        try:
+            resolved_path = local_path.resolve()
+            resolved_base = storage_base.resolve()
+            if not str(resolved_path).startswith(str(resolved_base) + os.sep) and resolved_path != resolved_base:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid image path",
+                )
+        except (OSError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid image path",
+            )
 
         if not local_path.exists():
             raise HTTPException(

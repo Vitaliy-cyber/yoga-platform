@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
-import { posesApi, categoriesApi, getImageProxyUrl } from "../services/api";
+import React, { useEffect, useState, useCallback } from "react";
+import { useParams, Link, useNavigate } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
+import { posesApi, categoriesApi, getImageUrl, exportApi, downloadBlob } from "../services/api";
+import { useViewTransition } from "../hooks/useViewTransition";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
@@ -8,28 +10,57 @@ import { Label } from "../components/ui/label";
 import { Badge } from "../components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { ArrowLeft, Sparkles, Edit2, Save, X, Trash2, Eye, Activity, Download, Loader2, AlertCircle, RefreshCw } from "lucide-react";
-import { PoseViewer, GenerateModal } from "../components/Pose";
+import { ArrowLeft, Sparkles, Edit2, Save, X, Trash2, Eye, Activity, Download, Loader2, AlertCircle, RefreshCw, FileText } from "lucide-react";
+import { PoseViewer, GenerateModal, VersionHistory, VersionDiffViewer, VersionRestoreModal, VersionDetailModal } from "../components/Pose";
+import { MuscleOverlay } from "../components/Anatomy";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
+import { ErrorBoundary } from "../components/ui/error-boundary";
 import type { Pose, Category } from "../types";
 import { useI18n } from "../i18n";
+import { useAppStore } from "../store/useAppStore";
+import { logger } from "../lib/logger";
 
-export const PoseDetail: React.FC = () => {
+/**
+ * Internal component containing the PoseDetail logic.
+ * Wrapped by ErrorBoundary to prevent crashes from propagating.
+ */
+const PoseDetailContent: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [pose, setPose] = useState<Pose | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { t } = useI18n();
+  const { startTransition } = useViewTransition();
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState({
     name: "",
     name_en: "",
     description: "",
     category_id: "",
+    change_note: "",
   });
   const [showViewer, setShowViewer] = useState(false);
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [activeTab, setActiveTab] = useState<"photo" | "muscles">("photo");
+
+  // Version history state
+  const [showVersionDetail, setShowVersionDetail] = useState<number | null>(null);
+  const [showVersionDiff, setShowVersionDiff] = useState<{ v1: number; v2: number } | null>(null);
+  const [showRestoreModal, setShowRestoreModal] = useState<{ versionId: number; versionNumber: number } | null>(null);
+  const [versionHistoryKey, setVersionHistoryKey] = useState(0);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  // Delete confirmation state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Saving state
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Toast notifications
+  const addToast = useAppStore((state) => state.addToast);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -48,6 +79,7 @@ export const PoseDetail: React.FC = () => {
           name_en: poseData.name_en || "",
           description: poseData.description || "",
           category_id: poseData.category_id ? String(poseData.category_id) : "",
+          change_note: "",
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : t("pose.detail.not_found"));
@@ -61,41 +93,77 @@ export const PoseDetail: React.FC = () => {
 
   const handleSave = async () => {
     if (!pose) return;
+    setIsSaving(true);
     try {
       const updated = await posesApi.update(pose.id, {
         name: editData.name,
         name_en: editData.name_en || undefined,
         description: editData.description || undefined,
         category_id: editData.category_id ? parseInt(editData.category_id, 10) : undefined,
+        change_note: editData.change_note || undefined,
       });
       setPose(updated);
       setIsEditing(false);
+      // Clear change note after successful save
+      setEditData(prev => ({ ...prev, change_note: "" }));
+      // Reload version history
+      setVersionHistoryKey(prev => prev + 1);
+      // Show success toast
+      addToast({
+        type: "success",
+        message: t("pose.detail.save_success"),
+      });
     } catch (err) {
-      console.error(err);
+      const message = err instanceof Error ? err.message : t("pose.detail.save_error");
+      setError(message);
+      addToast({
+        type: "error",
+        message: message,
+      });
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const handleDelete = async () => {
     if (!pose) return;
-    if (!window.confirm(t("pose.detail.delete_confirm"))) return;
-    await posesApi.delete(pose.id);
-    window.location.href = "/poses";
+    setIsDeleting(true);
+    try {
+      await posesApi.delete(pose.id);
+      addToast({
+        type: "success",
+        message: t("pose.detail.delete_success"),
+      });
+      navigate("/poses");
+    } catch (err) {
+      logger.error("Failed to delete pose:", err);
+      const message = err instanceof Error ? err.message : t("pose.detail.delete_error");
+      setError(message);
+      addToast({
+        type: "error",
+        message: message,
+      });
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
+    }
   };
 
   const getActiveImage = () => {
     if (!pose) return null;
     if (activeTab === "muscles" && pose.muscle_layer_path) {
-      return getImageProxyUrl(pose.id, 'muscle_layer');
+      return getImageUrl(pose.muscle_layer_path, pose.id, 'muscle_layer');
     }
     if (pose.photo_path) {
-      return getImageProxyUrl(pose.id, 'photo');
+      return getImageUrl(pose.photo_path, pose.id, 'photo');
     }
     return null;
   };
 
   const getSchemaImage = () => {
     if (!pose || !pose.schema_path) return null;
-    return getImageProxyUrl(pose.id, 'schema');
+    // Use direct storage path - Vite proxy forwards /storage to backend static files
+    return pose.schema_path;
   };
 
   const handleDownload = async () => {
@@ -113,20 +181,34 @@ export const PoseDetail: React.FC = () => {
     window.URL.revokeObjectURL(url);
   };
 
+  const handleExportPdf = async () => {
+    if (!pose) return;
+    setIsExportingPdf(true);
+    try {
+      const blob = await exportApi.posePdf(pose.id);
+      const safeName = pose.name.replace(/[^a-zA-Z0-9-_]/g, '_');
+      downloadBlob(blob, `${pose.code}_${safeName}.pdf`);
+    } catch (err) {
+      logger.error('PDF export failed:', err);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
-        <Loader2 className="w-8 h-8 text-stone-400 animate-spin" />
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-muted-foreground animate-spin" />
       </div>
     );
   }
 
   if (error || !pose) {
     return (
-      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
           <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-          <h2 className="text-xl font-medium text-stone-800 mb-2">{t("pose.detail.not_found")}</h2>
+          <h2 className="text-xl font-medium text-foreground mb-2">{t("pose.detail.not_found")}</h2>
           <Link to="/poses">
             <Button variant="outline">{t("pose.detail.back")}</Button>
           </Link>
@@ -136,24 +218,24 @@ export const PoseDetail: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-stone-50">
-      <header className="bg-white border-b border-stone-200">
+    <div className="min-h-screen bg-background">
+      <header className="bg-card border-b border-border">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <Link to="/poses">
-                <Button variant="ghost" size="icon" className="text-stone-500">
+                <Button variant="ghost" size="icon" className="text-muted-foreground">
                   <ArrowLeft className="w-5 h-5" />
                 </Button>
               </Link>
               <div>
-                <h1 className="text-xl font-semibold text-stone-800">{pose.name}</h1>
+                <h1 className="text-xl font-semibold text-foreground">{pose.name}</h1>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge className={pose.photo_path ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-600"}>
+                  <Badge className={pose.photo_path ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-muted text-muted-foreground"}>
                     {pose.photo_path ? t("pose.badge.complete") : t("pose.badge.draft")}
                   </Badge>
                   {pose.category_name && (
-                    <Badge variant="outline" className="text-stone-500">
+                    <Badge variant="outline" className="text-muted-foreground">
                       {pose.category_name}
                     </Badge>
                   )}
@@ -173,16 +255,29 @@ export const PoseDetail: React.FC = () => {
                   </Button>
                 </>
               ) : (
-                <Button onClick={() => setShowGenerateModal(true)} className="bg-stone-800 hover:bg-stone-900">
+                <Button onClick={() => setShowGenerateModal(true)} className="bg-primary hover:bg-primary/90">
                   <Sparkles className="w-4 h-4 mr-2" />
                   {t("pose.generate_cta")}
                 </Button>
               )}
               <Button
+                onClick={handleExportPdf}
+                variant="outline"
+                disabled={isExportingPdf}
+              >
+                {isExportingPdf ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <FileText className="w-4 h-4 mr-2" />
+                )}
+                {t("export.pdf")}
+              </Button>
+              <Button
                 variant="ghost"
                 size="icon"
-                onClick={handleDelete}
+                onClick={() => setShowDeleteConfirm(true)}
                 className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                aria-label={t("pose.detail.delete")}
               >
                 <Trash2 className="w-4 h-4" />
               </Button>
@@ -195,10 +290,10 @@ export const PoseDetail: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="space-y-6">
             {pose.photo_path ? (
-              <div className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
-                <div className="p-4 border-b border-stone-100">
-                  <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "photo" | "muscles")}>
-                    <TabsList className="grid grid-cols-2 bg-stone-100 p-1">
+              <div className="bg-card rounded-2xl border border-border overflow-hidden">
+                <div className="p-4 border-b border-border">
+                  <Tabs value={activeTab} onValueChange={(value) => startTransition(() => setActiveTab(value as "photo" | "muscles"))}>
+                    <TabsList className="grid grid-cols-2 bg-muted p-1">
                       <TabsTrigger value="photo" className="text-sm">
                         <Eye className="w-4 h-4 mr-1" />
                         {t("pose.tabs.photo")}
@@ -211,13 +306,20 @@ export const PoseDetail: React.FC = () => {
                   </Tabs>
                 </div>
                 <div className="p-4">
-                  <img
-                    src={getActiveImage() || pose.photo_path}
-                    alt={pose.name}
-                    className="w-full rounded-xl transition-opacity duration-200"
-                  />
+                  <AnimatePresence mode="wait">
+                    <motion.img
+                      key={activeTab}
+                      src={getActiveImage() || pose.photo_path}
+                      alt={pose.name}
+                      className="w-full rounded-xl view-transition-image"
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 1.02 }}
+                      transition={{ duration: 0.3 }}
+                    />
+                  </AnimatePresence>
                 </div>
-                <div className="p-4 border-t border-stone-100 flex justify-end">
+                <div className="p-4 border-t border-border flex justify-end">
                   <Button variant="outline" onClick={handleDownload}>
                     <Download className="w-4 h-4 mr-2" />
                     {t("pose.download")}
@@ -225,32 +327,43 @@ export const PoseDetail: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="bg-white rounded-2xl border border-stone-200 p-12 text-center">
-                <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
-                  <Sparkles className="w-8 h-8 text-stone-400" />
+              <div className="bg-card rounded-2xl border border-border p-12 text-center">
+                <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mx-auto mb-4">
+                  <Sparkles className="w-8 h-8 text-muted-foreground" />
                 </div>
-                <h3 className="text-lg font-medium text-stone-800 mb-2">{t("pose.detail.no_image")}</h3>
-                <p className="text-stone-500">{t("pose.detail.no_image_hint")}</p>
+                <h3 className="text-lg font-medium text-foreground mb-2">{t("pose.detail.no_image")}</h3>
+                <p className="text-muted-foreground">{t("pose.detail.no_image_hint")}</p>
               </div>
             )}
 
               {pose.schema_path && (
-                <div className="bg-white rounded-2xl border border-stone-200 p-6">
-                  <h3 className="text-sm font-medium text-stone-600 mb-4">{t("pose.detail.source_schematic")}</h3>
+                <div className="bg-card rounded-2xl border border-border p-6">
+                  <h3 className="text-sm font-medium text-muted-foreground mb-4">{t("pose.detail.source_schematic")}</h3>
                   <img
                     src={getSchemaImage() || ''}
                     alt={t("pose.file_alt")}
-                    className="w-full rounded-xl border border-stone-100"
+                    className="w-full rounded-xl border border-border"
                   />
+                </div>
+              )}
+
+              {/* Active Muscles Section */}
+              {pose.muscles && pose.muscles.length > 0 && (
+                <div className="bg-card rounded-2xl border border-border p-6">
+                  <h3 className="text-sm font-medium text-muted-foreground mb-4 flex items-center gap-2">
+                    <Activity className="w-4 h-4" />
+                    {t("pose.viewer.active_muscles")}
+                  </h3>
+                  <MuscleOverlay muscles={pose.muscles} />
                 </div>
               )}
 
           </div>
 
           <div className="space-y-6">
-            <div className="bg-white rounded-2xl border border-stone-200 p-6">
+            <div className="bg-card rounded-2xl border border-border p-6">
               <div className="flex items-center justify-between mb-6">
-                <h3 className="text-lg font-medium text-stone-800">{t("pose.detail.details")}</h3>
+                <h3 className="text-lg font-medium text-foreground">{t("pose.detail.details")}</h3>
                 {!isEditing ? (
                   <Button variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
                     <Edit2 className="w-4 h-4 mr-2" />
@@ -258,13 +371,22 @@ export const PoseDetail: React.FC = () => {
                   </Button>
                 ) : (
                   <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)}>
+                    <Button variant="ghost" size="sm" onClick={() => setIsEditing(false)} disabled={isSaving}>
                       <X className="w-4 h-4 mr-2" />
                       {t("pose.detail.cancel")}
                     </Button>
-                    <Button size="sm" onClick={handleSave}>
-                      <Save className="w-4 h-4 mr-2" />
-                      {t("pose.detail.save")}
+                    <Button size="sm" onClick={handleSave} disabled={isSaving}>
+                      {isSaving ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          {t("app.saving")}
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4 mr-2" />
+                          {t("pose.detail.save")}
+                        </>
+                      )}
                     </Button>
                   </div>
                 )}
@@ -272,31 +394,31 @@ export const PoseDetail: React.FC = () => {
 
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label className="text-stone-600">{t("pose.detail.name")}</Label>
+                  <Label className="text-muted-foreground">{t("pose.detail.name")}</Label>
                   {isEditing ? (
                     <Input
                       value={editData.name}
                       onChange={(e) => setEditData({ ...editData, name: e.target.value })}
                     />
                   ) : (
-                    <p className="text-stone-800 font-medium">{pose.name}</p>
+                    <p className="text-foreground font-medium">{pose.name}</p>
                   )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-stone-600">{t("pose.detail.name_en")}</Label>
+                  <Label className="text-muted-foreground">{t("pose.detail.name_en")}</Label>
                   {isEditing ? (
                     <Input
                       value={editData.name_en}
                       onChange={(e) => setEditData({ ...editData, name_en: e.target.value })}
                     />
                   ) : (
-                    <p className="text-stone-800">{pose.name_en || "-"}</p>
+                    <p className="text-foreground">{pose.name_en || "-"}</p>
                   )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-stone-600">{t("pose.detail.category")}</Label>
+                  <Label className="text-muted-foreground">{t("pose.detail.category")}</Label>
                   {isEditing ? (
                     <Select
                       value={editData.category_id || "__none__"}
@@ -315,12 +437,12 @@ export const PoseDetail: React.FC = () => {
                       </SelectContent>
                     </Select>
                   ) : (
-                    <p className="text-stone-800">{pose.category_name || "-"}</p>
+                    <p className="text-foreground">{pose.category_name || "-"}</p>
                   )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-stone-600">{t("pose.detail.description")}</Label>
+                  <Label className="text-muted-foreground">{t("pose.detail.description")}</Label>
                   {isEditing ? (
                     <Textarea
                       value={editData.description}
@@ -328,11 +450,34 @@ export const PoseDetail: React.FC = () => {
                       rows={3}
                     />
                   ) : (
-                    <p className="text-stone-800">{pose.description || t("pose.detail.no_description")}</p>
+                    <p className="text-foreground">{pose.description || t("pose.detail.no_description")}</p>
                   )}
                 </div>
+
+                {/* Change note - only shown when editing */}
+                {isEditing && (
+                  <div className="space-y-2 pt-4 border-t border-border">
+                    <Label className="text-muted-foreground">{t("versions.change_note_label")}</Label>
+                    <Input
+                      value={editData.change_note}
+                      onChange={(e) => setEditData({ ...editData, change_note: e.target.value })}
+                      placeholder={t("versions.change_note_placeholder")}
+                      maxLength={500}
+                    />
+                    <p className="text-xs text-muted-foreground">{t("versions.change_note_hint")}</p>
+                  </div>
+                )}
               </div>
             </div>
+
+            {/* Version History */}
+            <VersionHistory
+              key={versionHistoryKey}
+              poseId={pose.id}
+              onViewVersion={(versionId) => setShowVersionDetail(versionId)}
+              onRestoreVersion={(versionId, versionNumber) => setShowRestoreModal({ versionId, versionNumber })}
+              onCompareVersions={(v1, v2) => setShowVersionDiff({ v1, v2 })}
+            />
           </div>
         </div>
       </main>
@@ -356,6 +501,98 @@ export const PoseDetail: React.FC = () => {
           }}
         />
       )}
+
+      {/* Version Detail Modal */}
+      {showVersionDetail !== null && (
+        <VersionDetailModal
+          poseId={pose.id}
+          versionId={showVersionDetail}
+          isOpen={true}
+          onClose={() => setShowVersionDetail(null)}
+          onRestore={(versionId, versionNumber) => {
+            setShowVersionDetail(null);
+            setShowRestoreModal({ versionId, versionNumber });
+          }}
+        />
+      )}
+
+      {/* Version Diff Modal */}
+      {showVersionDiff && (
+        <VersionDiffViewer
+          poseId={pose.id}
+          versionId1={showVersionDiff.v1}
+          versionId2={showVersionDiff.v2}
+          isOpen={true}
+          onClose={() => setShowVersionDiff(null)}
+        />
+      )}
+
+      {/* Version Restore Modal */}
+      {showRestoreModal && (
+        <VersionRestoreModal
+          poseId={pose.id}
+          versionId={showRestoreModal.versionId}
+          versionNumber={showRestoreModal.versionNumber}
+          isOpen={true}
+          onClose={() => setShowRestoreModal(null)}
+          onRestored={async () => {
+            // Refresh pose data after restore
+            if (id) {
+              const updatedPose = await posesApi.getById(parseInt(id, 10));
+              setPose(updatedPose);
+              setEditData({
+                name: updatedPose.name,
+                name_en: updatedPose.name_en || "",
+                description: updatedPose.description || "",
+                category_id: updatedPose.category_id ? String(updatedPose.category_id) : "",
+                change_note: "",
+              });
+              // Force version history to reload
+              setVersionHistoryKey((prev) => prev + 1);
+            }
+          }}
+        />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleDelete}
+        title={t("pose.detail.delete_title")}
+        description={t("pose.detail.delete_confirm_message", { name: pose.name })}
+        confirmText={t("pose.detail.delete")}
+        cancelText={t("pose.detail.cancel")}
+        variant="danger"
+        isLoading={isDeleting}
+      />
     </div>
+  );
+};
+
+/**
+ * PoseDetail page wrapped with ErrorBoundary.
+ *
+ * This prevents rendering errors in the pose detail page from crashing
+ * the entire application. Users can recover by clicking "Try again"
+ * or navigating back to the poses list.
+ */
+export const PoseDetail: React.FC = () => {
+  const navigate = useNavigate();
+
+  const handleReset = useCallback(() => {
+    // Navigate back to poses list on error recovery
+    navigate("/poses");
+  }, [navigate]);
+
+  return (
+    <ErrorBoundary
+      errorTitle="Failed to load pose details"
+      errorDescription="An unexpected error occurred while displaying this pose. Please try again or go back to the poses list."
+      resetButtonText="Go to Poses"
+      onReset={handleReset}
+    >
+      <PoseDetailContent />
+    </ErrorBoundary>
   );
 };

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class CategoryBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=2000)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -35,7 +35,7 @@ class CategoryCreate(CategoryBase):
 
 class CategoryUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=2000)
 
     @field_validator("name", mode="before")
     @classmethod
