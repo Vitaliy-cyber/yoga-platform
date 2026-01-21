@@ -36,7 +36,7 @@ class Sequence(Base):
     description = Column(Text, nullable=True)
     duration_seconds = Column(Integer, nullable=True)  # Total duration
     difficulty = Column(
-        Enum(DifficultyLevel),
+        Enum(DifficultyLevel, native_enum=False, create_constraint=False),
         nullable=False,
         default=DifficultyLevel.BEGINNER
     )
