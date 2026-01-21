@@ -6,6 +6,7 @@ import { Eye, Sparkles, CheckCircle2, ExternalLink, ImageIcon } from "lucide-rea
 import type { PoseListItem } from "../../types";
 import { getImageUrl } from "../../services/api";
 import { useI18n } from "../../i18n";
+import { CompareButton } from "./CompareButton";
 
 interface PoseCardProps {
   pose: PoseListItem;
@@ -69,6 +70,9 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
             {statusLabel}
           </Badge>
         </div>
+
+        {/* Compare button */}
+        <CompareButton pose={pose} variant="card" />
 
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
             <div className="absolute bottom-4 left-4 right-4 flex gap-2">
