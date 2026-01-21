@@ -66,7 +66,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const [schemaLoadError, setSchemaLoadError] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, generate, generateFromPose, reset } = useGenerate();
+  const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, taskId, generate, generateFromPose, reset } = useGenerate();
   const [generationStarted, setGenerationStarted] = useState(false);
   const { t } = useI18n();
 
@@ -118,19 +118,16 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   useEffect(() => {
     const saveGeneratedImages = async () => {
       // Prevent multiple saves with ref (more reliable than state)
-      if (!generationStarted || !photoUrl || isGenerating || savingRef.current || !pose) {
+      if (!generationStarted || !photoUrl || isGenerating || savingRef.current || !pose || !taskId) {
         return;
       }
-      
+
       savingRef.current = true;
-      
+
       try {
-        // Update the pose with the generated image URLs
-        await posesApi.update(pose.id, {
-          photo_path: photoUrl,
-          ...(musclesUrl && { muscle_layer_path: musclesUrl }),
-        });
-        
+        // Apply generation results to the pose (photo, muscle layer, AND muscle associations)
+        await posesApi.applyGeneration(pose.id, taskId);
+
         // Notify parent to refresh data
         onComplete?.();
       } catch (err) {
@@ -147,9 +144,9 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
         onClose();
       }
     };
-    
+
     saveGeneratedImages();
-  }, [photoUrl, musclesUrl, isGenerating, pose, generationStarted, onComplete, onClose, reset, handleClearFile]);
+  }, [photoUrl, musclesUrl, isGenerating, pose, generationStarted, taskId, onComplete, onClose, reset, handleClearFile, t]);
 
   /**
    * Handles the generation process:

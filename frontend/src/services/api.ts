@@ -628,6 +628,21 @@ export const posesApi = {
       throw handleError(error as AxiosError<ApiError>);
     }
   },
+
+  /**
+   * Застосувати результати генерації до існуючої пози
+   * Оновлює фото, шар м'язів та асоціації з м'язами
+   */
+  applyGeneration: async (poseId: number, taskId: string): Promise<Pose> => {
+    try {
+      const response = await api.post<Pose>(
+        `${API_V1_PREFIX}/poses/${poseId}/apply-generation/${taskId}`
+      );
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
+    }
+  },
 };
 
 // === Generate API ===

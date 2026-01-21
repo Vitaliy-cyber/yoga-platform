@@ -884,3 +884,129 @@ async def reanalyze_pose_muscles(
 
     await db.commit()
     return build_pose_response(pose)
+
+
+@router.post("/{pose_id}/apply-generation/{task_id}", response_model=PoseResponse)
+async def apply_generation_to_pose(
+    pose_id: int,
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Apply generation results to an existing pose.
+
+    This updates the pose with the generated photo and muscle layer,
+    and creates PoseMuscle associations from the analyzed muscles.
+
+    Use this after generating from an existing pose to update it
+    with the generation results instead of creating a new pose.
+    """
+    import json
+    from models.generation_task import GenerationTask
+
+    # Get the pose
+    query = (
+        select(Pose)
+        .options(
+            selectinload(Pose.category),
+            selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
+        )
+        .where(and_(Pose.id == pose_id, Pose.user_id == current_user.id))
+    )
+    result = await db.execute(query)
+    pose = result.scalar_one_or_none()
+
+    if not pose:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Pose not found"
+        )
+
+    # Get the generation task
+    task_result = await db.execute(
+        select(GenerationTask).where(GenerationTask.task_id == task_id)
+    )
+    task = task_result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generation task not found",
+        )
+
+    # Verify task belongs to current user
+    if task.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generation task not found",
+        )
+
+    # Verify task is completed
+    if task.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Generation task is not completed yet",
+        )
+
+    # Update pose with generation results
+    if task.photo_url:
+        pose.photo_path = task.photo_url
+        logger.info(f"Applied photo to pose {pose_id}: {task.photo_url[:50]}...")
+
+    if task.muscles_url:
+        pose.muscle_layer_path = task.muscles_url
+        logger.info(f"Applied muscle layer to pose {pose_id}: {task.muscles_url[:50]}...")
+
+    # Delete existing muscle associations and create new ones
+    if task.analyzed_muscles_json:
+        logger.info(f"Applying analyzed muscles to pose {pose_id}")
+
+        # Delete existing associations
+        await db.execute(
+            delete(PoseMuscle).where(PoseMuscle.pose_id == pose_id)
+        )
+
+        try:
+            muscles_data = json.loads(task.analyzed_muscles_json)
+            logger.info(f"Parsed {len(muscles_data)} muscles from generation task")
+
+            # Batch query for all muscles by name
+            muscle_names = [m["name"].lower() for m in muscles_data]
+            result = await db.execute(
+                select(Muscle).where(func.lower(Muscle.name).in_(muscle_names))
+            )
+            muscles_by_name = {m.name.lower(): m for m in result.scalars().all()}
+            logger.info(f"Found {len(muscles_by_name)} muscles in database")
+
+            # Create PoseMuscle associations
+            pose_muscles_to_add = [
+                PoseMuscle(
+                    pose_id=pose.id,
+                    muscle_id=muscles_by_name[m["name"].lower()].id,
+                    activation_level=m["activation_level"],
+                )
+                for m in muscles_data
+                if m["name"].lower() in muscles_by_name
+            ]
+            logger.info(f"Creating {len(pose_muscles_to_add)} PoseMuscle associations for pose {pose_id}")
+            db.add_all(pose_muscles_to_add)
+
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to parse analyzed muscles: {e}")
+
+    await db.flush()
+
+    # Refresh pose with updated data
+    query = (
+        select(Pose)
+        .options(
+            selectinload(Pose.category),
+            selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
+        )
+        .where(Pose.id == pose_id)
+    )
+    result = await db.execute(query)
+    pose = result.scalar_one()
+
+    await db.commit()
+    return build_pose_response(pose)
