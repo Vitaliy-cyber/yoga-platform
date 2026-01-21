@@ -854,15 +854,20 @@ async def save_to_gallery(
 
     # Add analyzed muscles if available
     if task.analyzed_muscles_json:
+        logger.info(f"Processing analyzed muscles for task {request.task_id}: {task.analyzed_muscles_json[:200]}...")
         try:
             muscles_data = json.loads(task.analyzed_muscles_json)
+            logger.info(f"Parsed {len(muscles_data)} muscles from JSON")
 
             # Batch query for all muscles by name
             muscle_names = [m["name"].lower() for m in muscles_data]
+            logger.info(f"Looking for muscles: {muscle_names}")
+
             result = await db.execute(
                 select(Muscle).where(func.lower(Muscle.name).in_(muscle_names))
             )
             muscles_by_name = {m.name.lower(): m for m in result.scalars().all()}
+            logger.info(f"Found {len(muscles_by_name)} muscles in database: {list(muscles_by_name.keys())}")
 
             # Create PoseMuscle associations
             pose_muscles_to_add = [
@@ -874,9 +879,14 @@ async def save_to_gallery(
                 for m in muscles_data
                 if m["name"].lower() in muscles_by_name
             ]
+            logger.info(f"Creating {len(pose_muscles_to_add)} PoseMuscle associations for pose {pose.id}")
             db.add_all(pose_muscles_to_add)
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"Failed to parse analyzed muscles for task {request.task_id}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error creating muscle associations for task {request.task_id}: {e}", exc_info=True)
+    else:
+        logger.warning(f"No analyzed_muscles_json for task {request.task_id}")
 
     await db.commit()
 

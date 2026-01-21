@@ -614,6 +614,15 @@ export const posesApi = {
       throw handleError(error as AxiosError<ApiError>);
     }
   },
+
+  reanalyzeMuscles: async (id: number): Promise<Pose> => {
+    try {
+      const response = await api.post<Pose>(`${API_V1_PREFIX}/poses/${id}/reanalyze-muscles`);
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
+    }
+  },
 };
 
 // === Generate API ===

@@ -42,6 +42,11 @@ storage/layers/*
 !storage/generated/.gitkeep
 !storage/layers/.gitkeep
 
+# Backend storage (for development)
+backend/storage/
+backend/*.db
+backend/*.db.*
+
 # AI models (large files)
 ai/models/*
 !ai/models/.gitkeep
@@ -59,6 +64,12 @@ frontend/dist/
 htmlcov/
 .pytest_cache/
 .tox/
+
+# Playwright test artifacts
+frontend/playwright-report/
+frontend/test-results/
+frontend/screenshots/
+frontend/test-screenshots/
 
 # SSL certificates
 nginx/ssl/*

@@ -1,9 +1,12 @@
 import html
+import logging
 import os
 import uuid
 from typing import List, Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 from db.database import get_db
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
@@ -766,3 +769,118 @@ async def get_pose_image(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to fetch image from storage: {str(e)}",
         )
+
+
+@router.post("/{pose_id}/reanalyze-muscles", response_model=PoseResponse)
+async def reanalyze_pose_muscles(
+    pose_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Re-analyze muscles for an existing pose using AI.
+
+    This is useful for poses that were saved before muscles were seeded,
+    or when you want to update the muscle analysis.
+    """
+    from services.google_generator import GoogleGeminiGenerator
+
+    # Get pose with current data
+    query = (
+        select(Pose)
+        .options(
+            selectinload(Pose.category),
+            selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
+        )
+        .where(and_(Pose.id == pose_id, Pose.user_id == current_user.id))
+    )
+    result = await db.execute(query)
+    pose = result.scalar_one_or_none()
+
+    if not pose:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Pose not found"
+        )
+
+    if not pose.photo_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pose has no generated photo to analyze",
+        )
+
+    # Download the photo
+    storage = get_storage()
+    try:
+        photo_bytes = await storage.download_bytes(pose.photo_path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download pose photo: {str(e)}",
+        )
+
+    # Analyze muscles using AI
+    try:
+        generator = GoogleGeminiGenerator()
+        pose_description = f"{pose.name}"
+        if pose.description:
+            pose_description += f" - {pose.description}"
+
+        analyzed_muscles = await generator._analyze_muscles_from_image(
+            photo_bytes, "image/png", pose_description
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze muscles: {str(e)}",
+        )
+
+    if not analyzed_muscles:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Could not identify any muscles in the pose",
+        )
+
+    # Delete existing muscle associations
+    await db.execute(
+        delete(PoseMuscle).where(PoseMuscle.pose_id == pose.id)
+    )
+
+    # Get muscle IDs from database
+    muscle_names = [m.name.lower() for m in analyzed_muscles]
+    logger.info(f"Reanalyze: looking for muscles: {muscle_names}")
+
+    result = await db.execute(
+        select(Muscle).where(func.lower(Muscle.name).in_(muscle_names))
+    )
+    muscles_by_name = {m.name.lower(): m for m in result.scalars().all()}
+    logger.info(f"Reanalyze: found {len(muscles_by_name)} muscles in database: {list(muscles_by_name.keys())}")
+
+    # Create new muscle associations
+    pose_muscles_to_add = [
+        PoseMuscle(
+            pose_id=pose.id,
+            muscle_id=muscles_by_name[m.name.lower()].id,
+            activation_level=m.activation_level,
+        )
+        for m in analyzed_muscles
+        if m.name.lower() in muscles_by_name
+    ]
+    logger.info(f"Reanalyze: creating {len(pose_muscles_to_add)} PoseMuscle associations for pose {pose.id}")
+    db.add_all(pose_muscles_to_add)
+
+    await db.flush()
+
+    # Refresh pose with new muscle data
+    query = (
+        select(Pose)
+        .options(
+            selectinload(Pose.category),
+            selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
+        )
+        .where(Pose.id == pose_id)
+    )
+    result = await db.execute(query)
+    pose = result.scalar_one()
+
+    await db.commit()
+    return build_pose_response(pose)
