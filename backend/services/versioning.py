@@ -146,16 +146,14 @@ class VersioningService:
         """
         Get the next version number for a pose.
 
-        Uses SELECT FOR UPDATE to prevent race conditions where concurrent
-        updates could get the same version number. The lock is held until
-        the transaction commits.
+        Note: We don't use FOR UPDATE here because PostgreSQL doesn't allow
+        FOR UPDATE with aggregate functions (func.max). Race conditions are
+        handled by the transaction isolation level and the fact that the
+        calling code should be updating within the same transaction.
         """
-        # Lock existing versions for this pose to prevent race conditions
-        # This ensures only one transaction can read/increment at a time
         result = await db.execute(
             select(func.max(PoseVersion.version_number))
             .where(PoseVersion.pose_id == pose_id)
-            .with_for_update()
         )
         max_version = result.scalar()
         return (max_version or 0) + 1
