@@ -18,9 +18,9 @@ import { useI18n } from "../../i18n";
 // 60% - Generating muscles (starts)
 // 100% - Completed
 const steps = [
-  { id: "analyzing", labelKey: "generate.modal_progress", icon: Lightbulb, progressThreshold: 10 },
-  { id: "generating_photo", labelKey: "generate.modal_progress", icon: Camera, progressThreshold: 30 },
-  { id: "generating_muscles", labelKey: "generate.modal_progress", icon: Activity, progressThreshold: 60 },
+  { id: "analyzing", labelKey: "generate.step_analyzing", icon: Lightbulb, progressThreshold: 10 },
+  { id: "generating_photo", labelKey: "generate.step_photo", icon: Camera, progressThreshold: 30 },
+  { id: "generating_muscles", labelKey: "generate.step_muscles", icon: Activity, progressThreshold: 60 },
 ] as const;
 
 // Determine which step is active based on progress
