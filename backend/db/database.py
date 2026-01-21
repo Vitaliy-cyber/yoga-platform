@@ -297,6 +297,17 @@ async def init_db():
                             )
                         logging.info(f"Migrated {len(users_to_migrate)} users to SHA256 hashes")
 
+                # Add updated_at column to users if missing
+                result = await conn.execute(text("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'users' AND column_name = 'updated_at'
+                """))
+                if result.fetchone() is None:
+                    await conn.execute(text("""
+                        ALTER TABLE users ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    """))
+                    logging.info("Added updated_at column to users table")
+
                 # Add user_id to poses if not exists
                 await conn.execute(
                     text("""
