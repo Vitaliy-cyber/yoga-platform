@@ -488,6 +488,26 @@ const translations = {
     en: "Low",
     ua: "Низький",
   },
+  "pose.muscles.not_analyzed": {
+    en: "Muscles have not been analyzed for this pose",
+    ua: "М'язи для цієї пози ще не проаналізовані",
+  },
+  "pose.muscles.analyze": {
+    en: "Analyze Muscles",
+    ua: "Аналізувати м'язи",
+  },
+  "pose.muscles.analyzing": {
+    en: "Analyzing...",
+    ua: "Аналізуємо...",
+  },
+  "pose.muscles.reanalyze_success": {
+    en: "Muscles analyzed successfully",
+    ua: "М'язи успішно проаналізовано",
+  },
+  "pose.muscles.reanalyze_error": {
+    en: "Failed to analyze muscles",
+    ua: "Не вдалося проаналізувати м'язи",
+  },
   "pose.detail.back": {
     en: "Return to Gallery",
     ua: "Повернутись до галереї",

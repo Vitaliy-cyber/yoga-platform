@@ -59,6 +59,9 @@ const PoseDetailContent: React.FC = () => {
   // Saving state
   const [isSaving, setIsSaving] = useState(false);
 
+  // Muscle reanalysis state
+  const [isReanalyzingMuscles, setIsReanalyzingMuscles] = useState(false);
+
   // Toast notifications
   const addToast = useAppStore((state) => state.addToast);
 
@@ -192,6 +195,28 @@ const PoseDetailContent: React.FC = () => {
       logger.error('PDF export failed:', err);
     } finally {
       setIsExportingPdf(false);
+    }
+  };
+
+  const handleReanalyzeMuscles = async () => {
+    if (!pose) return;
+    setIsReanalyzingMuscles(true);
+    try {
+      const updatedPose = await posesApi.reanalyzeMuscles(pose.id);
+      setPose(updatedPose);
+      addToast({
+        type: "success",
+        message: t("pose.muscles.reanalyze_success"),
+      });
+    } catch (err) {
+      logger.error("Failed to reanalyze muscles:", err);
+      const message = err instanceof Error ? err.message : t("pose.muscles.reanalyze_error");
+      addToast({
+        type: "error",
+        message: message,
+      });
+    } finally {
+      setIsReanalyzingMuscles(false);
     }
   };
 
@@ -348,15 +373,61 @@ const PoseDetailContent: React.FC = () => {
               )}
 
               {/* Active Muscles Section */}
-              {pose.muscles && pose.muscles.length > 0 && (
+              {pose.muscles && pose.muscles.length > 0 ? (
                 <div className="bg-card rounded-2xl border border-border p-6">
-                  <h3 className="text-sm font-medium text-muted-foreground mb-4 flex items-center gap-2">
-                    <Activity className="w-4 h-4" />
-                    {t("pose.viewer.active_muscles")}
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                      <Activity className="w-4 h-4" />
+                      {t("pose.viewer.active_muscles")}
+                    </h3>
+                    {pose.photo_path && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleReanalyzeMuscles}
+                        disabled={isReanalyzingMuscles}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        {isReanalyzingMuscles ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4" />
+                        )}
+                      </Button>
+                    )}
+                  </div>
                   <MuscleOverlay muscles={pose.muscles} />
                 </div>
-              )}
+              ) : pose.photo_path ? (
+                <div className="bg-card rounded-2xl border border-border p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                      <Activity className="w-4 h-4" />
+                      {t("pose.viewer.active_muscles")}
+                    </h3>
+                  </div>
+                  <div className="text-center py-4">
+                    <p className="text-muted-foreground mb-4">{t("pose.muscles.not_analyzed")}</p>
+                    <Button
+                      onClick={handleReanalyzeMuscles}
+                      disabled={isReanalyzingMuscles}
+                      variant="outline"
+                    >
+                      {isReanalyzingMuscles ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          {t("pose.muscles.analyzing")}
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          {t("pose.muscles.analyze")}
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
 
           </div>
 
