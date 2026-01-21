@@ -25,4 +25,6 @@ ENV PORT=8000
 EXPOSE 8000
 
 # Run with uvicorn - use shell form to expand $PORT
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 2"]
+# Using 1 worker because WebSocket manager is in-memory and not shared across workers
+# For multi-worker support, implement Redis pub/sub for WebSocket broadcasts
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1"]
