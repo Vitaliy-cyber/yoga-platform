@@ -346,6 +346,13 @@ async def init_db():
                 """)
                 )
 
+                # Add version column to poses if not exists (for optimistic locking)
+                await conn.execute(
+                    text("""
+                    ALTER TABLE poses ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1
+                """)
+                )
+
                 logging.info("Migration: user_id columns ensured")
             except Exception as e:
                 logging.warning(f"Migration warning (may be normal): {e}")
