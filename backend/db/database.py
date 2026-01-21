@@ -189,6 +189,14 @@ async def init_db():
     )
 
     async with engine.begin() as conn:
+        # For PostgreSQL: use advisory lock to prevent race conditions
+        # when multiple workers start simultaneously
+        if not is_sqlite:
+            # Acquire advisory lock (key 1 = migration lock)
+            # pg_advisory_xact_lock is released automatically when transaction ends
+            await conn.execute(text("SELECT pg_advisory_xact_lock(1)"))
+            logging.info("Acquired database migration lock")
+
         # SQLite-specific migrations (must run before create_all)
         if is_sqlite:
             try:
