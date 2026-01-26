@@ -206,7 +206,7 @@ interface I18nContextValue {
 const translations = {
   "app.name": {
     en: "Pose Studio",
-    ua: "Студія Поз",
+    ua: "Лабораторія Поз",
   },
   "app.tagline": {
     en: "Educational Pose Visualization System",
@@ -1222,7 +1222,7 @@ const translations = {
   },
   "login.header": {
     en: "Pose Studio",
-    ua: "Студія Поз",
+    ua: "Лабораторія Поз",
   },
   "filters.status.draft": {
     en: "Draft",

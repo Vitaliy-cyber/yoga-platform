@@ -50,7 +50,7 @@ describe('Login', () => {
   describe('Rendering', () => {
     it('renders login page with title', () => {
       renderLogin();
-      expect(screen.getByText('Студія Поз')).toBeInTheDocument();
+      expect(screen.getByText('Лабораторія Поз')).toBeInTheDocument();
     });
 
     it('renders welcome message', () => {

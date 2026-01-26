@@ -6,7 +6,7 @@ import { Dashboard } from "./Dashboard";
 describe("Dashboard", () => {
   it("renders header", () => {
     render(<Dashboard />);
-    expect(screen.getByText("Студія Поз")).toBeInTheDocument();
+    expect(screen.getByText("Лабораторія Поз")).toBeInTheDocument();
   });
 
   it("renders stats cards", () => {
