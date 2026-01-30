@@ -68,7 +68,8 @@ describe("PoseCard", () => {
       schema_path: "/storage/schema.png",
     };
 
-    usePoseImageSrcMock.mockImplementation((directPath, poseId, imageType) => {
+    usePoseImageSrcMock.mockImplementation((...args) => {
+      const imageType = args[2];
       if (imageType === "photo") {
         return {
           src: "",

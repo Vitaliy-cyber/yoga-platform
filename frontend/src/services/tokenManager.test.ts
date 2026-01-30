@@ -122,7 +122,7 @@ describe("TokenManager", () => {
 
   it("start is idempotent", () => {
     const addSpy = vi.spyOn(document, "addEventListener");
-    const intervalSpy = vi.spyOn(global, "setInterval");
+    const intervalSpy = vi.spyOn(globalThis, "setInterval");
 
     const manager = TokenManager.getInstance();
     manager.start();
@@ -134,7 +134,7 @@ describe("TokenManager", () => {
 
   it("stop clears timers and listeners", () => {
     const removeSpy = vi.spyOn(document, "removeEventListener");
-    const clearSpy = vi.spyOn(global, "clearInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
 
     const manager = TokenManager.getInstance();
     manager.start();
