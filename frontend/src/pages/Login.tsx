@@ -26,7 +26,7 @@ export const Login: React.FC = () => {
       return;
     }
 
-    startTransition(() => setIsLoading(true));
+    void startTransition(() => setIsLoading(true));
     setError(null);
 
     try {

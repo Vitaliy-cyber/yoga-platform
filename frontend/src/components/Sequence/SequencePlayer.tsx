@@ -14,7 +14,7 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import type { Sequence } from '../../types';
 import { useSequenceStore } from '../../store/useSequenceStore';
-import { getImageUrl } from '../../services/api';
+import { PoseImage } from '../Pose';
 import { useI18n } from '../../i18n';
 
 interface SequencePlayerProps {
@@ -166,12 +166,10 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({ sequence }) => {
       <div className="relative bg-gradient-to-br from-stone-900 to-stone-800 rounded-2xl overflow-hidden aspect-video">
         {/* Current pose image */}
         {currentPose && (currentPose.pose_photo_path || currentPose.pose_schema_path) ? (
-          <img
-            src={getImageUrl(
-              currentPose.pose_photo_path || currentPose.pose_schema_path,
-              currentPose.pose_id,
-              currentPose.pose_photo_path ? 'photo' : 'schema'
-            )}
+          <PoseImage
+            poseId={currentPose.pose_id}
+            imageType={currentPose.pose_photo_path ? "photo" : "schema"}
+            directPath={currentPose.pose_photo_path || currentPose.pose_schema_path}
             alt={currentPose.pose_name}
             className="w-full h-full object-contain"
           />
@@ -315,8 +313,10 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({ sequence }) => {
           >
             <div className="aspect-square bg-muted">
               {pose.pose_photo_path || pose.pose_schema_path ? (
-                <img
-                  src={getImageUrl(pose.pose_photo_path || pose.pose_schema_path, pose.pose_id, pose.pose_photo_path ? 'photo' : 'schema')}
+                <PoseImage
+                  poseId={pose.pose_id}
+                  imageType={pose.pose_photo_path ? "photo" : "schema"}
+                  directPath={pose.pose_photo_path || pose.pose_schema_path}
                   alt={pose.pose_name}
                   className="w-full h-full object-cover"
                 />

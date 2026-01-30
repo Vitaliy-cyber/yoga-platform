@@ -36,6 +36,39 @@ export const TOKEN_REFRESH_JITTER_MS = 5_000;
  */
 export const TOKEN_REFRESH_THRESHOLD_MS = 60_000;
 
+/**
+ * Background refresh interval in milliseconds.
+ * Proactively refresh every 5 minutes when tab is active.
+ */
+export const TOKEN_BACKGROUND_REFRESH_MS = 5 * 60_000;
+
+/**
+ * Debounce delay for visibility change events in milliseconds.
+ * Prevents rapid refresh attempts when quickly switching tabs.
+ */
+export const TOKEN_VISIBILITY_DEBOUNCE_MS = 1_000;
+
+/**
+ * Base delay for exponential backoff retry in milliseconds.
+ */
+export const TOKEN_RETRY_BASE_MS = 1_000;
+
+/**
+ * Maximum delay for exponential backoff retry in milliseconds.
+ */
+export const TOKEN_RETRY_MAX_MS = 30_000;
+
+/**
+ * Maximum number of retry attempts for token refresh.
+ */
+export const TOKEN_MAX_RETRIES = 3;
+
+/**
+ * Heartbeat interval for session keepalive in milliseconds.
+ * Sends a lightweight request to prevent session timeout.
+ */
+export const TOKEN_HEARTBEAT_INTERVAL_MS = 60_000;
+
 // =============================================================================
 // Pagination
 // =============================================================================

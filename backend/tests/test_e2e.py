@@ -380,7 +380,7 @@ class TestIntegrationE2E:
         # 2. Створюємо категорію
         cat_response = await auth_client.post(
             "/api/categories",
-            json={"name": "Інверсії", "description": "Перевернуті пози"},
+            json={"name": "Тестові пози", "description": "Пози для тестування"},
         )
         assert cat_response.status_code == 201
         category = cat_response.json()
@@ -415,7 +415,7 @@ class TestIntegrationE2E:
         pose_details = await auth_client.get(f"/api/poses/{pose['id']}")
         assert pose_details.status_code == 200
         details = pose_details.json()
-        assert details["category_name"] == "Інверсії"
+        assert details["category_name"] == "Тестові пози"
         if muscles:
             assert len(details["muscles"]) == 1
             assert details["muscles"][0]["activation_level"] == 90

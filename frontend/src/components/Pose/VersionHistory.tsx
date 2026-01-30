@@ -197,7 +197,7 @@ export const VersionHistory: React.FC<VersionHistoryProps> = ({
   return (
     <div className="bg-card rounded-2xl border border-border overflow-hidden">
       <button
-        onClick={() => startTransition(() => setIsExpanded(!isExpanded))}
+        onClick={() => void startTransition(() => setIsExpanded(!isExpanded))}
         className="w-full flex items-center justify-between p-4 hover:bg-accent transition-colors"
       >
         <div className="flex items-center gap-3">

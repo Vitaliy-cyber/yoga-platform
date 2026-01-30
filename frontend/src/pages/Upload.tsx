@@ -6,10 +6,11 @@ import { Textarea } from "../components/ui/textarea";
 import { Label } from "../components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Upload as UploadIcon, FileImage, Type, Loader2 } from "lucide-react";
+import { Upload as UploadIcon, FileImage, Type, Loader2, Plus } from "lucide-react";
 import { categoriesApi, posesApi } from "../services/api";
 import type { Category } from "../types";
 import { useI18n } from "../i18n";
+import { CategoryModal } from "../components/Category/CategoryModal";
 
 export const Upload: React.FC = () => {
   const navigate = useNavigate();
@@ -23,8 +24,13 @@ export const Upload: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { t } = useI18n();
+
+  const refreshCategories = () => {
+    categoriesApi.getAll().then(setCategories).catch(console.error);
+  };
 
   useEffect(() => {
     categoriesApi.getAll().then(setCategories).catch(console.error);
@@ -128,6 +134,20 @@ export const Upload: React.FC = () => {
                         </SelectItem>
                       ))
                     )}
+                    <div className="border-t border-stone-100 mt-1 pt-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setShowCategoryModal(true);
+                        }}
+                        className="flex items-center gap-2 w-full px-2 py-2 text-sm text-primary hover:bg-accent rounded-sm transition-colors"
+                      >
+                        <Plus size={16} />
+                        {t("nav.add_category")}
+                      </button>
+                    </div>
                   </SelectContent>
                 </Select>
               </div>
@@ -235,6 +255,13 @@ export const Upload: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Category Creation Modal */}
+      <CategoryModal
+        open={showCategoryModal}
+        onOpenChange={setShowCategoryModal}
+        onSuccess={refreshCategories}
+      />
     </div>
   );
 };

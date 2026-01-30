@@ -166,7 +166,11 @@ class TestPosesAPI:
         """Test getting poses when database is empty."""
         response = await auth_client.get("/api/poses")
         assert response.status_code == 200
-        assert response.json() == []
+        data = response.json()
+        assert data["items"] == []
+        assert data["total"] == 0
+        assert data["skip"] == 0
+        assert data["limit"] == 100
 
     @pytest.mark.asyncio
     async def test_create_pose_minimal(self, auth_client: AsyncClient):
@@ -338,17 +342,23 @@ class TestPosesAPI:
         # Test default pagination
         response = await auth_client.get("/api/poses")
         assert response.status_code == 200
-        assert len(response.json()) == 15
+        data = response.json()
+        assert len(data["items"]) == 15
+        assert data["total"] == 15
 
         # Test with limit
         response = await auth_client.get("/api/poses?limit=5")
         assert response.status_code == 200
-        assert len(response.json()) == 5
+        data = response.json()
+        assert len(data["items"]) == 5
+        assert data["total"] == 15
 
         # Test with skip
         response = await auth_client.get("/api/poses?skip=10&limit=10")
         assert response.status_code == 200
-        assert len(response.json()) == 5
+        data = response.json()
+        assert len(data["items"]) == 5
+        assert data["total"] == 15
 
     @pytest.mark.asyncio
     async def test_update_pose(self, auth_client: AsyncClient):

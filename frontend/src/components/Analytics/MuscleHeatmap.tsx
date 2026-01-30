@@ -101,7 +101,7 @@ export const MuscleHeatmap: React.FC<MuscleHeatmapProps> = ({ muscles, className
       {/* View Toggle */}
       <div className="absolute right-4 top-4 z-10 flex rounded-lg bg-card/80 p-1 shadow-sm backdrop-blur-sm">
         <button
-          onClick={() => startTransition(() => setView('front'))}
+          onClick={() => void startTransition(() => setView('front'))}
           className={cn(
             'rounded-md px-3 py-1.5 text-sm font-medium transition-all',
             view === 'front'
@@ -112,7 +112,7 @@ export const MuscleHeatmap: React.FC<MuscleHeatmapProps> = ({ muscles, className
           {locale === 'ua' ? 'Спереду' : 'Front'}
         </button>
         <button
-          onClick={() => startTransition(() => setView('back'))}
+          onClick={() => void startTransition(() => setView('back'))}
           className={cn(
             'rounded-md px-3 py-1.5 text-sm font-medium transition-all',
             view === 'back'

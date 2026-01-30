@@ -1,8 +1,9 @@
 import React, { useEffect } from 'react';
+import axios from 'axios';
 import { createBrowserRouter, RouterProvider, Navigate, Outlet } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Dashboard, PoseGallery, PoseDetail, Upload, Generate, Login, ComparePage, AnalyticsDashboard, SequenceListPage, SequenceNew, SequenceDetail, Settings } from './pages';
-import { authApi } from './services/api';
+import { authApi, tokenManager } from './services/api';
 import { useAuthStore } from './store/useAuthStore';
 import { Loader2 } from 'lucide-react';
 import { I18nProvider } from './i18n';
@@ -97,13 +98,14 @@ const router = createBrowserRouter(
 
 const App: React.FC = () => {
   const accessToken = useAuthStore((state) => state.accessToken);
-  const refreshToken = useAuthStore((state) => state.refreshToken);
   const _hasHydrated = useAuthStore((state) => state._hasHydrated);
   const isLoading = useAuthStore((state) => state.isLoading);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const setAuth = useAuthStore((state) => state.setAuth);
   const logout = useAuthStore((state) => state.logout);
   const setLoading = useAuthStore((state) => state.setLoading);
 
+  // Token validation and refresh on app startup
   useEffect(() => {
     // Wait for zustand to hydrate from localStorage
     if (!_hasHydrated) {
@@ -117,7 +119,7 @@ const App: React.FC = () => {
 
     let cancelled = false;
 
-    const validateToken = async () => {
+    const validateAndRefreshToken = async () => {
       if (!accessToken) {
         setLoading(false);
         return;
@@ -127,17 +129,19 @@ const App: React.FC = () => {
       const currentTokenExpiresAt = useAuthStore.getState().tokenExpiresAt;
       const isExpired = currentTokenExpiresAt ? Date.now() >= currentTokenExpiresAt : false;
 
-      if (isExpired && refreshToken) {
-        // Try to refresh the token
+      if (isExpired) {
+        // Token is expired - use TokenManager to attempt silent refresh
+        // NOTE: We don't check refreshToken from store because it's always null
+        // (stored in httpOnly cookie for XSS protection). The cookie is sent
+        // automatically with the refresh request.
         try {
-          const response = await authApi.refresh(refreshToken);
+          const success = await tokenManager.silentRefresh();
           if (!cancelled) {
-            setAuth(
-              response.user,
-              response.access_token,
-              response.refresh_token,
-              response.expires_in
-            );
+            if (!success) {
+              // Refresh failed - logout user
+              logout();
+            }
+            // If success, silentRefresh already updated the store
           }
         } catch {
           if (!cancelled) {
@@ -147,26 +151,56 @@ const App: React.FC = () => {
         return;
       }
 
-      // Validate current token
+      // Token not expired - validate with backend to ensure it's still valid
       try {
         const currentUser = await authApi.getMe();
         if (!cancelled) {
-          // Preserve refresh token and expiry when validating
-          setAuth(currentUser, accessToken, refreshToken || undefined, currentTokenExpiresAt ? Math.floor((currentTokenExpiresAt - Date.now()) / 1000) : undefined);
+          // Preserve expiry when validating
+          setAuth(
+            currentUser,
+            accessToken,
+            undefined,
+            currentTokenExpiresAt ? Math.floor((currentTokenExpiresAt - Date.now()) / 1000) : undefined
+          );
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          logout();
+          if (axios.isAxiosError(error)) {
+            const status = error.response?.status;
+            if (status === 401 || status === 403) {
+              logout();
+              return;
+            }
+          }
+          setLoading(false);
         }
       }
     };
 
-    validateToken();
+    validateAndRefreshToken();
 
     return () => {
       cancelled = true;
     };
-  }, [_hasHydrated, isLoading, accessToken, refreshToken, setAuth, logout, setLoading]);
+  }, [_hasHydrated, isLoading, accessToken, setAuth, logout, setLoading]);
+
+  // Start/stop TokenManager based on authentication state
+  useEffect(() => {
+    if (!_hasHydrated) {
+      return;
+    }
+
+    if (isAuthenticated) {
+      tokenManager.start();
+    } else {
+      tokenManager.stop();
+    }
+
+    // Cleanup on unmount
+    return () => {
+      tokenManager.stop();
+    };
+  }, [_hasHydrated, isAuthenticated]);
 
   return (
     <I18nProvider>

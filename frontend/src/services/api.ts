@@ -47,6 +47,11 @@ import {
   API_TIMEOUT_MS,
   TOKEN_REFRESH_JITTER_MS,
   TOKEN_REFRESH_THRESHOLD_MS,
+  TOKEN_BACKGROUND_REFRESH_MS,
+  TOKEN_VISIBILITY_DEBOUNCE_MS,
+  TOKEN_RETRY_BASE_MS,
+  TOKEN_RETRY_MAX_MS,
+  TOKEN_MAX_RETRIES,
 } from '../lib/constants';
 
 // Get API URL from env or use relative path (for same-origin requests)
@@ -127,7 +132,8 @@ export const getImageUrl = (
  */
 export const getSignedImageUrl = async (
   poseId: number,
-  imageType: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer'
+  imageType: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer',
+  options: { allowProxyFallback?: boolean } = {}
 ): Promise<string> => {
   try {
     const response = await api.get<{ signed_url: string }>(
@@ -135,9 +141,11 @@ export const getSignedImageUrl = async (
     );
     return response.data.signed_url;
   } catch (error) {
-    // Log the error for debugging, then fall back to base URL (will require auth header)
     logger.warn(`Failed to get signed URL for pose ${poseId} ${imageType}:`, error);
-    return getImageProxyUrl(poseId, imageType);
+    if (options.allowProxyFallback) {
+      return getImageProxyUrl(poseId, imageType);
+    }
+    throw error;
   }
 };
 
@@ -229,9 +237,33 @@ const refreshAccessToken = async (): Promise<string | null> => {
       useAuthStore.getState().setAuth(user, access_token, undefined, expires_in);
 
       return access_token;
-    } catch {
-      // Refresh failed - logout
-      useAuthStore.getState().logout();
+    } catch (error) {
+      // Only logout on actual auth errors (401, 403)
+      // Do NOT logout on rate limiting (429), network errors, or other transient failures
+      // TokenManager's retry logic will handle transient failures
+      if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+
+        if (status === 401 || status === 403) {
+          // Real auth failure - refresh token is invalid/expired
+          logger.warn('Token refresh failed with auth error, logging out');
+          useAuthStore.getState().logout();
+          return null;
+        }
+
+        if (status === 429) {
+          // Rate limited - don't logout, just return null
+          logger.warn('Token refresh rate limited');
+          return null;
+        }
+
+        // Other server errors - don't logout
+        logger.warn(`Token refresh failed with status ${status}`);
+        return null;
+      }
+
+      // Network error or other non-Axios error - don't logout
+      logger.warn('Token refresh failed with network error');
       return null;
     } finally {
       // Clear the promise so future refreshes can proceed
@@ -241,6 +273,464 @@ const refreshAccessToken = async (): Promise<string | null> => {
 
   return refreshPromise;
 };
+
+// =============================================================================
+// TokenManager - Comprehensive token lifecycle management
+// =============================================================================
+
+/**
+ * Message types for cross-tab communication via BroadcastChannel.
+ */
+interface TokenBroadcastMessage {
+  type: 'TOKEN_REFRESHED' | 'LOGOUT';
+  data?: {
+    accessToken?: string;
+    expiresIn?: number;
+  };
+}
+
+/**
+ * TokenManager handles all aspects of token lifecycle:
+ * 1. Silent refresh on startup (when token is expired but refresh cookie exists)
+ * 2. Visibility change refresh (when user returns to tab)
+ * 3. Background periodic refresh (proactive refresh before expiry)
+ * 4. Retry with exponential backoff (resilient to transient failures)
+ * 5. Offline detection (graceful handling when network is unavailable)
+ * 6. Cross-tab coordination (sync logout/refresh across browser tabs)
+ * 7. Heartbeat keepalive (prevent session timeout on inactive tabs)
+ */
+class TokenManager {
+  private static instance: TokenManager | null = null;
+  private backgroundTimer: ReturnType<typeof setInterval> | null = null;
+  private visibilityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private broadcastChannel: BroadcastChannel | null = null;
+  private isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  private retryCount = 0;
+  private isStarted = false;
+
+  // Event handler references for cleanup
+  private boundHandleVisibilityChange: () => void;
+  private boundHandleOnline: () => void;
+  private boundHandleOffline: () => void;
+  private boundHandleStorageEvent: (e: StorageEvent) => void;
+
+  private constructor() {
+    // Bind methods to preserve 'this' context
+    this.boundHandleVisibilityChange = this.handleVisibilityChange.bind(this);
+    this.boundHandleOnline = this.handleOnline.bind(this);
+    this.boundHandleOffline = this.handleOffline.bind(this);
+    this.boundHandleStorageEvent = this.handleStorageEvent.bind(this);
+  }
+
+  /**
+   * Get singleton instance of TokenManager.
+   */
+  static getInstance(): TokenManager {
+    if (!TokenManager.instance) {
+      TokenManager.instance = new TokenManager();
+    }
+    return TokenManager.instance;
+  }
+
+  /**
+   * Start all token management mechanisms.
+   * Should be called when user is authenticated (e.g., from App.tsx on mount).
+   */
+  start(): void {
+    if (this.isStarted) {
+      logger.debug('TokenManager already started');
+      return;
+    }
+
+    logger.debug('TokenManager starting...');
+    this.isStarted = true;
+
+    // Initialize cross-tab communication
+    this.initBroadcastChannel();
+
+    // Start listening to browser events
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.boundHandleVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', this.boundHandleOnline);
+      window.addEventListener('offline', this.boundHandleOffline);
+    }
+
+    // Start background refresh timer
+    this.startBackgroundRefresh();
+
+    logger.info('TokenManager started');
+  }
+
+  /**
+   * Stop all token management mechanisms.
+   * Should be called on logout or when App unmounts.
+   */
+  stop(): void {
+    if (!this.isStarted) {
+      return;
+    }
+
+    logger.debug('TokenManager stopping...');
+    this.isStarted = false;
+
+    // Stop background refresh
+    this.stopBackgroundRefresh();
+
+    // Clear visibility debounce timer
+    if (this.visibilityDebounceTimer) {
+      clearTimeout(this.visibilityDebounceTimer);
+      this.visibilityDebounceTimer = null;
+    }
+
+    // Remove event listeners
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.boundHandleVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', this.boundHandleOnline);
+      window.removeEventListener('offline', this.boundHandleOffline);
+      window.removeEventListener('storage', this.boundHandleStorageEvent);
+    }
+
+    // Close broadcast channel
+    if (this.broadcastChannel) {
+      this.broadcastChannel.close();
+      this.broadcastChannel = null;
+    }
+
+    logger.info('TokenManager stopped');
+  }
+
+  /**
+   * Perform a silent token refresh without user interaction.
+   * Returns true if refresh was successful or not needed, false otherwise.
+   */
+  async silentRefresh(): Promise<boolean> {
+    const state = useAuthStore.getState();
+    const { accessToken, tokenExpiresAt } = state;
+
+    // No token means not authenticated - nothing to refresh
+    if (!accessToken) {
+      logger.debug('silentRefresh: No access token, skipping');
+      return false;
+    }
+
+    // Check if token is expired or close to expiry
+    const isExpired = tokenExpiresAt ? Date.now() >= tokenExpiresAt : false;
+    const shouldRefresh = tokenExpiresAt
+      ? Date.now() >= tokenExpiresAt - getRefreshThreshold()
+      : false;
+
+    // Token is still valid and not close to expiry
+    if (!isExpired && !shouldRefresh) {
+      logger.debug('silentRefresh: Token still valid, skipping');
+      return true;
+    }
+
+    // Check network status
+    if (!this.isOnline) {
+      logger.warn('silentRefresh: Offline, cannot refresh token');
+      state.setRefreshError('Network offline');
+      return false;
+    }
+
+    logger.info('silentRefresh: Attempting token refresh...');
+    state.setRefreshing(true);
+    state.setRefreshError(null);
+
+    try {
+      const newToken = await this.refreshWithRetry();
+
+      if (newToken) {
+        logger.info('silentRefresh: Token refreshed successfully');
+        state.setLastRefreshAt(Date.now());
+        state.setRefreshing(false);
+        this.broadcastTokenRefresh();
+        return true;
+      } else {
+        logger.warn('silentRefresh: Refresh returned null');
+        state.setRefreshing(false);
+        return false;
+      }
+    } catch (error) {
+      logger.error('silentRefresh: Refresh failed', error);
+      state.setRefreshError(error instanceof Error ? error.message : 'Unknown error');
+      state.setRefreshing(false);
+      return false;
+    }
+  }
+
+  /**
+   * Refresh token with exponential backoff retry logic.
+   */
+  private async refreshWithRetry(): Promise<string | null> {
+    this.retryCount = 0;
+
+    while (this.retryCount < TOKEN_MAX_RETRIES) {
+      try {
+        const result = await refreshAccessToken();
+        this.retryCount = 0; // Reset on success
+        return result;
+      } catch (error) {
+        this.retryCount++;
+
+        if (this.retryCount >= TOKEN_MAX_RETRIES) {
+          logger.error(`Token refresh failed after ${TOKEN_MAX_RETRIES} retries`);
+          // Logout and broadcast to other tabs
+          useAuthStore.getState().logout();
+          this.broadcastLogout();
+          return null;
+        }
+
+        const delay = this.calculateBackoff();
+        logger.warn(
+          `Token refresh failed, retry ${this.retryCount}/${TOKEN_MAX_RETRIES} in ${delay}ms`,
+          error
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Calculate exponential backoff delay with jitter.
+   * Formula: min(base * 2^retryCount + jitter, max)
+   */
+  private calculateBackoff(): number {
+    const base = TOKEN_RETRY_BASE_MS * Math.pow(2, this.retryCount);
+    const jitter = Math.random() * TOKEN_RETRY_BASE_MS;
+    return Math.min(base + jitter, TOKEN_RETRY_MAX_MS);
+  }
+
+  /**
+   * Handle visibility change event (tab becomes visible/hidden).
+   * Uses debounce to prevent rapid refresh attempts when switching tabs quickly.
+   */
+  private handleVisibilityChange(): void {
+    // Clear any pending debounce
+    if (this.visibilityDebounceTimer) {
+      clearTimeout(this.visibilityDebounceTimer);
+      this.visibilityDebounceTimer = null;
+    }
+
+    // Only act when tab becomes visible
+    if (document.visibilityState !== 'visible') {
+      return;
+    }
+
+    // Debounce to prevent rapid switches triggering multiple refreshes
+    this.visibilityDebounceTimer = setTimeout(() => {
+      this.visibilityDebounceTimer = null;
+
+      const { isAuthenticated } = useAuthStore.getState();
+      if (!isAuthenticated) {
+        return;
+      }
+
+      logger.debug('Tab became visible, checking token...');
+      this.silentRefresh().catch((error) => {
+        logger.error('Visibility change refresh failed:', error);
+      });
+    }, TOKEN_VISIBILITY_DEBOUNCE_MS);
+  }
+
+  /**
+   * Handle online event - attempt to refresh token when network is restored.
+   */
+  private handleOnline(): void {
+    logger.info('Network online');
+    this.isOnline = true;
+    useAuthStore.getState().setRefreshError(null);
+
+    // Attempt refresh if authenticated
+    const { isAuthenticated } = useAuthStore.getState();
+    if (isAuthenticated) {
+      this.silentRefresh().catch((error) => {
+        logger.error('Online recovery refresh failed:', error);
+      });
+    }
+  }
+
+  /**
+   * Handle offline event - stop refresh attempts.
+   */
+  private handleOffline(): void {
+    logger.warn('Network offline');
+    this.isOnline = false;
+    useAuthStore.getState().setRefreshError('Network offline');
+  }
+
+  /**
+   * Start background periodic refresh.
+   */
+  private startBackgroundRefresh(): void {
+    if (this.backgroundTimer) {
+      return;
+    }
+
+    this.backgroundTimer = setInterval(() => {
+      const { isAuthenticated } = useAuthStore.getState();
+      if (!isAuthenticated) {
+        return;
+      }
+
+      // Only refresh if online and tab is visible (save resources)
+      if (this.isOnline && document.visibilityState === 'visible') {
+        logger.debug('Background refresh check...');
+        this.silentRefresh().catch((error) => {
+          logger.error('Background refresh failed:', error);
+        });
+      }
+    }, TOKEN_BACKGROUND_REFRESH_MS);
+
+    logger.debug(`Background refresh started (interval: ${TOKEN_BACKGROUND_REFRESH_MS}ms)`);
+  }
+
+  /**
+   * Stop background periodic refresh.
+   */
+  private stopBackgroundRefresh(): void {
+    if (this.backgroundTimer) {
+      clearInterval(this.backgroundTimer);
+      this.backgroundTimer = null;
+      logger.debug('Background refresh stopped');
+    }
+  }
+
+  /**
+   * Initialize BroadcastChannel for cross-tab communication.
+   * Falls back to localStorage events for browsers without BroadcastChannel support.
+   */
+  private initBroadcastChannel(): void {
+    // Check for BroadcastChannel support (Safari < 15.4 doesn't support it)
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.broadcastChannel = new BroadcastChannel('yoga-platform-auth');
+        this.broadcastChannel.onmessage = this.handleBroadcastMessage.bind(this);
+        logger.debug('BroadcastChannel initialized');
+      } catch (error) {
+        logger.warn('BroadcastChannel initialization failed, using localStorage fallback', error);
+        this.initStorageFallback();
+      }
+    } else {
+      logger.debug('BroadcastChannel not supported, using localStorage fallback');
+      this.initStorageFallback();
+    }
+  }
+
+  /**
+   * Initialize localStorage fallback for cross-tab communication.
+   * Used when BroadcastChannel is not available.
+   */
+  private initStorageFallback(): void {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', this.boundHandleStorageEvent);
+    }
+  }
+
+  /**
+   * Handle localStorage events for cross-tab sync (fallback for BroadcastChannel).
+   */
+  private handleStorageEvent(event: StorageEvent): void {
+    if (event.key === 'yoga-platform-auth-broadcast' && event.newValue) {
+      try {
+        const message = JSON.parse(event.newValue) as TokenBroadcastMessage;
+        this.handleBroadcastMessage({ data: message } as MessageEvent<TokenBroadcastMessage>);
+      } catch (error) {
+        logger.error('Failed to parse storage event', error);
+      }
+    }
+  }
+
+  /**
+   * Handle incoming broadcast messages from other tabs.
+   */
+  private handleBroadcastMessage(event: MessageEvent<TokenBroadcastMessage>): void {
+    const { type, data } = event.data;
+
+    switch (type) {
+      case 'TOKEN_REFRESHED':
+        // Another tab refreshed the token - update our store
+        if (data?.accessToken) {
+          logger.info('Received token refresh from another tab');
+          useAuthStore.getState().setTokens(
+            data.accessToken,
+            undefined,
+            data.expiresIn
+          );
+          useAuthStore.getState().setLastRefreshAt(Date.now());
+        }
+        break;
+
+      case 'LOGOUT':
+        // Another tab logged out - logout this tab too
+        logger.info('Received logout from another tab');
+        useAuthStore.getState().logout();
+        break;
+
+      default:
+        logger.warn('Unknown broadcast message type:', type);
+    }
+  }
+
+  /**
+   * Broadcast token refresh to other tabs.
+   */
+  private broadcastTokenRefresh(): void {
+    const { accessToken, tokenExpiresAt } = useAuthStore.getState();
+    const expiresIn = tokenExpiresAt
+      ? Math.floor((tokenExpiresAt - Date.now()) / 1000)
+      : undefined;
+
+    const message: TokenBroadcastMessage = {
+      type: 'TOKEN_REFRESHED',
+      data: { accessToken: accessToken || undefined, expiresIn },
+    };
+
+    this.broadcast(message);
+  }
+
+  /**
+   * Broadcast logout to other tabs.
+   */
+  broadcastLogout(): void {
+    const message: TokenBroadcastMessage = { type: 'LOGOUT' };
+    this.broadcast(message);
+  }
+
+  /**
+   * Send a broadcast message to other tabs.
+   */
+  private broadcast(message: TokenBroadcastMessage): void {
+    if (this.broadcastChannel) {
+      this.broadcastChannel.postMessage(message);
+    } else if (typeof localStorage !== 'undefined') {
+      // localStorage fallback
+      localStorage.setItem('yoga-platform-auth-broadcast', JSON.stringify(message));
+      // Remove immediately to allow same message to be sent again
+      localStorage.removeItem('yoga-platform-auth-broadcast');
+    }
+  }
+}
+
+// Lazy singleton getter - avoids initialization issues with store
+export const getTokenManager = (): TokenManager => TokenManager.getInstance();
+
+// For backwards compatibility - lazy initialization
+export const tokenManager = {
+  start: () => getTokenManager().start(),
+  stop: () => getTokenManager().stop(),
+  silentRefresh: () => getTokenManager().silentRefresh(),
+  broadcastLogout: () => getTokenManager().broadcastLogout(),
+};
+
+// Also export class for testing
+export { TokenManager };
 
 /**
  * Get CSRF token from cookie for state-changing requests.
@@ -278,7 +768,16 @@ api.interceptors.request.use(
         config.headers.Authorization = `Bearer ${newToken}`;
         return config;
       }
-      // If refresh returned null, throw error to prevent hanging request
+      // Refresh failed (rate limited, network error, or auth error)
+      // If we still have a token, try using it - the 401 response interceptor
+      // will handle the retry if needed
+      const existingToken = getAuthToken();
+      if (existingToken) {
+        logger.debug('Refresh failed, using existing token');
+        config.headers.Authorization = `Bearer ${existingToken}`;
+        return config;
+      }
+      // No token at all - throw error
       throw new Error('Authentication failed - please log in again');
     }
 
@@ -658,6 +1157,39 @@ export const generateApi = {
       formData.append('schema_file', file);
       if (additionalNotes?.trim()) {
         formData.append('additional_notes', additionalNotes);
+      }
+
+      const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData);
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
+    }
+  },
+
+  /**
+   * Перегенерація зображень з можливістю передачі схеми та референсного фото
+   * Використовується для регенерації існуючих зображень з фідбеком
+   */
+  regenerate: async (options: {
+    schemaFile?: File;
+    referencePhoto: File;
+    additionalNotes?: string;
+  }): Promise<GenerateResponse> => {
+    try {
+      const formData = new FormData();
+
+      // Primary source - use schema if available, otherwise reference photo
+      if (options.schemaFile) {
+        formData.append('schema_file', options.schemaFile);
+        // Also send reference photo for context
+        formData.append('reference_photo', options.referencePhoto);
+      } else {
+        // No schema - use reference photo as schema
+        formData.append('schema_file', options.referencePhoto);
+      }
+
+      if (options.additionalNotes?.trim()) {
+        formData.append('additional_notes', options.additionalNotes);
       }
 
       const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData);

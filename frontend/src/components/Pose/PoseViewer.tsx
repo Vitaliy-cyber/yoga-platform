@@ -6,13 +6,13 @@ import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { VisuallyHidden } from "../ui/visually-hidden";
 import { Activity, Download, Eye, Layers, Loader2, X } from "lucide-react";
 import type { Pose } from "../../types";
-import { getImageUrl } from "../../services/api";
 import { useI18n } from "../../i18n";
 import { useAppStore } from "../../store/useAppStore";
 import { MuscleOverlay } from "../Anatomy/MuscleOverlay";
 import { cn } from "../../lib/utils";
 import { logger } from "../../lib/logger";
 import { DEFAULT_OVERLAY_OPACITY } from "../../lib/constants";
+import { usePoseImageSrc } from "../../hooks/usePoseImageSrc";
 
 interface PoseViewerProps {
   pose: Pose;
@@ -33,15 +33,18 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
   const addToast = useAppStore((state) => state.addToast);
   const overlayLabel = activeOverlay === "photo" ? t("pose.viewer.photo") : t("pose.viewer.muscles");
 
-  const getActiveImage = () => {
-    if (activeOverlay === "muscles" && pose.muscle_layer_path) {
-      return getImageUrl(pose.muscle_layer_path, pose.id, 'muscle_layer');
-    }
-    if (pose.photo_path) {
-      return getImageUrl(pose.photo_path, pose.id, 'photo');
-    }
-    return null;
-  };
+  const { src: photoSrc, refresh: refreshPhoto } = usePoseImageSrc(
+    pose.photo_path,
+    pose.id,
+    "photo",
+    { enabled: Boolean(pose.photo_path) }
+  );
+  const { src: muscleSrc, refresh: refreshMuscle } = usePoseImageSrc(
+    pose.muscle_layer_path,
+    pose.id,
+    "muscle_layer",
+    { enabled: activeOverlay === "muscles" && Boolean(pose.muscle_layer_path) }
+  );
 
   const hasOverlay = (type: string) => {
     if (type === "muscles") return !!pose.muscle_layer_path;
@@ -49,7 +52,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
   };
 
   const handleDownload = async () => {
-    const imageUrl = getActiveImage();
+    const imageUrl = activeOverlay === "muscles" ? muscleSrc : photoSrc;
     logger.debug("Starting download, URL:", imageUrl);
     if (!imageUrl) {
       logger.warn("No image URL available for download");
@@ -151,13 +154,14 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                 <AnimatePresence mode="wait">
                   <motion.img
                     key={activeOverlay === "photo" ? "photo" : "base"}
-                    src={pose.photo_path ? getImageUrl(pose.photo_path, pose.id, 'photo') : ""}
+                    src={photoSrc || undefined}
                     alt={pose.name}
                     className="max-w-full max-h-full object-contain rounded-lg view-transition-image"
                     initial={{ opacity: 0, scale: 0.98 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 1.02 }}
                     transition={{ duration: 0.3 }}
+                    onError={() => void refreshPhoto(true)}
                   />
                 </AnimatePresence>
 
@@ -165,13 +169,14 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                   {activeOverlay !== "photo" && hasOverlay(activeOverlay) && (
                     <motion.img
                       key={activeOverlay}
-                      src={getActiveImage() || ""}
+                      src={muscleSrc || undefined}
                       alt={`${pose.name} - ${overlayLabel}`}
                       className="absolute inset-0 w-full h-full object-contain rounded-lg"
                       initial={{ opacity: 0 }}
                       animate={{ opacity: overlayOpacity }}
                       exit={{ opacity: 0 }}
                       transition={{ duration: 0.3 }}
+                      onError={() => void refreshMuscle(true)}
                     />
                   )}
                 </AnimatePresence>

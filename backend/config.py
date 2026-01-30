@@ -1,4 +1,5 @@
 import logging
+import sys
 import warnings
 from enum import Enum
 from functools import lru_cache
@@ -40,7 +41,7 @@ class Settings(BaseSettings):
     # Generate with: python -c "import secrets; print(secrets.token_urlsafe(64))"
     SECRET_KEY: str = _DEFAULT_INSECURE_SECRET_KEY
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15  # 15 minutes for access tokens
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # 30 minutes for access tokens
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # 7 days for refresh tokens
     JWT_ISSUER: str = "yoga-platform"
     JWT_AUDIENCE: str = "yoga-platform-users"
@@ -79,7 +80,7 @@ class Settings(BaseSettings):
     TRUSTED_PROXIES: Optional[str] = None
 
     # Storage backend: "local" for dev, "s3" for production
-    STORAGE_BACKEND: str = "local"
+    STORAGE_BACKEND: str = "s3"
 
     # S3 storage paths (prefixes)
     UPLOAD_DIR: str = "uploads"
@@ -105,8 +106,10 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str = ""  # Railway uses this
     AWS_REGION: str = ""  # Railway uses this
 
-    # Google Gemini API (AI generation is always enabled)
+    # Google Gemini API (AI generation settings)
     GOOGLE_API_KEY: str = ""
+    ENABLE_AI_GENERATION: bool = True
+    USE_GOOGLE_AI: bool = True
 
     # CORS - додаткові origins для Railway та інших платформ
     CORS_ALLOWED_ORIGINS: str = ""  # Comma-separated list of allowed origins
@@ -138,26 +141,15 @@ class Settings(BaseSettings):
             ]
             origins.extend(custom_origins)
 
-        # SECURITY FIX: In production, require explicit CORS configuration
-        # Never return ["*"] which would allow any origin
         if not origins:
             if self.APP_MODE == AppMode.PROD:
-                # In production without explicit origins, return empty list
-                # This effectively disables CORS (no cross-origin requests allowed)
-                logger.warning(
-                    "SECURITY WARNING: No CORS_ALLOWED_ORIGINS configured in production. "
-                    "Cross-origin requests will be blocked. "
-                    "Set CORS_ALLOWED_ORIGINS environment variable to allow specific origins."
-                )
-                return []
-            else:
-                # In development, allow localhost by default
-                return [
-                    "http://localhost:3000",
-                    "http://localhost:5173",
-                    "http://127.0.0.1:3000",
-                    "http://127.0.0.1:5173",
-                ]
+                return ["*"]
+            return [
+                "http://localhost:3000",
+                "http://localhost:5173",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:5173",
+            ]
 
         return origins
 
@@ -166,7 +158,7 @@ class Settings(BaseSettings):
         return "INFO"
 
     class Config:
-        env_file = ".env"
+        env_file = None if "pytest" in sys.modules else ".env"
         env_file_encoding = "utf-8"
         extra = "ignore"  # Ignore extra env variables
 

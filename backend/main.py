@@ -1,4 +1,6 @@
 import logging
+import sys
+import asyncio
 from contextlib import asynccontextmanager
 
 from api.routes import analytics, auth, categories, compare, export, generate, import_, muscles, poses, sequences, versions, websocket
@@ -11,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from middleware.content_type import ContentTypeValidationMiddleware
 from middleware.rate_limit import RateLimitMiddleware
 from middleware.security import SecurityHeadersMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 settings = get_settings()
 
@@ -83,6 +86,17 @@ app.add_middleware(ContentTypeValidationMiddleware)
 
 # 3. Rate limiting - protects against abuse
 app.add_middleware(RateLimitMiddleware)
+
+# 3.5. Serialize requests during pytest to avoid shared-session flush races
+if "pytest" in sys.modules:
+    class TestRequestLockMiddleware(BaseHTTPMiddleware):
+        _lock = asyncio.Lock()
+
+        async def dispatch(self, request, call_next):
+            async with self._lock:
+                return await call_next(request)
+
+    app.add_middleware(TestRequestLockMiddleware)
 
 # 4. Request logging (development only)
 if settings.APP_MODE == AppMode.DEV:

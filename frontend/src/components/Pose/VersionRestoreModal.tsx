@@ -59,7 +59,7 @@ export const VersionRestoreModal: React.FC<VersionRestoreModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const handleRestore = async () => {
-    startTransition(() => setIsRestoring(true));
+    void startTransition(() => setIsRestoring(true));
     setError(null);
     try {
       const response: RestoreResponse = await versionsApi.restore(poseId, versionId, {

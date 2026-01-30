@@ -7,8 +7,6 @@ from typing import Optional, Protocol
 import aiofiles
 
 from config import get_settings
-
-settings = get_settings()
 logger = logging.getLogger(__name__)
 
 # Presigned URL expiration time (7 days in seconds)
@@ -106,10 +104,10 @@ class LocalStorage:
 
 def get_storage() -> StorageBackend:
     """Get the appropriate storage backend based on settings."""
+    settings = get_settings()
     if settings.STORAGE_BACKEND == "local":
         return LocalStorage.get_instance()
-    else:
-        return S3Storage.get_instance()
+    return S3Storage.get_instance()
 
 
 try:
@@ -153,28 +151,45 @@ class S3Storage:
         return cls()
 
     def _initialize(self) -> None:
+        settings = get_settings()
         if settings.STORAGE_BACKEND != "s3":
             raise RuntimeError("S3 storage backend is not enabled")
 
+        def _string_setting(name: str, default: str = "") -> str:
+            value = getattr(settings, name, default)
+            return value if isinstance(value, str) else default
+
         # Support both standard S3 and Railway Object Storage variable names
-        self.bucket = settings.S3_BUCKET or settings.BUCKET_NAME
+        self.bucket = _string_setting("S3_BUCKET") or _string_setting("BUCKET_NAME")
 
         if not self.bucket:
-            raise RuntimeError(
-                "S3_BUCKET or BUCKET_NAME is required when using S3 storage"
-            )
+            raise RuntimeError("S3_BUCKET is required")
 
-        self.prefix = settings.S3_PREFIX.strip("/") if settings.S3_PREFIX else ""
+        prefix_value = _string_setting("S3_PREFIX")
+        self.prefix = prefix_value.strip("/") if prefix_value else ""
 
         # Get credentials (support both naming conventions)
-        access_key = settings.S3_ACCESS_KEY_ID or settings.AWS_ACCESS_KEY_ID
-        secret_key = settings.S3_SECRET_ACCESS_KEY or settings.AWS_SECRET_ACCESS_KEY
-        self.region = settings.S3_REGION or settings.AWS_REGION or "us-east-1"
+        access_key = _string_setting("S3_ACCESS_KEY_ID") or _string_setting("AWS_ACCESS_KEY_ID")
+        secret_key = _string_setting("S3_SECRET_ACCESS_KEY") or _string_setting("AWS_SECRET_ACCESS_KEY")
+        self.region = _string_setting("S3_REGION") or _string_setting("AWS_REGION") or "us-east-1"
 
         # Get endpoint URL (for Railway, R2, MinIO etc.)
-        self.endpoint_url = settings.S3_ENDPOINT_URL or settings.BUCKET_ENDPOINT or None
+        endpoint_url = _string_setting("S3_ENDPOINT_URL") or _string_setting("BUCKET_ENDPOINT")
+        self.endpoint_url = endpoint_url or None
         # Public URL for presigned URLs (MinIO in Docker: internal URL != public URL)
-        self.public_url = settings.S3_PUBLIC_URL or None
+        public_url = _string_setting("S3_PUBLIC_URL")
+        self.public_url = public_url or None
+
+        if self.public_url:
+            self.public_base_url = self.public_url.rstrip("/")
+        else:
+            region = self.region or "us-east-1"
+            if region == "us-east-1":
+                self.public_base_url = f"https://{self.bucket}.s3.amazonaws.com"
+            else:
+                self.public_base_url = (
+                    f"https://{self.bucket}.s3.{region}.amazonaws.com"
+                )
 
         # Build S3 client with signature version for compatibility
         client_kwargs = {
@@ -202,6 +217,12 @@ class S3Storage:
             return f"{self.prefix}/{key}"
         return key
 
+    def _build_public_url(self, key: str) -> str:
+        s3_key = key.lstrip("/")
+        if self.prefix and not s3_key.startswith(f"{self.prefix}/"):
+            s3_key = self._build_key(s3_key)
+        return f"{self.public_base_url}/{s3_key}"
+
     def _generate_presigned_url(
         self, s3_key: str, expiration: int = PRESIGNED_URL_EXPIRATION
     ) -> str:
@@ -224,7 +245,7 @@ class S3Storage:
             raise
 
     async def upload_bytes(self, data: bytes, key: str, content_type: str) -> str:
-        """Upload bytes to S3 and return a presigned URL for access."""
+        """Upload bytes to S3 and return a public URL for access."""
         s3_key = self._build_key(key)
         params = {
             "Bucket": self.bucket,
@@ -242,9 +263,8 @@ class S3Storage:
             )
             await asyncio.to_thread(self.client.put_object, **params)
 
-            # Return presigned URL instead of direct URL
-            url = self._generate_presigned_url(s3_key)
-            logger.info("Upload successful, presigned URL generated")
+            url = self._build_public_url(key)
+            logger.info("Upload successful, public URL generated")
             return url
         except Exception as e:
             logger.error(

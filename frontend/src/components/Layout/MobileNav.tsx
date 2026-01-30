@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   Grid,
   Upload,
-  Wand2,
   FolderOpen,
   Sparkles,
   Settings,
@@ -17,6 +16,10 @@ import {
   ChevronUp,
   Sun,
   Moon,
+  Plus,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
 import { useAuthStore } from "../../store/useAuthStore";
@@ -32,12 +35,19 @@ import {
 } from "../ui/sheet";
 import { Button } from "../ui/button";
 import { VisuallyHidden } from "../ui/visually-hidden";
+import { CategoryModal, CategoryEditModal, CategoryDeleteModal } from "../Category";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
+import type { Category } from "../../types";
 
 const navItems = [
   { path: "/", icon: LayoutDashboard, labelKey: "nav.dashboard" },
   { path: "/poses", icon: Grid, labelKey: "nav.gallery" },
   { path: "/upload", icon: Upload, labelKey: "nav.upload" },
-  { path: "/generate", icon: Wand2, labelKey: "nav.generate" },
   { path: "/analytics", icon: BarChart3, labelKey: "nav.analytics" },
 ] as const;
 
@@ -51,12 +61,18 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { categories, theme, toggleTheme } = useAppStore();
+  // Use individual selectors for better re-render optimization and subscription
+  const categories = useAppStore((state) => state.categories);
+  const theme = useAppStore((state) => state.theme);
+  const toggleTheme = useAppStore((state) => state.toggleTheme);
   const { user, logout } = useAuthStore();
   const { t } = useI18n();
   const { startTransition } = useViewTransition();
   const [isOpen, setIsOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<Category | null>(null);
 
   const handleLogout = useCallback(() => {
     logout();
@@ -82,7 +98,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
       <Button
         variant="ghost"
         size="icon"
-        onClick={() => startTransition(() => setIsOpen(true))}
+        onClick={() => void startTransition(() => setIsOpen(true))}
         className="fixed top-3 left-3 z-[45] h-11 w-11 min-h-[44px] min-w-[44px] bg-card/95 backdrop-blur-sm shadow-md border rounded-xl hover:bg-accent active:scale-95 transition-all"
         aria-label={t("nav.open_menu")}
       >
@@ -161,9 +177,22 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
 
             {/* Categories */}
             <section>
-              <h3 className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-3">
-                {t("nav.categories")}
-              </h3>
+              <div className="flex items-center justify-between px-3 mb-3">
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">
+                  {t("nav.categories")}
+                </h3>
+                <button
+                  onClick={() => {
+                    setIsOpen(false);
+                    setShowCategoryModal(true);
+                  }}
+                  className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                  title={t("nav.add_category")}
+                  aria-label={t("nav.add_category")}
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
               {/* Loading state (issue 12) */}
               {isLoading && (
                 <div className="flex items-center justify-center py-4">
@@ -184,7 +213,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
                     // Use URLSearchParams for proper category matching (issue 11)
                     const isActive = currentCategoryId === String(category.id);
                     return (
-                      <li key={category.id}>
+                      <li key={category.id} className="group/item relative">
                         {/* Removed manual onClick - useEffect handles closing on route change (issue 5) */}
                         <NavLink
                           to={`/poses?category=${category.id}`}
@@ -197,16 +226,54 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
                             )
                           }
                         >
-                          <div className="flex items-center gap-3">
-                            <FolderOpen size={18} className="text-muted-foreground" />
-                            <span>{category.name}</span>
+                          <div className="flex items-center gap-3 flex-1 min-w-0">
+                            <FolderOpen size={18} className="text-muted-foreground flex-shrink-0" />
+                            <span className="truncate">{category.name}</span>
                           </div>
-                          {category.pose_count !== undefined && (
-                            <span className="text-xs bg-muted px-2.5 py-1 rounded-full text-muted-foreground">
-                              {category.pose_count}
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {category.pose_count !== undefined && (
+                              <span className="text-xs bg-muted px-2.5 py-1 rounded-full text-muted-foreground">
+                                {category.pose_count}
+                              </span>
+                            )}
+                          </div>
                         </NavLink>
+                        {/* Category Actions Menu */}
+                        <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                className="p-2 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors touch-manipulation"
+                                onClick={(e) => e.preventDefault()}
+                              >
+                                <MoreHorizontal size={16} />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-36">
+                              <DropdownMenuItem
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  setIsOpen(false);
+                                  setEditingCategory(category);
+                                }}
+                              >
+                                <Pencil size={14} className="mr-2" />
+                                {t("category.edit")}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  setIsOpen(false);
+                                  setDeletingCategory(category);
+                                }}
+                                className="text-destructive focus:text-destructive"
+                              >
+                                <Trash2 size={14} className="mr-2" />
+                                {t("category.delete")}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
                       </li>
                     );
                   })}
@@ -251,7 +318,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
                     </button>
                     <button
                       onClick={() => {
-                        startTransition(() => setShowUserMenu(false));
+                        void startTransition(() => setShowUserMenu(false));
                         setIsOpen(false);
                         navigate("/settings");
                       }}
@@ -274,7 +341,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
 
             {/* User Button */}
             <button
-              onClick={() => startTransition(() => setShowUserMenu(!showUserMenu))}
+              onClick={() => void startTransition(() => setShowUserMenu(!showUserMenu))}
               className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-accent active:bg-accent/80 transition-colors text-left min-h-[56px] touch-manipulation"
               aria-label={t("nav.user_settings")}
               aria-expanded={showUserMenu}
@@ -302,6 +369,26 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Category Creation Modal */}
+      <CategoryModal
+        open={showCategoryModal}
+        onOpenChange={setShowCategoryModal}
+      />
+
+      {/* Category Edit Modal */}
+      <CategoryEditModal
+        category={editingCategory}
+        open={!!editingCategory}
+        onOpenChange={(open) => !open && setEditingCategory(null)}
+      />
+
+      {/* Category Delete Modal */}
+      <CategoryDeleteModal
+        category={deletingCategory}
+        open={!!deletingCategory}
+        onOpenChange={(open) => !open && setDeletingCategory(null)}
+      />
     </div>
   );
 };

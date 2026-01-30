@@ -239,6 +239,146 @@ Important rules:
             logger.warning(f"Failed to analyze muscles: {e}")
             return []
 
+    def _build_photo_prompt(
+        self, pose_description: str, additional_notes: Optional[str]
+    ) -> str:
+        prompt = f"""Professional yoga photography. Generate based on the reference pose image.
+
+Pose: {pose_description}
+- Match EXACTLY the pose from the reference image
+- Same body position and viewing angle
+
+Subject requirements:
+- Maintain strict visual consistency across all generations: the subject is always the same fit young woman with a calm demeanor
+- Her physical features, skin tone, and styling must remain identical in every image (character continuity)
+- Athletic woman, natural body proportions
+- HANDS: exactly 5 fingers on each hand, natural hand shape, no extra or fused fingers
+- ARMS: two normal human arms with elbows and wrists in correct positions
+- FEET: exactly 5 toes on each foot
+- Face in natural orientation
+
+Outfit: Clean monochromatic WHITE outfit only:
+- White fitted t-shirt
+- White yoga leggings
+- White head-wrap
+- No logos, no patterns, no text, no contrasting colors
+Background: Pure white seamless background
+Lighting: Soft professional studio lighting
+
+DO NOT generate: extra limbs, fused fingers, distorted hands, extra fingers, mutated body parts
+DO NOT include: logos, text, patterns, watermark"""
+
+        if additional_notes and additional_notes.strip():
+            prompt += f"""
+
+ADDITIONAL USER INSTRUCTIONS (apply these modifications):
+{additional_notes.strip()}"""
+
+        return prompt
+
+    def _build_muscle_prompt(
+        self, pose_description: str, additional_notes: Optional[str], attempt: int
+    ) -> str:
+        base_prompt = f"""Professional anatomical muscle illustration in the style of Frédéric Delavier.
+
+Create an ecorché figure matching EXACTLY the pose, position, and viewing angle of the source image.
+
+Style and anatomy:
+- Visualization of the superficial muscular system only
+- The body is composed of dense, opaque muscle tissue with visible fiber texture
+- Scientific pencil sketch style
+- High contrast, precise myology, hyper-realistic muscle definition
+- Clean pure white background
+
+Color coding (automatic, for any pose):
+- Highlight STRETCHING muscles in RED
+- Highlight CONTRACTING muscles in BLUE
+
+Hard exclusions:
+- NO skeleton, NO visible bones, NO skull, NO ribs, NO spine
+- NO x-ray effect, NO transparent/translucent body
+- NO internal organs
+- NO skin, NO clothing
+- NO text, NO labels, NO watermark
+
+Negative prompt (must not appear): skeleton, bones, skull, ribs, spine, x-ray, transparent, internal organs, translucent body, skin, clothing, text, watermark, bad anatomy, extra limbs, deformed."""
+
+        if attempt == 1:
+            base_prompt += """
+
+IMPORTANT CORRECTION:
+- ABSOLUTELY NO skeleton / bones / x-ray / organs
+- Muscles must be dense and opaque; nothing internal may be visible"""
+        elif attempt >= 2:
+            base_prompt += """
+
+IMPORTANT CORRECTION:
+- Muscles must cover most of the body surface as dense opaque tissue (not minimal contours)
+- Strong contrast between RED (stretching) and BLUE (contracting)
+- Avoid monochrome diagrams or sparse line-art"""
+
+        if additional_notes and additional_notes.strip():
+            base_prompt += f"""
+
+ADDITIONAL USER INSTRUCTIONS (apply these modifications):
+{additional_notes.strip()}"""
+
+        return base_prompt
+
+    @staticmethod
+    def _muscle_image_metrics(image: Image.Image) -> dict[str, float]:
+        import numpy as np
+
+        img = image.convert("RGB")
+        pixels = np.array(img)
+        if pixels.size == 0:
+            return {
+                "nonwhite_ratio": 0.0,
+                "red_ratio": 0.0,
+                "blue_ratio": 0.0,
+                "dark_ratio": 0.0,
+            }
+
+        r = pixels[:, :, 0]
+        g = pixels[:, :, 1]
+        b = pixels[:, :, 2]
+        total = float(r.size)
+
+        nonwhite_mask = (r < 245) | (g < 245) | (b < 245)
+        red_mask = (
+            (r > 180)
+            & (g < 120)
+            & (b < 120)
+            & ((r - g) > 60)
+            & ((r - b) > 60)
+        )
+        blue_mask = (
+            (b > 180)
+            & (r < 120)
+            & (g < 120)
+            & ((b - r) > 60)
+            & ((b - g) > 60)
+        )
+        dark_mask = (r < 80) & (g < 80) & (b < 80)
+
+        return {
+            "nonwhite_ratio": float(np.count_nonzero(nonwhite_mask)) / total,
+            "red_ratio": float(np.count_nonzero(red_mask)) / total,
+            "blue_ratio": float(np.count_nonzero(blue_mask)) / total,
+            "dark_ratio": float(np.count_nonzero(dark_mask)) / total,
+        }
+
+    @classmethod
+    def _is_good_muscle_image(cls, image: Image.Image) -> bool:
+        metrics = cls._muscle_image_metrics(image)
+        colored_ratio = metrics["red_ratio"] + metrics["blue_ratio"]
+        return (
+            metrics["nonwhite_ratio"] >= 0.04
+            and colored_ratio >= 0.003
+            and max(metrics["red_ratio"], metrics["blue_ratio"]) >= 0.001
+            and metrics["dark_ratio"] >= 0.001
+        )
+
     async def _generate_image(
         self,
         prompt: str,
@@ -380,31 +520,7 @@ Important rules:
         # Use the schema as reference to ensure correct pose
         await update_progress(25, "Generating studio photo...")
 
-        photo_prompt = f"""Professional yoga photography. Generate based on the reference pose image.
-
-Pose: {pose_description}
-- Match EXACTLY the pose from the reference image
-- Same body position and viewing angle
-
-Subject requirements:
-- Athletic woman, natural body proportions
-- HANDS: exactly 5 fingers on each hand, natural hand shape, no extra or fused fingers
-- ARMS: two normal human arms with elbows and wrists in correct positions
-- FEET: exactly 5 toes on each foot
-- Face in natural orientation
-
-Outfit: Black yoga attire (sports bra + leggings), barefoot
-Background: Clean white/light gray yoga studio
-Lighting: Soft professional studio lighting
-
-DO NOT generate: extra limbs, fused fingers, distorted hands, extra fingers, mutated body parts"""
-
-        # Add user's additional instructions if provided
-        if additional_notes and additional_notes.strip():
-            photo_prompt += f"""
-
-ADDITIONAL USER INSTRUCTIONS (apply these modifications):
-{additional_notes.strip()}"""
+        photo_prompt = self._build_photo_prompt(pose_description, additional_notes)
 
         photo_img, is_placeholder = await self._generate_image(
             photo_prompt,
@@ -419,39 +535,25 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         # Use the generated photo as reference to ensure consistent pose
         await update_progress(55, "Generating muscle visualization...")
 
-        muscle_prompt = f"""Create an anatomical muscle and skeleton diagram based on EXACTLY this pose from the reference image.
-The figure MUST match the EXACT same pose, position, and angle as shown in the reference photo.
-
-Requirements:
-- SAME body position, arm placement, leg angles as the reference
-- Visible SKELETON/BONES colored pure WHITE (spine, ribs, pelvis, limb bones)
-- ALL muscles shown with BLACK outlines/contours
-- INACTIVE muscles colored GRAY
-- ACTIVE/WORKING muscles engaged in this {pose_description} colored bright RED
-- Clean white or light gray background
-- Medical textbook anatomical illustration style
-- Full body view, anatomically accurate
-- Educational diagram showing muscle activation and bone structure
-- Style: clean anatomical illustration with clear muscle and bone definition
-
-Color scheme:
-- Bones/skeleton: WHITE
-- Active muscles: RED
-- Inactive muscles: GRAY
-- Outlines: BLACK"""
-
-        # Add user's additional instructions for muscle visualization if provided
-        if additional_notes and additional_notes.strip():
-            muscle_prompt += f"""
-
-ADDITIONAL USER INSTRUCTIONS (apply these modifications):
-{additional_notes.strip()}"""
-
-        muscle_img, is_placeholder = await self._generate_image(
-            muscle_prompt,
-            reference_image_bytes=photo_bytes,
-            reference_mime_type="image/png",
-        )
+        muscle_img = None
+        is_placeholder = False
+        for attempt in range(3):
+            muscle_prompt = self._build_muscle_prompt(
+                pose_description, additional_notes, attempt
+            )
+            muscle_img, is_placeholder = await self._generate_image(
+                muscle_prompt,
+                reference_image_bytes=photo_bytes,
+                reference_mime_type="image/png",
+            )
+            if is_placeholder:
+                break
+            if self._is_good_muscle_image(muscle_img):
+                break
+            metrics = self._muscle_image_metrics(muscle_img)
+            logger.info(
+                f"Muscle image quality check failed (attempt {attempt + 1}/3): {metrics}"
+            )
         muscle_bytes = self._image_to_bytes(muscle_img)
         used_placeholders = used_placeholders or is_placeholder
         logger.info("Muscles generated")
@@ -505,8 +607,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         await update_progress(25, "Generating studio photo...")
 
         photo_img, is_placeholder = await self._generate_image(
-            f"Professional yoga studio photograph, fit woman performing {pose_description}, "
-            f"black yoga outfit, clean white background, soft studio lighting, full body shot"
+            self._build_photo_prompt(pose_description, None)
         )
         photo_bytes = self._image_to_bytes(photo_img)
         used_placeholders = used_placeholders or is_placeholder
@@ -515,25 +616,23 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         # Step 3: Generate muscle visualization (55%)
         await update_progress(55, "Generating muscle visualization...")
 
-        muscle_prompt = f"""Create an anatomical muscle and skeleton diagram based on EXACTLY this pose from the reference image.
-The figure MUST match the EXACT same pose, position, and angle as shown in the reference photo.
-
-Requirements:
-- SAME body position, arm placement, leg angles as the reference
-- Visible SKELETON/BONES colored pure WHITE (spine, ribs, pelvis, limb bones)
-- ALL muscles shown with BLACK outlines/contours
-- INACTIVE muscles colored GRAY
-- ACTIVE/WORKING muscles engaged in this {pose_description} colored bright RED
-- Clean white or light gray background
-- Medical textbook anatomical illustration style
-- Full body view, anatomically accurate
-- Educational diagram showing muscle activation and bone structure"""
-
-        muscle_img, is_placeholder = await self._generate_image(
-            muscle_prompt,
-            reference_image_bytes=photo_bytes,
-            reference_mime_type="image/png",
-        )
+        muscle_img = None
+        is_placeholder = False
+        for attempt in range(3):
+            muscle_prompt = self._build_muscle_prompt(pose_description, None, attempt)
+            muscle_img, is_placeholder = await self._generate_image(
+                muscle_prompt,
+                reference_image_bytes=photo_bytes,
+                reference_mime_type="image/png",
+            )
+            if is_placeholder:
+                break
+            if self._is_good_muscle_image(muscle_img):
+                break
+            metrics = self._muscle_image_metrics(muscle_img)
+            logger.info(
+                f"Muscle image quality check failed (attempt {attempt + 1}/3): {metrics}"
+            )
         muscle_bytes = self._image_to_bytes(muscle_img)
         used_placeholders = used_placeholders or is_placeholder
         logger.info("Muscles generated")

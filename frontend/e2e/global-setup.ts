@@ -3,10 +3,9 @@
  *
  * This file runs ONCE before all tests to:
  * 1. Authenticate with the test token
- * 2. Fetch EXISTING data (categories, poses, sequences)
- * 3. Save data IDs for use in tests
- *
- * NO FAKE DATA IS CREATED - tests work with real existing data!
+ * 2. Create data for signed image tests
+ * 3. Fetch existing data (categories, poses, sequences)
+ * 4. Save data IDs for use in tests
  */
 
 import fs from 'fs';
@@ -15,6 +14,9 @@ import { fileURLToPath } from 'url';
 import {
   login,
   fetchExistingData,
+  createCategory,
+  createPose,
+  uploadPoseSchema,
   type TestDataStore,
 } from './test-api.js';
 
@@ -35,12 +37,30 @@ async function globalSetup(): Promise<void> {
     console.log('Step 1: Authenticating...');
     await login();
 
-    // 2. Fetch existing data (NO CREATION!)
-    console.log('\nStep 2: Fetching existing data...');
-    const testData = await fetchExistingData();
+    // 2. Create signed image test data
+    console.log('\nStep 2: Creating signed image test data...');
+    const uniqueSuffix = Date.now().toString();
+    const category = await createCategory({
+      name: `E2E Signed Images ${uniqueSuffix}`,
+      description: 'E2E signed image tests',
+    });
+    const pose = await createPose({
+      code: `E2EIMG${uniqueSuffix.slice(-6)}`,
+      name: 'E2E Signed Image Pose',
+      category_id: category.id,
+    });
+    const pngBase64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=';
+    const pngBytes = Buffer.from(pngBase64, 'base64');
+    await uploadPoseSchema(pose.id, pngBytes, 'schema.png', 'image/png');
 
-    // 3. Save test data to file for use in tests
-    console.log('\nStep 3: Saving test data info...');
+    // 3. Fetch existing data
+    console.log('\nStep 3: Fetching existing data...');
+    const testData = await fetchExistingData();
+    testData.created = { categoryId: category.id, poseId: pose.id };
+
+    // 4. Save test data to file for use in tests
+    console.log('\nStep 4: Saving test data info...');
     saveTestData(testData);
 
     console.log('\n========================================');

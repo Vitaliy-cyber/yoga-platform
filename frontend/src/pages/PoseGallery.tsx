@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { PoseCard, PoseFilters, PoseViewer, GenerateModal } from "../components/Pose";
-import { categoriesApi, posesApi, getImageUrl } from "../services/api";
+import { PoseCard, PoseFilters, PoseViewer, GenerateModal, PoseImage } from "../components/Pose";
+import { categoriesApi, posesApi } from "../services/api";
 import { useViewTransition } from "../hooks/useViewTransition";
 import { Button } from "../components/ui/button";
 import { Grid3X3, List, Plus, Upload } from "lucide-react";
@@ -181,7 +181,7 @@ export const PoseGallery: React.FC = () => {
           </p>
           <div className="flex items-center gap-1 bg-card rounded-lg border p-1 flex-shrink-0">
             <button
-              onClick={() => startTransition(() => setViewMode("grid"))}
+              onClick={() => void startTransition(() => setViewMode("grid"))}
               className={`p-2.5 rounded-md transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center touch-manipulation ${
                 viewMode === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground active:bg-accent/50"
               }`}
@@ -189,7 +189,7 @@ export const PoseGallery: React.FC = () => {
               <Grid3X3 className="w-4 h-4" />
             </button>
             <button
-              onClick={() => startTransition(() => setViewMode("list"))}
+              onClick={() => void startTransition(() => setViewMode("list"))}
               className={`p-2.5 rounded-md transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center touch-manipulation ${
                 viewMode === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground active:bg-accent/50"
               }`}
@@ -272,10 +272,14 @@ export const PoseGallery: React.FC = () => {
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: Math.min(index * 0.03, 0.2), duration: 0.2 }}
                   >
-                    <img
-                      src={pose.photo_path ? getImageUrl(pose.photo_path, pose.id, 'photo') : pose.schema_path ? getImageUrl(pose.schema_path, pose.id, 'schema') : "/placeholder.jpg"}
+                    <PoseImage
+                      poseId={pose.id}
+                      imageType={pose.photo_path ? "photo" : "schema"}
+                      directPath={pose.photo_path || pose.schema_path}
                       alt={pose.name}
                       className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg object-cover bg-muted flex-shrink-0"
+                      fallbackSrc="/placeholder.jpg"
+                      enabled={Boolean(pose.photo_path || pose.schema_path)}
                     />
                     <div className="flex-1 min-w-0">
                       <h3 className="font-semibold text-base sm:text-lg text-foreground truncate">{pose.name}</h3>

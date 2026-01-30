@@ -40,7 +40,7 @@ from config import get_settings
 from db.database import AsyncSessionLocal
 from models.generation_task import GenerationTask
 from models.user import User
-from services.auth import is_token_blacklisted, verify_token
+from services.auth import decode_token, is_token_blacklisted
 from services.websocket_manager import (
     ConnectionManager,
     ProgressUpdate,
@@ -63,7 +63,7 @@ async def get_user_from_token(token: str) -> Optional[User]:
     if not token:
         return None
 
-    payload = verify_token(token.strip(), expected_type="access")
+    payload = decode_token(token.strip(), expected_type="access")
     if payload is None:
         return None
 

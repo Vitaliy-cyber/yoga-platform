@@ -75,6 +75,10 @@ export interface TestDataStore {
   poses: Pose[];
   sequences: Sequence[];
   muscles: Muscle[];
+  created?: {
+    categoryId?: number;
+    poseId?: number;
+  };
 }
 
 /**
@@ -194,6 +198,64 @@ export async function getSequences(skip = 0, limit = 100): Promise<{ items: Sequ
  */
 export async function getMuscles(): Promise<Muscle[]> {
   return apiRequest<Muscle[]>('GET', `${API_V1_PREFIX}/muscles`);
+}
+
+export async function createCategory(data: { name: string; description?: string }): Promise<Category> {
+  return apiRequest<Category>('POST', `${API_V1_PREFIX}/categories`, data);
+}
+
+export async function createPose(data: { code: string; name: string; category_id?: number; name_en?: string; description?: string }): Promise<Pose> {
+  return apiRequest<Pose>('POST', `${API_V1_PREFIX}/poses`, data);
+}
+
+export async function deletePose(poseId: number): Promise<void> {
+  await apiRequest<void>('DELETE', `${API_V1_PREFIX}/poses/${poseId}`);
+}
+
+export async function deleteCategory(categoryId: number): Promise<void> {
+  await apiRequest<void>('DELETE', `${API_V1_PREFIX}/categories/${categoryId}`);
+}
+
+export async function uploadPoseSchema(
+  poseId: number,
+  buffer: Uint8Array,
+  filename: string,
+  mimeType: string
+): Promise<Pose> {
+  const url = `${API_BASE_URL}${API_V1_PREFIX}/poses/${poseId}/schema`;
+  const form = new FormData();
+  const blob = new Blob([buffer], { type: mimeType });
+  form.append('file', blob, filename);
+
+  const headers: Record<string, string> = {
+    'Accept-Language': 'uk',
+  };
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: form,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`API error ${response.status}: ${errorText}`);
+  }
+
+  return response.json() as Promise<Pose>;
+}
+
+export async function getPoseImageSignedUrl(
+  poseId: number,
+  imageType: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer'
+): Promise<{ signed_url: string; expires_at: number }> {
+  return apiRequest<{ signed_url: string; expires_at: number }>(
+    'GET',
+    `${API_V1_PREFIX}/poses/${poseId}/image/${imageType}/signed-url`
+  );
 }
 
 /**

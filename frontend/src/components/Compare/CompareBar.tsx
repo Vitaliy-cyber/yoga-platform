@@ -4,7 +4,7 @@ import { X, GitCompareArrows, Trash2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { useCompareStore, useSelectedPoseCount } from "../../store/useCompareStore";
 import { useI18n } from "../../i18n";
-import { getImageUrl } from "../../services/api";
+import { PoseImage } from "../Pose";
 
 export const CompareBar: React.FC = () => {
   const { t } = useI18n();
@@ -64,8 +64,10 @@ export const CompareBar: React.FC = () => {
                     >
                       <div className="w-12 h-12 rounded-lg overflow-hidden bg-muted border-2 border-border hover:border-primary/50 transition-colors">
                         {hasPhoto ? (
-                          <img
-                            src={getImageUrl(poseData?.photo_path, poseId, "photo")}
+                          <PoseImage
+                            poseId={poseId}
+                            imageType="photo"
+                            directPath={poseData?.photo_path}
                             alt={poseData?.name || `Pose ${poseId}`}
                             className="w-full h-full object-cover"
                           />

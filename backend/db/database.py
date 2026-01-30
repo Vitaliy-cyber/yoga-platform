@@ -92,6 +92,13 @@ class Base(DeclarativeBase):
     pass
 
 
+# Ensure all models are registered on import
+try:  # pragma: no cover - defensive for optional imports
+    import models  # noqa: F401
+except Exception:
+    pass
+
+
 async def get_db():
     """
     Dependency для отримання сесії БД.

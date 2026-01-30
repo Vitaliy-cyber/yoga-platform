@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   Grid,
   Upload,
-  Wand2,
   FolderOpen,
   Sparkles,
   Settings,
@@ -16,18 +15,29 @@ import {
   ChevronUp,
   Sun,
   Moon,
+  Plus,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
 import { useAuthStore } from "../../store/useAuthStore";
 import { cn } from "../../lib/utils";
 import { useI18n } from "../../i18n";
+import { CategoryModal, CategoryEditModal, CategoryDeleteModal } from "../Category";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
+import type { Category } from "../../types";
 
 const navItems = [
   { path: "/", icon: LayoutDashboard, labelKey: "nav.dashboard" },
   { path: "/poses", icon: Grid, labelKey: "nav.gallery" },
   { path: "/sequences", icon: Layers, labelKey: "nav.sequences" },
   { path: "/upload", icon: Upload, labelKey: "nav.upload" },
-  { path: "/generate", icon: Wand2, labelKey: "nav.generate" },
   { path: "/analytics", icon: BarChart3, labelKey: "nav.analytics" },
 ] as const;
 
@@ -40,10 +50,16 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ className, isLoading = false, error = null }) => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { categories, theme, toggleTheme } = useAppStore();
+  // Use individual selectors for better re-render optimization and subscription
+  const categories = useAppStore((state) => state.categories);
+  const theme = useAppStore((state) => state.theme);
+  const toggleTheme = useAppStore((state) => state.toggleTheme);
   const { user, logout } = useAuthStore();
   const { t } = useI18n();
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<Category | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   const handleLogout = useCallback(() => {
@@ -122,7 +138,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, isLoading = false, 
 
         {/* Categories */}
         <section>
-          <h3 className="px-4 text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-4">{t("nav.categories")}</h3>
+          <div className="flex items-center justify-between px-4 mb-4">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">{t("nav.categories")}</h3>
+            <button
+              onClick={() => setShowCategoryModal(true)}
+              className="p-1 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+              title={t("nav.add_category")}
+              aria-label={t("nav.add_category")}
+            >
+              <Plus size={16} />
+            </button>
+          </div>
           {/* Loading state (issue 12) */}
           {isLoading && (
             <div className="flex items-center justify-center py-4">
@@ -143,7 +169,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, isLoading = false, 
                 // Use URLSearchParams for proper category matching (issue 11)
                 const isActive = currentCategoryId === String(category.id);
                 return (
-                  <li key={category.id}>
+                  <li key={category.id} className="group/item relative">
                     <NavLink
                       to={`/poses?category=${category.id}`}
                       className={() =>
@@ -151,20 +177,57 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, isLoading = false, 
                           "flex items-center justify-between px-4 py-2.5 rounded-lg text-sm transition-colors group",
                           isActive
                             ? "bg-accent/50 text-foreground font-medium"
-                            : "text-muted-foreground hover:text-foreground hover:bg-accent/30"
+                            : "text-muted-foreground hover:text-foreground hover:bg-accent/30",
+                          category.pose_count === 0 && "opacity-50"
                         )
                       }
                     >
-                      <div className="flex items-center gap-3">
-                        <FolderOpen size={16} className="text-primary/70" />
-                        <span>{category.name}</span>
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <FolderOpen size={16} className="text-primary/70 flex-shrink-0" />
+                        <span className="truncate">{category.name}</span>
                       </div>
-                      {category.pose_count !== undefined && (
-                        <span className="text-xs bg-background/50 px-2 py-0.5 rounded-full border border-white/5">
-                          {category.pose_count}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1">
+                        {category.pose_count !== undefined && (
+                          <span className="text-xs bg-background/50 px-2 py-0.5 rounded-full border border-white/5 group-hover/item:mr-7 transition-all">
+                            {category.pose_count}
+                          </span>
+                        )}
+                      </div>
                     </NavLink>
+                    {/* Category Actions Menu */}
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            className="p-1.5 rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                            onClick={(e) => e.preventDefault()}
+                          >
+                            <MoreHorizontal size={14} />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-36">
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setEditingCategory(category);
+                            }}
+                          >
+                            <Pencil size={14} className="mr-2" />
+                            {t("category.edit")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setDeletingCategory(category);
+                            }}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 size={14} className="mr-2" />
+                            {t("category.delete")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </li>
                 );
               })}
@@ -257,6 +320,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ className, isLoading = false, 
           </motion.div>
         </button>
       </div>
+
+      {/* Category Creation Modal */}
+      <CategoryModal
+        open={showCategoryModal}
+        onOpenChange={setShowCategoryModal}
+      />
+
+      {/* Category Edit Modal */}
+      <CategoryEditModal
+        category={editingCategory}
+        open={!!editingCategory}
+        onOpenChange={(open) => !open && setEditingCategory(null)}
+      />
+
+      {/* Category Delete Modal */}
+      <CategoryDeleteModal
+        category={deletingCategory}
+        open={!!deletingCategory}
+        onOpenChange={(open) => !open && setDeletingCategory(null)}
+      />
     </aside>
   );
 };

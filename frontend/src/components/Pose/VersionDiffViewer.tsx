@@ -36,7 +36,7 @@ export const VersionDiffViewer: React.FC<VersionDiffViewerProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const loadComparison = useCallback(async () => {
-    startTransition(() => setIsLoading(true));
+    void startTransition(() => setIsLoading(true));
     setError(null);
     try {
       const data = await versionsApi.diff(poseId, versionId1, versionId2);

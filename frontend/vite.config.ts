@@ -24,6 +24,14 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    sourcemap: false,
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      sourcemap: false,
+    },
+  },
   test: {
     globals: true,
     environment: "jsdom",

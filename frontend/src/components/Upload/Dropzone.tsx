@@ -137,7 +137,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
             </div>
 
             <button
-              onClick={(e) => { e.stopPropagation(); startTransition(() => onClear()); }}
+              onClick={(e) => { e.stopPropagation(); void startTransition(() => onClear()); }}
               className="p-2 hover:bg-destructive/10 text-muted-foreground hover:text-destructive rounded-full transition-colors"
             >
               <X size={20} />

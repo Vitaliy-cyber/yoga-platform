@@ -13,6 +13,7 @@ class AnalyzedMuscleResponse(BaseModel):
 class LayerType(str, Enum):
     PHOTO = "photo"
     MUSCLES = "muscles"
+    SKELETON = "skeleton"
 
 
 class GenerateStatus(str, Enum):
@@ -46,6 +47,7 @@ class GenerateResponse(BaseModel):
     # URLs - студійне фото та body paint м'язи
     photo_url: Optional[str] = None
     muscles_url: Optional[str] = None
+    result_url: Optional[str] = None
     # Warning when placeholders are used due to quota
     quota_warning: bool = False
     # Analyzed muscles with activation levels

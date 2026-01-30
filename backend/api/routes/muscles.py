@@ -182,4 +182,8 @@ async def seed_muscles(
         await db.refresh(muscle)
 
     await db.commit()
-    return [MuscleResponse.model_validate(m) for m in created_muscles]
+
+    # Return full list for idempotent behavior
+    result = await db.execute(select(Muscle).order_by(Muscle.body_part, Muscle.name))
+    muscles = result.scalars().all()
+    return [MuscleResponse.model_validate(m) for m in muscles]

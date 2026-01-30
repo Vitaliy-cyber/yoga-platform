@@ -174,7 +174,11 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_access_token(user_id: int, expires_delta: Optional[timedelta] = None) -> tuple[str, str, datetime]:
+def _create_access_token_data(
+    user_id: int,
+    expires_delta: Optional[timedelta] = None,
+    user_token: Optional[str] = None,
+) -> tuple[str, str, datetime]:
     """
     Create JWT access token for user.
 
@@ -198,13 +202,30 @@ def create_access_token(user_id: int, expires_delta: Optional[timedelta] = None)
         "jti": jti,
         "type": "access",
     }
+    if user_token:
+        to_encode["token"] = user_token
     encoded_jwt = jwt.encode(
         to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM
     )
     return encoded_jwt, jti, expire
 
 
-def create_refresh_token(user_id: int, expires_delta: Optional[timedelta] = None) -> tuple[str, str, datetime]:
+def create_access_token(
+    user_id: int, expires_delta: Optional[timedelta] = None, user_token: Optional[str] = None
+) -> str:
+    """
+    Create JWT access token for user.
+
+    Returns:
+        Encoded JWT string
+    """
+    token, _, _ = _create_access_token_data(user_id, expires_delta, user_token=user_token)
+    return token
+
+
+def _create_refresh_token_data(
+    user_id: int, expires_delta: Optional[timedelta] = None
+) -> tuple[str, str, datetime]:
     """
     Create JWT refresh token for user.
 
@@ -234,7 +255,18 @@ def create_refresh_token(user_id: int, expires_delta: Optional[timedelta] = None
     return encoded_jwt, jti, expire
 
 
-def verify_token(token: str, expected_type: str = "access") -> Optional[dict]:
+def create_refresh_token(user_id: int, expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Create JWT refresh token for user.
+
+    Returns:
+        Encoded JWT string
+    """
+    token, _, _ = _create_refresh_token_data(user_id, expires_delta)
+    return token
+
+
+def decode_token(token: str, expected_type: str = "access") -> Optional[dict]:
     """
     Verify JWT token and return payload if valid.
 
@@ -257,6 +289,31 @@ def verify_token(token: str, expected_type: str = "access") -> Optional[dict]:
             return None
         return payload
     except JWTError:
+        return None
+
+
+def verify_token(token: str, expected_type: str = "access") -> Optional[int]:
+    """
+    Verify JWT token and return user_id if valid.
+
+    Args:
+        token: The JWT token to verify
+        expected_type: Expected token type ("access" or "refresh")
+
+    Returns:
+        User ID if valid, None otherwise
+    """
+    payload = decode_token(token, expected_type=expected_type)
+    if payload is None:
+        return None
+
+    user_id = payload.get("sub")
+    if user_id is None:
+        return None
+
+    try:
+        return int(user_id)
+    except (TypeError, ValueError):
         return None
 
 
@@ -340,14 +397,17 @@ class TokenService:
         user_id: int,
         device_info: Optional[str] = None,
         ip_address: Optional[str] = None,
+        user_token: Optional[str] = None,
     ) -> TokenPair:
         """
         Create a new access + refresh token pair.
 
         Also stores the refresh token hash in the database for validation.
         """
-        access_token, access_jti, access_expires = create_access_token(user_id)
-        refresh_token, refresh_jti, refresh_expires = create_refresh_token(user_id)
+        access_token, access_jti, access_expires = _create_access_token_data(
+            user_id, user_token=user_token
+        )
+        refresh_token, refresh_jti, refresh_expires = _create_refresh_token_data(user_id)
 
         # Store refresh token hash
         token_hash = _hash_token(refresh_token)
@@ -389,7 +449,7 @@ class TokenService:
             HTTPException: If refresh token is invalid or expired
         """
         # Verify JWT structure and signature
-        payload = verify_token(refresh_token, expected_type="refresh")
+        payload = decode_token(refresh_token, expected_type="refresh")
         if payload is None:
             logger.warning("Invalid or expired refresh token presented")
             raise HTTPException(
@@ -690,13 +750,14 @@ async def get_current_user(
         raise credentials_exception
 
     token = credentials.credentials.strip()
-    payload = verify_token(token, expected_type="access")
+    payload = decode_token(token, expected_type="access")
 
     if payload is None:
         raise credentials_exception
 
     user_id = payload.get("sub")
     jti = payload.get("jti")
+    token_value = payload.get("token")
 
     if user_id is None:
         raise credentials_exception
@@ -717,6 +778,9 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
 
+    if token_value:
+        setattr(user, "token", token_value)
+
     return user
 
 
@@ -731,13 +795,14 @@ async def get_optional_user(
         return None
 
     token = credentials.credentials.strip()
-    payload = verify_token(token, expected_type="access")
+    payload = decode_token(token, expected_type="access")
 
     if payload is None:
         return None
 
     user_id = payload.get("sub")
     jti = payload.get("jti")
+    token_value = payload.get("token")
 
     if user_id is None:
         return None
@@ -752,7 +817,10 @@ async def get_optional_user(
         return None
 
     result = await db.execute(select(User).where(User.id == user_id))
-    return result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
+    if user and token_value:
+        setattr(user, "token", token_value)
+    return user
 
 
 async def verify_signed_image_request(
@@ -788,15 +856,18 @@ async def verify_signed_image_request(
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        payload = verify_token(token, expected_type="access")
+        payload = decode_token(token, expected_type="access")
         if payload:
             user_id = payload.get("sub")
+            token_value = payload.get("token")
             if user_id:
                 try:
                     user_id = int(user_id)
                     result = await db.execute(select(User).where(User.id == user_id))
                     user = result.scalar_one_or_none()
                     if user:
+                        if token_value:
+                            setattr(user, "token", token_value)
                         return user
                 except (TypeError, ValueError):
                     pass
@@ -856,12 +927,13 @@ async def get_current_user_from_request(
     if not raw_token:
         raise credentials_exception
 
-    payload = verify_token(raw_token.strip(), expected_type="access")
+    payload = decode_token(raw_token.strip(), expected_type="access")
     if payload is None:
         raise credentials_exception
 
     user_id = payload.get("sub")
     jti = payload.get("jti")
+    token_value = payload.get("token")
 
     if user_id is None:
         raise credentials_exception
@@ -879,5 +951,8 @@ async def get_current_user_from_request(
     user = result.scalar_one_or_none()
     if user is None:
         raise credentials_exception
+
+    if token_value:
+        setattr(user, "token", token_value)
 
     return user

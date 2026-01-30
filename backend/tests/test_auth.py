@@ -337,13 +337,13 @@ class TestDataIsolation:
 
         # User 1 should only see their pose
         response1 = await client.get("/api/poses", headers=headers1)
-        poses1 = response1.json()
+        poses1 = response1.json()["items"]
         assert len(poses1) == 1
         assert poses1[0]["code"] == "U1P01"
 
         # User 2 should only see their pose
         response2 = await client.get("/api/poses", headers=headers2)
-        poses2 = response2.json()
+        poses2 = response2.json()["items"]
         assert len(poses2) == 1
         assert poses2[0]["code"] == "U2P01"
 

@@ -6,7 +6,7 @@ import { useSearchPoses } from "../../hooks/usePoses";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
-import { getImageUrl } from "../../services/api";
+import { PoseImage } from "../Pose";
 import { useAuthStore } from "../../store/useAuthStore";
 import { useViewTransition } from "../../hooks/useViewTransition";
 import { useI18n } from "../../i18n";
@@ -141,7 +141,13 @@ export const Header: React.FC = () => {
                         )}
                       >
                         {pose.photo_path ? (
-                          <img src={getImageUrl(pose.photo_path, pose.id, 'photo')} alt={pose.name} className="w-10 h-10 rounded-md object-cover bg-secondary" />
+                          <PoseImage
+                            poseId={pose.id}
+                            imageType="photo"
+                            directPath={pose.photo_path}
+                            alt={pose.name}
+                            className="w-10 h-10 rounded-md object-cover bg-secondary"
+                          />
                         ) : (
                           <div className="w-10 h-10 rounded-md bg-secondary flex items-center justify-center">
                             <Search className="h-4 w-4 text-muted-foreground" />
@@ -171,7 +177,7 @@ export const Header: React.FC = () => {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => startTransition(() => setLocale(locale === "ua" ? "en" : "ua"))}
+            onClick={() => void startTransition(() => setLocale(locale === "ua" ? "en" : "ua"))}
             className="text-muted-foreground hover:text-foreground hover:bg-accent"
             aria-label={t("app.language_toggle")}
           >

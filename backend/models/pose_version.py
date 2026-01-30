@@ -7,7 +7,7 @@ allowing for complete history tracking and version restoration.
 
 from db.database import Base
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 from sqlalchemy.sql import func
 
 
@@ -69,7 +69,11 @@ class PoseVersion(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
-    pose = relationship("Pose", backref="versions")
+    pose = relationship(
+        "Pose",
+        backref=backref("versions", cascade="all, delete-orphan"),
+        passive_deletes=True,
+    )
     changed_by = relationship("User")
 
     def __repr__(self):

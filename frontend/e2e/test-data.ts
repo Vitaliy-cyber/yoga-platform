@@ -86,6 +86,16 @@ export function getAllPoses(): Array<{ id: number; name: string; code: string }>
   return loadTestData().poses;
 }
 
+export function getCreatedPoseId(): number | null {
+  const data = loadTestData();
+  return data.created?.poseId ?? null;
+}
+
+export function getCreatedCategoryId(): number | null {
+  const data = loadTestData();
+  return data.created?.categoryId ?? null;
+}
+
 /**
  * Get all categories
  */

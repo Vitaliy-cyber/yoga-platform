@@ -1,12 +1,12 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Eye, Sparkles, CheckCircle2, ExternalLink, ImageIcon } from "lucide-react";
 import type { PoseListItem } from "../../types";
-import { getImageUrl } from "../../services/api";
 import { useI18n } from "../../i18n";
 import { CompareButton } from "./CompareButton";
+import { usePoseImageSrc } from "../../hooks/usePoseImageSrc";
 
 interface PoseCardProps {
   pose: PoseListItem;
@@ -16,6 +16,8 @@ interface PoseCardProps {
 
 export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) => {
   const [imageError, setImageError] = useState(false);
+  const [forceSchema, setForceSchema] = useState(false);
+  const retryingRef = useRef(false);
   const { t } = useI18n();
 
   const status = pose.photo_path ? "complete" : "draft";
@@ -26,28 +28,72 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
   // Check for actual non-empty paths
   const hasGeneratedPhoto = Boolean(pose.photo_path && pose.photo_path.trim());
   const hasSchema = Boolean(pose.schema_path && pose.schema_path.trim());
-  const showPlaceholder = imageError || (!hasGeneratedPhoto && !hasSchema);
+  const showPhoto = hasGeneratedPhoto && !forceSchema;
+  const showSchema = !showPhoto && hasSchema;
+  const shouldLoadImage = showPhoto || showSchema;
+
+  const imageType = showPhoto ? "photo" : "schema";
+  const directPath = showPhoto ? pose.photo_path : pose.schema_path;
+  const { src, error: signedError, refresh } = usePoseImageSrc(
+    directPath,
+    pose.id,
+    imageType,
+    { enabled: shouldLoadImage }
+  );
+
+  useEffect(() => {
+    setForceSchema(false);
+    setImageError(false);
+  }, [pose.id, pose.photo_path, pose.schema_path]);
+
+  useEffect(() => {
+    if (!signedError) return;
+    if (showPhoto && hasSchema) {
+      setForceSchema(true);
+      setImageError(false);
+    } else {
+      setImageError(true);
+    }
+  }, [signedError, showPhoto, hasSchema]);
+
+  const handleImageError = () => {
+    if (!retryingRef.current) {
+      retryingRef.current = true;
+      void refresh(true).finally(() => {
+        retryingRef.current = false;
+      });
+      return;
+    }
+    if (showPhoto && hasSchema) {
+      setForceSchema(true);
+      setImageError(false);
+      return;
+    }
+    setImageError(true);
+  };
+
+  const showPlaceholder = imageError || !shouldLoadImage || !src;
 
   return (
     <div className="group bg-white rounded-2xl border border-stone-200 overflow-hidden hover:shadow-lg hover:border-stone-300 transition-shadow duration-200">
       <div className="aspect-[4/3] relative overflow-hidden bg-gradient-to-br from-stone-200 to-stone-300">
         {/* Generated photo */}
-        {hasGeneratedPhoto && !imageError && (
+        {showPhoto && !imageError && src && (
           <img
-            src={getImageUrl(pose.photo_path, pose.id, 'photo')}
+            src={src}
             alt={pose.name}
             className="absolute inset-0 w-full h-full object-cover"
-            onError={() => setImageError(true)}
+            onError={handleImageError}
           />
         )}
 
         {/* Schema image */}
-        {!hasGeneratedPhoto && hasSchema && !imageError && (
+        {showSchema && !imageError && src && (
           <img
-            src={getImageUrl(pose.schema_path, pose.id, 'schema')}
+            src={src}
             alt={pose.name}
             className="absolute inset-0 w-full h-full object-contain p-4 bg-white/90"
-            onError={() => setImageError(true)}
+            onError={handleImageError}
           />
         )}
         

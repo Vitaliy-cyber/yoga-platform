@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { posesApi, categoriesApi, getImageUrl, exportApi, downloadBlob } from "../services/api";
+import { posesApi, categoriesApi, exportApi, downloadBlob } from "../services/api";
+import { usePoseImageSrc } from "../hooks/usePoseImageSrc";
 import { useViewTransition } from "../hooks/useViewTransition";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -10,8 +11,9 @@ import { Label } from "../components/ui/label";
 import { Badge } from "../components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { ArrowLeft, Sparkles, Edit2, Save, X, Trash2, Eye, Activity, Download, Loader2, AlertCircle, RefreshCw, FileText } from "lucide-react";
-import { PoseViewer, GenerateModal, VersionHistory, VersionDiffViewer, VersionRestoreModal, VersionDetailModal } from "../components/Pose";
+import { ArrowLeft, Sparkles, Edit2, Save, X, Trash2, Eye, Activity, Download, Loader2, AlertCircle, RefreshCw, FileText, Plus } from "lucide-react";
+import { PoseViewer, GenerateModal, RegenerateModal, VersionHistory, VersionDiffViewer, VersionRestoreModal, VersionDetailModal } from "../components/Pose";
+import { CategoryModal } from "../components/Category/CategoryModal";
 import { MuscleOverlay } from "../components/Anatomy";
 import { ConfirmDialog } from "../components/ui/confirm-dialog";
 import { ErrorBoundary } from "../components/ui/error-boundary";
@@ -43,6 +45,7 @@ const PoseDetailContent: React.FC = () => {
   });
   const [showViewer, setShowViewer] = useState(false);
   const [showGenerateModal, setShowGenerateModal] = useState(false);
+  const [showRegenerateModal, setShowRegenerateModal] = useState(false);
   const [activeTab, setActiveTab] = useState<"photo" | "muscles">("photo");
 
   // Version history state
@@ -56,6 +59,9 @@ const PoseDetailContent: React.FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Category modal state
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+
   // Saving state
   const [isSaving, setIsSaving] = useState(false);
 
@@ -64,6 +70,10 @@ const PoseDetailContent: React.FC = () => {
 
   // Toast notifications
   const addToast = useAppStore((state) => state.addToast);
+
+  const refreshCategories = useCallback(() => {
+    categoriesApi.getAll().then(setCategories).catch(console.error);
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -152,25 +162,25 @@ const PoseDetailContent: React.FC = () => {
     }
   };
 
-  const getActiveImage = () => {
-    if (!pose) return null;
-    if (activeTab === "muscles" && pose.muscle_layer_path) {
-      return getImageUrl(pose.muscle_layer_path, pose.id, 'muscle_layer');
-    }
-    if (pose.photo_path) {
-      return getImageUrl(pose.photo_path, pose.id, 'photo');
-    }
-    return null;
-  };
+  const activeImageType = activeTab === "muscles" ? "muscle_layer" : "photo";
+  const activeDirectPath =
+    activeTab === "muscles" ? pose?.muscle_layer_path : pose?.photo_path;
+  const { src: activeImageSrc, refresh: refreshActiveImage } = usePoseImageSrc(
+    activeDirectPath,
+    pose?.id ?? 0,
+    activeImageType,
+    { enabled: Boolean(pose && activeDirectPath) }
+  );
 
-  const getSchemaImage = () => {
-    if (!pose || !pose.schema_path) return null;
-    // Use direct storage path - Vite proxy forwards /storage to backend static files
-    return pose.schema_path;
-  };
+  const { src: schemaImageSrc, refresh: refreshSchemaImage } = usePoseImageSrc(
+    pose?.schema_path,
+    pose?.id ?? 0,
+    "schema",
+    { enabled: Boolean(pose?.schema_path) }
+  );
 
   const handleDownload = async () => {
-    const imageUrl = getActiveImage();
+    const imageUrl = activeImageSrc;
     if (!imageUrl || !pose) return;
     const response = await fetch(imageUrl);
     const blob = await response.blob();
@@ -274,7 +284,7 @@ const PoseDetailContent: React.FC = () => {
                     <Eye className="w-4 h-4 mr-2" />
                     {t("pose.detail.full_view")}
                   </Button>
-                  <Button onClick={() => setShowGenerateModal(true)} variant="outline">
+                  <Button onClick={() => setShowRegenerateModal(true)} variant="outline">
                     <RefreshCw className="w-4 h-4 mr-2" />
                     {t("pose.detail.regenerate")}
                   </Button>
@@ -317,7 +327,7 @@ const PoseDetailContent: React.FC = () => {
             {pose.photo_path ? (
               <div className="bg-card rounded-2xl border border-border overflow-hidden">
                 <div className="p-4 border-b border-border">
-                  <Tabs value={activeTab} onValueChange={(value) => startTransition(() => setActiveTab(value as "photo" | "muscles"))}>
+                  <Tabs value={activeTab} onValueChange={(value) => void startTransition(() => setActiveTab(value as "photo" | "muscles"))}>
                     <TabsList className="grid grid-cols-2 bg-muted p-1">
                       <TabsTrigger value="photo" className="text-sm">
                         <Eye className="w-4 h-4 mr-1" />
@@ -334,13 +344,14 @@ const PoseDetailContent: React.FC = () => {
                   <AnimatePresence mode="wait">
                     <motion.img
                       key={activeTab}
-                      src={getActiveImage() || pose.photo_path}
+                      src={activeImageSrc || undefined}
                       alt={pose.name}
                       className="w-full rounded-xl view-transition-image"
                       initial={{ opacity: 0, scale: 0.98 }}
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 1.02 }}
                       transition={{ duration: 0.3 }}
+                      onError={() => void refreshActiveImage(true)}
                     />
                   </AnimatePresence>
                 </div>
@@ -365,9 +376,10 @@ const PoseDetailContent: React.FC = () => {
                 <div className="bg-card rounded-2xl border border-border p-6">
                   <h3 className="text-sm font-medium text-muted-foreground mb-4">{t("pose.detail.source_schematic")}</h3>
                   <img
-                    src={getSchemaImage() || ''}
+                    src={schemaImageSrc || undefined}
                     alt={t("pose.file_alt")}
                     className="w-full rounded-xl border border-border"
+                    onError={() => void refreshSchemaImage(true)}
                   />
                 </div>
               )}
@@ -505,6 +517,20 @@ const PoseDetailContent: React.FC = () => {
                             {cat.name}
                           </SelectItem>
                         ))}
+                        <div className="border-t border-border mt-1 pt-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setShowCategoryModal(true);
+                            }}
+                            className="flex items-center gap-2 w-full px-2 py-2 text-sm text-primary hover:bg-accent rounded-sm transition-colors"
+                          >
+                            <Plus size={16} />
+                            {t("nav.add_category")}
+                          </button>
+                        </div>
                       </SelectContent>
                     </Select>
                   ) : (
@@ -573,6 +599,24 @@ const PoseDetailContent: React.FC = () => {
         />
       )}
 
+      {showRegenerateModal && (
+        <RegenerateModal
+          pose={pose}
+          isOpen={showRegenerateModal}
+          onClose={() => setShowRegenerateModal(false)}
+          activeTab={activeTab}
+          onComplete={async () => {
+            // Refresh pose data after regeneration
+            if (id) {
+              const updatedPose = await posesApi.getById(parseInt(id, 10));
+              setPose(updatedPose);
+              // Force version history to reload
+              setVersionHistoryKey((prev) => prev + 1);
+            }
+          }}
+        />
+      )}
+
       {/* Version Detail Modal */}
       {showVersionDetail !== null && (
         <VersionDetailModal
@@ -636,6 +680,13 @@ const PoseDetailContent: React.FC = () => {
         cancelText={t("pose.detail.cancel")}
         variant="danger"
         isLoading={isDeleting}
+      />
+
+      {/* Category Creation Modal */}
+      <CategoryModal
+        open={showCategoryModal}
+        onOpenChange={setShowCategoryModal}
+        onSuccess={refreshCategories}
       />
     </div>
   );

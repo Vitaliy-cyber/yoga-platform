@@ -106,7 +106,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             {cancelText}
           </Button>
           <Button
-            onClick={() => startTransition(() => handleConfirm())}
+            onClick={() => void startTransition(() => handleConfirm())}
             disabled={isLoading}
             className={buttonClass}
           >

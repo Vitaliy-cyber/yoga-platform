@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { User } from '../types';
+import { TOKEN_REFRESH_THRESHOLD_MS } from '../lib/constants';
 
 // Storage key for persisting auth state
 const TOKEN_KEY = 'yoga_auth_token';
@@ -15,6 +16,8 @@ interface AuthState {
   isLoading: boolean;
   isRefreshing: boolean;  // Flag to prevent multiple refresh attempts
   _hasHydrated: boolean;
+  lastRefreshAt: number | null;  // Timestamp of last successful token refresh
+  refreshError: string | null;   // Error message from last refresh attempt
 
   // Actions
   setAuth: (user: User, accessToken: string, refreshToken?: string, expiresIn?: number) => void;
@@ -24,6 +27,8 @@ interface AuthState {
   setRefreshing: (refreshing: boolean) => void;
   updateUser: (user: Partial<User>) => void;
   setHasHydrated: (hasHydrated: boolean) => void;
+  setLastRefreshAt: (timestamp: number | null) => void;
+  setRefreshError: (error: string | null) => void;
   isTokenExpired: () => boolean;
   shouldRefreshToken: () => boolean;
 }
@@ -40,6 +45,8 @@ export const useAuthStore = create<AuthState>()(
       isLoading: true, // Start as loading to check stored auth
       isRefreshing: false,
       _hasHydrated: false,
+      lastRefreshAt: null,
+      refreshError: null,
 
       // Actions
       setAuth: (user, accessToken, refreshToken, expiresIn) => {
@@ -79,6 +86,8 @@ export const useAuthStore = create<AuthState>()(
           isAuthenticated: false,
           isLoading: false,
           isRefreshing: false,
+          lastRefreshAt: null,
+          refreshError: null,
         }),
 
       setLoading: (isLoading) => set({ isLoading }),
@@ -92,6 +101,10 @@ export const useAuthStore = create<AuthState>()(
 
       setHasHydrated: (hasHydrated) => set({ _hasHydrated: hasHydrated }),
 
+      setLastRefreshAt: (timestamp) => set({ lastRefreshAt: timestamp }),
+
+      setRefreshError: (error) => set({ refreshError: error }),
+
       // Check if token is expired
       isTokenExpired: () => {
         const { accessToken, tokenExpiresAt } = get();
@@ -102,12 +115,15 @@ export const useAuthStore = create<AuthState>()(
         return Date.now() >= tokenExpiresAt;
       },
 
-      // Check if token should be refreshed (expires within 1 minute)
+      // Check if token should be refreshed (expires within threshold)
+      // NOTE: We don't check refreshToken here because it's stored in httpOnly cookie,
+      // not in the store. The cookie presence is handled by the TokenManager.
       shouldRefreshToken: () => {
-        const { tokenExpiresAt, refreshToken } = get();
-        if (!tokenExpiresAt || !refreshToken) return false;
-        // Refresh if token expires within 60 seconds
-        return Date.now() >= tokenExpiresAt - 60000;
+        const { tokenExpiresAt, accessToken } = get();
+        // Need both token and expiry to determine refresh timing
+        if (!tokenExpiresAt || !accessToken) return false;
+        // Refresh if token expires within threshold
+        return Date.now() >= tokenExpiresAt - TOKEN_REFRESH_THRESHOLD_MS;
       },
     }),
     {

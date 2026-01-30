@@ -16,8 +16,9 @@ import { Input } from '../ui/input';
 import { Badge } from '../ui/badge';
 import type { Sequence, SequencePose, PoseListItem } from '../../types';
 import { useSequenceStore } from '../../store/useSequenceStore';
-import { posesApi, getImageUrl } from '../../services/api';
+import { posesApi } from '../../services/api';
 import { useI18n } from '../../i18n';
+import { PoseImage } from '../Pose';
 
 interface SequenceBuilderProps {
   sequence: Sequence;
@@ -122,8 +123,10 @@ const DraggableItem: React.FC<DraggableItemProps> = ({
       {/* Image */}
       <div className="w-16 h-12 rounded-lg bg-muted overflow-hidden flex-shrink-0">
         {hasImage ? (
-          <img
-            src={getImageUrl(imageType === 'photo' ? pose.pose_photo_path : pose.pose_schema_path, pose.pose_id, imageType)}
+          <PoseImage
+            poseId={pose.pose_id}
+            imageType={imageType}
+            directPath={imageType === "photo" ? pose.pose_photo_path : pose.pose_schema_path}
             alt={pose.pose_name}
             className="w-full h-full object-cover"
           />
@@ -363,8 +366,10 @@ const PosePicker: React.FC<PosePickerProps> = ({ isOpen, onClose, onSelect, exis
                 >
                   <div className="w-12 h-12 rounded-lg bg-muted overflow-hidden flex-shrink-0">
                     {pose.photo_path || pose.schema_path ? (
-                      <img
-                        src={getImageUrl(pose.photo_path || pose.schema_path, pose.id, pose.photo_path ? 'photo' : 'schema')}
+                      <PoseImage
+                        poseId={pose.id}
+                        imageType={pose.photo_path ? "photo" : "schema"}
+                        directPath={pose.photo_path || pose.schema_path}
                         alt={pose.name}
                         className="w-full h-full object-cover"
                       />

@@ -4,47 +4,14 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
-import { Loader2, Sparkles, Camera, Activity, Lightbulb, Check, Upload, X } from "lucide-react";
+import { Loader2, Sparkles, Camera, Activity, Check, Upload, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
 import { useGenerate } from "../../hooks/useGenerate";
-import { posesApi, getImageUrl } from "../../services/api";
+import { posesApi } from "../../services/api";
 import { useI18n } from "../../i18n";
-
-// Backend progress values:
-// 5% - Initializing
-// 10% - Analyzing pose
-// 30% - Generating photo (starts)
-// 60% - Generating muscles (starts)
-// 100% - Completed
-const steps = [
-  { id: "analyzing", labelKey: "generate.step_analyzing", icon: Lightbulb, progressThreshold: 10 },
-  { id: "generating_photo", labelKey: "generate.step_photo", icon: Camera, progressThreshold: 30 },
-  { id: "generating_muscles", labelKey: "generate.step_muscles", icon: Activity, progressThreshold: 60 },
-] as const;
-
-// Determine which step is active based on progress
-function getStepState(stepIndex: number, progress: number, isComplete: boolean) {
-  const step = steps[stepIndex];
-  const nextStep = steps[stepIndex + 1];
-  
-  if (isComplete) {
-    return "complete";
-  }
-  
-  // Step is complete if progress has passed the NEXT step's threshold (or 100 if last step)
-  const nextThreshold = nextStep?.progressThreshold ?? 100;
-  if (progress >= nextThreshold) {
-    return "complete";
-  }
-  
-  // Step is active if progress is >= this step's threshold but < next threshold
-  if (progress >= step.progressThreshold) {
-    return "active";
-  }
-  
-  return "pending";
-}
+import { generationSteps, getStepState } from "./generation-steps";
+import { usePoseImageSrc } from "../../hooks/usePoseImageSrc";
 
 interface GenerateModalProps {
   pose: Pose | PoseListItem | null;
@@ -111,6 +78,12 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
 
   // Check if pose has existing schema (and it loaded successfully)
   const hasExistingSchema = Boolean(pose?.schema_path && pose.schema_path.trim()) && !schemaLoadError;
+  const { src: schemaSrc, refresh: refreshSchema } = usePoseImageSrc(
+    pose?.schema_path,
+    pose?.id ?? 0,
+    "schema",
+    { enabled: hasExistingSchema }
+  );
   const hasUploadedFile = Boolean(uploadedFile);
   const canGenerate = hasUploadedFile || (hasExistingSchema && !schemaLoadError);
   
@@ -141,6 +114,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
         reset();
         handleClearFile();
         setSchemaLoadError(false);
+        setAdditionalNotes("");
         onClose();
       }
     };
@@ -161,12 +135,15 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       // Mark that generation started in this session
       setGenerationStarted(true);
       
+      // Pass additional notes if provided
+      const notes = additionalNotes.trim() || undefined;
+
       if (uploadedFile) {
         // User uploaded a new file - use it directly
-        await generate(uploadedFile);
+        await generate(uploadedFile, notes);
       } else if (pose?.schema_path) {
         // Use server-side fetch to avoid CORS issues
-        await generateFromPose(pose.id);
+        await generateFromPose(pose.id, notes);
       } else {
         setLocalError(t("generate.error_failed"));
         setGenerationStarted(false);
@@ -184,7 +161,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const handleClose = useCallback((open: boolean) => {
     // Only handle close events (open=false), not open events
     if (open) return;
-    
+
     // Only close if not currently saving
     if (savingRef.current) {
       return;
@@ -193,6 +170,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     handleClearFile();
     setSchemaLoadError(false);
     setGenerationStarted(false);
+    setAdditionalNotes("");
     onClose();
   }, [reset, handleClearFile, onClose]);
 
@@ -244,10 +222,13 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 /* Show existing schema */
                 <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
                   <img
-                    src={getImageUrl(pose.schema_path, pose.id, 'schema')}
+                    src={schemaSrc || ""}
                     alt={t("generate.alt_schematic")}
                     className="max-h-48 mx-auto object-contain"
-                    onError={() => setSchemaLoadError(true)}
+                    onError={() => {
+                      setSchemaLoadError(true);
+                      void refreshSchema(true);
+                    }}
                   />
                 </div>
               ) : (
@@ -333,7 +314,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
             </div>
 
             <div className="space-y-3">
-              {steps.map((step, index) => {
+              {generationSteps.map((step, index) => {
                 const Icon = step.icon;
                 const stepState = getStepState(index, progress, isComplete);
                 const isActive = stepState === "active";

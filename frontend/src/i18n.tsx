@@ -248,6 +248,18 @@ const translations = {
     en: "Cancel",
     ua: "Скасувати",
   },
+  "common.creating": {
+    en: "Creating...",
+    ua: "Створення...",
+  },
+  "common.saving": {
+    en: "Saving...",
+    ua: "Збереження...",
+  },
+  "common.deleting": {
+    en: "Deleting...",
+    ua: "Видалення...",
+  },
   "nav.dashboard": {
     en: "Dashboard",
     ua: "Головна",
@@ -257,8 +269,8 @@ const translations = {
     ua: "Галерея",
   },
   "nav.upload": {
-    en: "Upload",
-    ua: "Завантажити",
+    en: "Create Pose",
+    ua: "Створити позу",
   },
   "nav.generate": {
     en: "AI Generator",
@@ -899,6 +911,10 @@ const translations = {
     en: "Generating muscles",
     ua: "Генерація м'язів",
   },
+  "generate.step_analyzing_muscles": {
+    en: "Analyzing muscles",
+    ua: "Аналіз м'язів",
+  },
   // Muscle names translations
   "muscle.erector_spinae": {
     en: "Erector Spinae",
@@ -1043,6 +1059,59 @@ const translations = {
   "generate.schema_fetch_failed": {
     en: "Failed to fetch schema",
     ua: "Не вдалося завантажити схему",
+  },
+  // Regenerate modal translations
+  "regenerate.title": {
+    en: "Regenerate Image for \"{pose}\"",
+    ua: "Перегенерація зображення для «{pose}»",
+  },
+  "regenerate.description": {
+    en: "Regenerate the muscle visualization with additional instructions.",
+    ua: "Перегенеруйте візуалізацію м'язів з додатковими інструкціями.",
+  },
+  "regenerate.current_image": {
+    en: "Current image",
+    ua: "Поточне зображення",
+  },
+  "regenerate.alt_muscle_image": {
+    en: "Current muscle visualization",
+    ua: "Поточна візуалізація м'язів",
+  },
+  "regenerate.alt_photo_image": {
+    en: "Current photo",
+    ua: "Поточне фото",
+  },
+  "regenerate.no_image": {
+    en: "No muscle visualization available",
+    ua: "Візуалізація м'язів недоступна",
+  },
+  "regenerate.feedback_label": {
+    en: "What should be changed?",
+    ua: "Що потрібно змінити?",
+  },
+  "regenerate.feedback_placeholder": {
+    en: "e.g., make muscles more visible, adjust body position, fix arm placement, highlight different muscle groups...",
+    ua: "наприклад: зробити м'язи більш видимими, скоригувати положення тіла, виправити розташування рук, підсвітити інші групи м'язів...",
+  },
+  "regenerate.feedback_hint": {
+    en: "Describe what you'd like to improve. AI will try to address your feedback.",
+    ua: "Опишіть, що потрібно покращити. AI спробує врахувати ваші побажання.",
+  },
+  "regenerate.feedback_prefix": {
+    en: "User feedback for regeneration: ",
+    ua: "Зворотній зв'язок для перегенерації: ",
+  },
+  "regenerate.start": {
+    en: "Regenerate",
+    ua: "Перегенерувати",
+  },
+  "regenerate.fetch_photo_failed": {
+    en: "Failed to fetch existing photo",
+    ua: "Не вдалося завантажити існуюче фото",
+  },
+  "regenerate.no_source_image": {
+    en: "No source image available for regeneration",
+    ua: "Немає вихідного зображення для перегенерації",
   },
   "upload.title": {
     en: "Create New Pose",
@@ -1215,6 +1284,14 @@ const translations = {
   "generate.connection_lost": {
     en: "Connection lost. Please try again.",
     ua: "З'єднання втрачено. Спробуйте ще раз.",
+  },
+  "generate.refreshing_session": {
+    en: "Refreshing session...",
+    ua: "Оновлення сесії...",
+  },
+  "generate.session_expired": {
+    en: "Session expired. Please log in again.",
+    ua: "Сесія закінчилась. Увійдіть знову.",
   },
   "login.footer": {
     en: "Your poses and categories are private to your account",
@@ -2348,6 +2425,101 @@ const translations = {
     en: "No categories yet",
     ua: "Категорій ще немає",
   },
+  "nav.add_category": {
+    en: "Add category",
+    ua: "Додати категорію",
+  },
+
+  // Category management
+  "category.create_title": {
+    en: "Create Category",
+    ua: "Створити категорію",
+  },
+  "category.create_description": {
+    en: "Add a new category to organize your poses",
+    ua: "Додайте нову категорію для організації ваших поз",
+  },
+  "category.name": {
+    en: "Name",
+    ua: "Назва",
+  },
+  "category.name_placeholder": {
+    en: "e.g., Standing poses",
+    ua: "напр., Стоячі пози",
+  },
+  "category.description": {
+    en: "Description",
+    ua: "Опис",
+  },
+  "category.description_placeholder": {
+    en: "Optional description for this category",
+    ua: "Необов'язковий опис для цієї категорії",
+  },
+  "category.create_button": {
+    en: "Create Category",
+    ua: "Створити категорію",
+  },
+  "category.created_success": {
+    en: "Category created successfully",
+    ua: "Категорію успішно створено",
+  },
+  "category.error_create": {
+    en: "Failed to create category",
+    ua: "Не вдалося створити категорію",
+  },
+  "category.error_name_required": {
+    en: "Category name is required",
+    ua: "Назва категорії обов'язкова",
+  },
+  "category.edit_title": {
+    en: "Edit Category",
+    ua: "Редагувати категорію",
+  },
+  "category.edit_description": {
+    en: "Update the category name and description",
+    ua: "Оновіть назву та опис категорії",
+  },
+  "category.updated_success": {
+    en: "Category updated successfully",
+    ua: "Категорію успішно оновлено",
+  },
+  "category.error_update": {
+    en: "Failed to update category",
+    ua: "Не вдалося оновити категорію",
+  },
+  "category.delete_title": {
+    en: "Delete Category",
+    ua: "Видалити категорію",
+  },
+  "category.delete_description": {
+    en: "Are you sure you want to delete \"{name}\"? This action cannot be undone.",
+    ua: "Ви впевнені, що хочете видалити \"{name}\"? Цю дію неможливо скасувати.",
+  },
+  "category.delete_warning_poses": {
+    en: "This category contains {count} poses. They will become uncategorized.",
+    ua: "Ця категорія містить {count} поз. Вони стануть без категорії.",
+  },
+  "category.delete_button": {
+    en: "Delete",
+    ua: "Видалити",
+  },
+  "category.deleted_success": {
+    en: "Category deleted successfully",
+    ua: "Категорію успішно видалено",
+  },
+  "category.error_delete": {
+    en: "Failed to delete category",
+    ua: "Не вдалося видалити категорію",
+  },
+  "category.edit": {
+    en: "Edit",
+    ua: "Редагувати",
+  },
+  "category.delete": {
+    en: "Delete",
+    ua: "Видалити",
+  },
+
   "nav.skip_to_content": {
     en: "Skip to main content",
     ua: "Перейти до основного вмісту",

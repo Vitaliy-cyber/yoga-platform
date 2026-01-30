@@ -174,7 +174,7 @@ class TestCompleteWorkflows:
 
         # Verify total count
         all_poses = await auth_client.get("/api/poses")
-        assert len(all_poses.json()) == 6
+        assert len(all_poses.json()["items"]) == 6
 
         # Search across categories
         search_response = await auth_client.get("/api/poses/search?q=a")
@@ -379,15 +379,17 @@ class TestPaginationAndFiltering:
 
         # Get first page
         page1 = await auth_client.get("/api/poses?skip=0&limit=10")
-        assert len(page1.json()) == 10
+        page1_data = page1.json()
+        assert len(page1_data["items"]) == 10
 
         # Get second page
         page2 = await auth_client.get("/api/poses?skip=10&limit=10")
-        assert len(page2.json()) == 10
+        page2_data = page2.json()
+        assert len(page2_data["items"]) == 10
 
         # Verify no overlap
-        page1_codes = {p["code"] for p in page1.json()}
-        page2_codes = {p["code"] for p in page2.json()}
+        page1_codes = {p["code"] for p in page1_data["items"]}
+        page2_codes = {p["code"] for p in page2_data["items"]}
         assert page1_codes.isdisjoint(page2_codes)
 
     @pytest.mark.asyncio

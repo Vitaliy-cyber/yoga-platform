@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import get_settings
 from db.database import get_db
 from models.auth_audit import AuthAuditLog
-from models.category import Category
 from models.user import User, hash_user_token
 from schemas.user import TokenResponse, UserLogin, UserResponse, UserUpdate
 from services.auth import (
@@ -76,44 +75,6 @@ def stop_cleanup_task():
         _cleanup_task.cancel()
         logger.info("Stopped periodic token cleanup task")
 
-
-# Default categories to create for new users
-DEFAULT_CATEGORIES = [
-    {"name": "Стоячі пози", "description": "Пози, що виконуються стоячи (Standing poses)"},
-    {"name": "Сидячі пози", "description": "Пози, що виконуються сидячи (Seated poses)"},
-    {"name": "Баланс", "description": "Пози на баланс (Balance poses)"},
-    {"name": "Прогини", "description": "Пози з прогином назад (Backbends)"},
-    {"name": "Нахили", "description": "Нахили вперед (Forward bends)"},
-    {"name": "Скручування", "description": "Пози зі скручуванням (Twists)"},
-    {"name": "Інверсії", "description": "Перевернуті пози (Inversions)"},
-    {"name": "Відновлювальні", "description": "Відновлювальні та розслаблюючі пози (Restorative)"},
-]
-
-
-async def seed_default_categories(db: AsyncSession, user_id: int) -> int:
-    """
-    Create default yoga categories for a new user.
-
-    Args:
-        db: Database session
-        user_id: ID of the user to create categories for
-
-    Returns:
-        Number of categories created
-    """
-    categories_created = 0
-    for cat_data in DEFAULT_CATEGORIES:
-        category = Category(
-            user_id=user_id,
-            name=cat_data["name"],
-            description=cat_data["description"],
-        )
-        db.add(category)
-        categories_created += 1
-
-    await db.flush()
-    logger.info(f"Created {categories_created} default categories for user {user_id}")
-    return categories_created
 
 
 async def verify_csrf(
@@ -227,9 +188,6 @@ async def login(
         await db.flush()
         await db.refresh(user)
 
-        # Create default categories for new user
-        await seed_default_categories(db, user.id)
-
     # Update last login
     user.last_login = datetime.now(timezone.utc)
     await db.flush()
@@ -239,6 +197,7 @@ async def login(
         user_id=user.id,
         device_info=user_agent,
         ip_address=ip_address,
+        user_token=login_data.token,
     )
 
     # Log the login
@@ -258,7 +217,7 @@ async def login(
         secure=settings.APP_MODE.value == "prod",  # HTTPS only in production
         samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        path="/api/auth",
+        path="/api",
     )
 
     # Generate and set CSRF token for Double-Submit Cookie pattern
@@ -275,6 +234,8 @@ async def login(
 
     # Commit all changes (user, refresh token, audit log)
     await db.commit()
+
+    setattr(user, "token", login_data.token)
 
     return TokenPairResponse(
         access_token=tokens.access_token,
@@ -328,8 +289,8 @@ async def refresh_tokens(
         )
 
         # Get user for response
-        from services.auth import verify_token
-        payload = verify_token(tokens.access_token, expected_type="access")
+        from services.auth import decode_token
+        payload = decode_token(tokens.access_token, expected_type="access")
         user_id = int(payload["sub"])
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
@@ -356,7 +317,7 @@ async def refresh_tokens(
             secure=settings.APP_MODE.value == "prod",
             samesite="lax",
             max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-            path="/api/auth",
+            path="/api",
         )
 
         # Regenerate CSRF token on refresh
@@ -438,7 +399,7 @@ async def logout(
     # Clear the cookies
     response.delete_cookie(
         key="refresh_token",
-        path="/api/auth",
+        path="/api",
     )
     response.delete_cookie(
         key="csrf_token",
@@ -480,7 +441,7 @@ async def logout_all(
     # Clear the cookies
     response.delete_cookie(
         key="refresh_token",
-        path="/api/auth",
+        path="/api",
     )
     response.delete_cookie(
         key="csrf_token",

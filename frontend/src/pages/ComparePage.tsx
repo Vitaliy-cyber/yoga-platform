@@ -18,7 +18,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs"
 import { ErrorBoundary } from "../components/ui/error-boundary";
 import { MuscleComparisonChart } from "../components/Compare/MuscleComparisonChart";
 import { useCompareStore } from "../store/useCompareStore";
-import { compareApi, getImageUrl } from "../services/api";
+import { compareApi } from "../services/api";
+import { usePoseImageSrc } from "../hooks/usePoseImageSrc";
 import { useViewTransition } from "../hooks/useViewTransition";
 import { useI18n } from "../i18n";
 import type { ComparisonResult, PoseComparisonItem } from "../types";
@@ -37,6 +38,8 @@ interface ImageComparisonSliderProps {
   rightImage: string;
   leftLabel?: string;
   rightLabel?: string;
+  onLeftError?: () => void;
+  onRightError?: () => void;
 }
 
 const ImageComparisonSlider: React.FC<ImageComparisonSliderProps> = ({
@@ -44,6 +47,8 @@ const ImageComparisonSlider: React.FC<ImageComparisonSliderProps> = ({
   rightImage,
   leftLabel,
   rightLabel,
+  onLeftError,
+  onRightError,
 }) => {
   const { t } = useI18n();
   const [sliderPosition, setSliderPosition] = useState(50);
@@ -123,6 +128,7 @@ const ImageComparisonSlider: React.FC<ImageComparisonSliderProps> = ({
         alt={rightLabel || "Right"}
         className="absolute inset-0 w-full h-full object-cover"
         draggable={false}
+        onError={onRightError}
       />
 
       {/* Left image (clipped) */}
@@ -136,6 +142,7 @@ const ImageComparisonSlider: React.FC<ImageComparisonSliderProps> = ({
           className="absolute inset-0 w-full h-full object-cover"
           style={{ width: `${100 / (sliderPosition / 100)}%`, maxWidth: "none" }}
           draggable={false}
+          onError={onLeftError}
         />
       </div>
 
@@ -274,6 +281,14 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
 
   const hasPhoto = Boolean(pose.photo_path);
   const hasMuscleLayer = Boolean(pose.muscle_layer_path);
+  const activeImageType = showMuscleLayer && hasMuscleLayer ? "muscle_layer" : "photo";
+  const activeDirectPath = showMuscleLayer && hasMuscleLayer ? pose.muscle_layer_path : pose.photo_path;
+  const { src: activeImageSrc, refresh: refreshActiveImage } = usePoseImageSrc(
+    activeDirectPath,
+    pose.id,
+    activeImageType,
+    { enabled: Boolean(activeDirectPath) }
+  );
 
   return (
     <div className={`bg-card rounded-xl border-2 ${colors.ring.replace("ring", "border")} overflow-hidden`}>
@@ -284,17 +299,14 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
             <AnimatePresence mode="wait">
               <motion.img
                 key={showMuscleLayer ? "muscle" : "photo"}
-                src={getImageUrl(
-                  showMuscleLayer && hasMuscleLayer ? pose.muscle_layer_path : pose.photo_path,
-                  pose.id,
-                  showMuscleLayer && hasMuscleLayer ? "muscle_layer" : "photo"
-                )}
+                src={activeImageSrc || undefined}
                 alt={pose.name}
                 className="w-full h-full object-cover"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2 }}
+                onError={() => void refreshActiveImage(true)}
               />
             </AnimatePresence>
 
@@ -305,7 +317,7 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
                   size="sm"
                   variant={!showMuscleLayer ? "default" : "outline"}
                   className="h-7 text-xs"
-                  onClick={() => startTransition(() => setShowMuscleLayer(false))}
+                  onClick={() => void startTransition(() => setShowMuscleLayer(false))}
                 >
                   <ImageIcon className="w-3 h-3 mr-1" />
                   {t("compare.photo")}
@@ -314,7 +326,7 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
                   size="sm"
                   variant={showMuscleLayer ? "default" : "outline"}
                   className="h-7 text-xs"
-                  onClick={() => startTransition(() => setShowMuscleLayer(true))}
+                  onClick={() => void startTransition(() => setShowMuscleLayer(true))}
                 >
                   <Layers className="w-3 h-3 mr-1" />
                   {t("compare.muscles")}
@@ -506,6 +518,20 @@ export const ComparePage: React.FC = () => {
 
   // For image comparison slider (only if 2 poses)
   const canShowSlider = poses.length === 2 && poses[0].photo_path && poses[1].photo_path;
+  const leftSliderPose = poses[0];
+  const rightSliderPose = poses[1];
+  const { src: leftSliderSrc, refresh: refreshLeftSlider } = usePoseImageSrc(
+    leftSliderPose?.photo_path,
+    leftSliderPose?.id ?? 0,
+    "photo",
+    { enabled: Boolean(canShowSlider && leftSliderPose?.photo_path) }
+  );
+  const { src: rightSliderSrc, refresh: refreshRightSlider } = usePoseImageSrc(
+    rightSliderPose?.photo_path,
+    rightSliderPose?.id ?? 0,
+    "photo",
+    { enabled: Boolean(canShowSlider && rightSliderPose?.photo_path) }
+  );
 
   return (
     <div className="min-h-screen bg-background">
@@ -565,7 +591,7 @@ export const ComparePage: React.FC = () => {
           </div>
 
           {/* Comparison tabs */}
-          <Tabs value={activeTab} onValueChange={(value) => startTransition(() => setActiveTab(value))} className="w-full">
+          <Tabs value={activeTab} onValueChange={(value) => void startTransition(() => setActiveTab(value))} className="w-full">
             <TabsList className="grid w-full max-w-md grid-cols-3 mb-6">
               <TabsTrigger value="muscles">{t("compare.tab_muscles")}</TabsTrigger>
               <TabsTrigger value="overlap">{t("compare.tab_overlap")}</TabsTrigger>
@@ -639,10 +665,12 @@ export const ComparePage: React.FC = () => {
                     </p>
                     <div className="max-w-2xl mx-auto">
                       <ImageComparisonSlider
-                        leftImage={getImageUrl(poses[0].photo_path, poses[0].id, "photo")}
-                        rightImage={getImageUrl(poses[1].photo_path, poses[1].id, "photo")}
+                        leftImage={leftSliderSrc || ""}
+                        rightImage={rightSliderSrc || ""}
                         leftLabel={poses[0].name}
                         rightLabel={poses[1].name}
+                        onLeftError={() => void refreshLeftSlider(true)}
+                        onRightError={() => void refreshRightSlider(true)}
                       />
                     </div>
                   </motion.div>

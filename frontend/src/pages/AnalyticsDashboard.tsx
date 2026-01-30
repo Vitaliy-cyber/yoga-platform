@@ -90,7 +90,7 @@ export const AnalyticsDashboard: React.FC = () => {
     // Track request ID to ignore stale responses
     const currentRequestId = ++requestIdRef.current;
 
-    startTransition(() => setIsLoading(true));
+    void startTransition(() => setIsLoading(true));
     setError(null);
 
     try {

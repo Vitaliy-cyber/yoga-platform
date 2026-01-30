@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { Search } from "lucide-react";
+import { Search, Plus } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { useDebounce } from "../../hooks/useDebounce";
+import { CategoryModal } from "../Category";
 
 interface PoseFiltersProps {
   filters: {
@@ -24,6 +25,8 @@ export const PoseFilters: React.FC<PoseFiltersProps> = ({
   searchDebounceMs = 300,
 }) => {
   const { t } = useI18n();
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
+
   const statuses = [
     { value: "all", label: t("pose.filters.all_statuses") },
     { value: "draft", label: t("pose.filters.draft") },
@@ -80,6 +83,20 @@ export const PoseFilters: React.FC<PoseFiltersProps> = ({
                 {cat.name}
               </SelectItem>
             ))}
+            <div className="border-t border-border mt-1 pt-1">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setShowCategoryModal(true);
+                }}
+                className="flex items-center gap-2 w-full px-2 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-sm transition-colors"
+              >
+                <Plus size={16} />
+                {t("nav.add_category")}
+              </button>
+            </div>
           </SelectContent>
         </Select>
 
@@ -99,6 +116,11 @@ export const PoseFilters: React.FC<PoseFiltersProps> = ({
           </SelectContent>
         </Select>
       </div>
+
+      <CategoryModal
+        open={showCategoryModal}
+        onOpenChange={setShowCategoryModal}
+      />
     </div>
   );
 };

@@ -89,7 +89,7 @@ export const Generate: React.FC = () => {
 
   const handleGenerate = async () => {
     if (inputType === 'schematic' && uploadedFile) {
-      await generate(uploadedFile);
+      await generate(uploadedFile, additionalNotes || undefined);
     }
   };
 

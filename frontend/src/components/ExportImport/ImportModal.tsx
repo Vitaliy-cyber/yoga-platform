@@ -172,7 +172,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 {importTypes.map(({ type, label, icon: Icon }) => (
                   <button
                     key={type}
-                    onClick={() => startTransition(() => {
+                    onClick={() => void startTransition(() => {
                       setImportType(type);
                       resetState();
                     })}

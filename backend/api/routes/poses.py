@@ -3,12 +3,14 @@ import logging
 import os
 import uuid
 from typing import List, Optional
+import urllib.parse
 
 import httpx
+import config
 
 logger = logging.getLogger(__name__)
 from db.database import get_db
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
 from models.category import Category
 from models.muscle import Muscle
@@ -16,9 +18,9 @@ from models.pose import Pose, PoseMuscle
 from models.user import User
 from schemas.muscle import PoseMuscleResponse
 from schemas.pose import PaginatedPoseResponse, PoseCreate, PoseListResponse, PoseResponse, PoseUpdate
-from services.auth import get_current_user, get_current_user_from_request
-from services.storage import get_storage
-from sqlalchemy import and_, delete, func, or_, select
+from services.auth import create_signed_image_url, get_current_user, verify_signed_image_request
+from services.storage import LocalStorage, S3Storage, get_storage
+from sqlalchemy import and_, delete, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -57,7 +59,8 @@ async def save_upload_file(file: UploadFile, subdir: str = "") -> str:
 
     content_type = file.content_type or "image/png"
 
-    storage = get_storage()
+    settings = config.get_settings()
+    storage = S3Storage.get_instance() if settings.STORAGE_BACKEND == "s3" else get_storage()
     return await storage.upload_bytes(content, key, content_type)
 
 
@@ -106,28 +109,18 @@ async def get_poses(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Get paginated list of poses for the current user.
-
-    Returns a standardized paginated response with items, total count,
-    skip offset, and limit.
-    """
+    """Get list of poses for the current user."""
     # Base query for user's poses
     base_query = select(Pose).where(Pose.user_id == current_user.id)
 
     if category_id:
         base_query = base_query.where(Pose.category_id == category_id)
 
-    # Get total count
-    count_query = select(func.count()).select_from(base_query.subquery())
-    total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
-
     # Get paginated items
     query = (
         base_query
         .options(selectinload(Pose.category))
-        .order_by(Pose.code)
+        .order_by(desc(Pose.created_at), desc(Pose.id))
         .offset(skip)
         .limit(limit)
     )
@@ -148,6 +141,9 @@ async def get_poses(
         )
         for p in poses
     ]
+
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total = (await db.execute(count_query)).scalar_one()
 
     return PaginatedPoseResponse(
         items=items,
@@ -196,7 +192,7 @@ async def search_poses(
                 ),
             )
         )
-        .order_by(Pose.code)
+        .order_by(desc(Pose.created_at), desc(Pose.id))
         .limit(50)
     )
 
@@ -240,7 +236,7 @@ async def get_poses_by_category(
         select(Pose)
         .options(selectinload(Pose.category))
         .where(and_(Pose.category_id == category_id, Pose.user_id == current_user.id))
-        .order_by(Pose.code)
+        .order_by(desc(Pose.created_at), desc(Pose.id))
     )
 
     result = await db.execute(query)
@@ -330,7 +326,7 @@ async def create_pose(
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail="Pose with this code already exists",
         )
 
@@ -474,7 +470,7 @@ async def update_pose(
             )
             if existing.scalar_one_or_none():
                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
+                    status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Pose with this code already exists",
                 )
 
@@ -530,6 +526,7 @@ async def update_pose(
                 if muscle_data.muscle_id in valid_muscle_ids
             ]
             db.add_all(pose_muscles_to_add)
+            pose.pose_muscles = pose_muscles_to_add
 
         # Оновлення м'язів за назвою (з AI-аналізу)
         elif pose_data.analyzed_muscles is not None:
@@ -558,6 +555,7 @@ async def update_pose(
                 if analyzed.name.lower() in muscles_by_name
             ]
             db.add_all(pose_muscles_to_add)
+            pose.pose_muscles = pose_muscles_to_add
 
         # OPTIMISTIC LOCKING: Increment version on successful update
         # This ensures the next update will see a different version
@@ -649,7 +647,7 @@ async def upload_pose_schema(
 async def get_pose_image(
     pose_id: int,
     image_type: str,
-    current_user: User = Depends(get_current_user_from_request),
+    current_user: User = Depends(verify_signed_image_request),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -695,80 +693,112 @@ async def get_pose_image(
             detail=f"No {image_type} image for this pose",
         )
 
-    # Check if it's a local file path (starts with /storage/)
+    # Prefer storage backend download to handle private S3 and local files
+    storage = get_storage()
     if image_url.startswith("/storage/"):
-        from pathlib import Path
-        import aiofiles
-        import mimetypes
+        storage = LocalStorage.get_instance()
 
-        # Build local file path
-        storage_base = Path(__file__).parent.parent.parent / "storage"
-        local_path = storage_base / image_url[9:]  # Remove "/storage/" prefix
-
-        # SECURITY: Validate resolved path is within storage directory to prevent path traversal
-        try:
-            resolved_path = local_path.resolve()
-            resolved_base = storage_base.resolve()
-            if not str(resolved_path).startswith(str(resolved_base) + os.sep) and resolved_path != resolved_base:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid image path",
-                )
-        except (OSError, ValueError):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid image path",
-            )
-
-        if not local_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Image file not found: {image_url}",
-            )
-
-        try:
-            async with aiofiles.open(local_path, "rb") as f:
-                content = await f.read()
-
-            # Guess content type from file extension
-            content_type, _ = mimetypes.guess_type(str(local_path))
-            if not content_type:
-                content_type = "image/png"
-
-            return Response(
-                content=content,
-                media_type=content_type,
-                headers={
-                    "Cache-Control": "public, max-age=86400",
-                },
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to read local file: {str(e)}",
-            )
-
-    # Fetch image from S3 (remote URL)
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(image_url, timeout=30.0)
-            response.raise_for_status()
+        # LocalStorage cannot handle http(s) URLs; fall back to direct fetch for that case
+        if image_url.startswith("http") and isinstance(storage, LocalStorage):
+            async with httpx.AsyncClient() as client:
+                response = await client.get(image_url, timeout=30.0)
+                response.raise_for_status()
+                content = response.content
+                content_type = response.headers.get("content-type")
+        else:
+            content = await storage.download_bytes(image_url)
+            content_type = None
 
-            # Determine content type
-            content_type = response.headers.get("content-type", "image/jpeg")
+        # Determine content type from URL/path if not provided
+        if not content_type:
+            import mimetypes
 
-            return Response(
-                content=response.content,
-                media_type=content_type,
-                headers={
-                    "Cache-Control": "public, max-age=86400",  # Cache for 1 day
-                },
-            )
+            content_type, _ = mimetypes.guess_type(image_url.split("?")[0])
+        if not content_type:
+            content_type = "image/png"
+
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "private, max-age=86400",
+            },
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image file not found: {image_url}",
+        )
     except httpx.HTTPError as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to fetch image from storage: {str(e)}",
         )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch image from storage: {str(e)}",
+        )
+
+
+@router.get("/{pose_id}/image/{image_type}/signed-url")
+async def get_pose_image_signed_url(
+    pose_id: int,
+    image_type: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a signed URL for image access in <img> tags."""
+    valid_types = ["schema", "photo", "muscle_layer", "skeleton_layer"]
+    if image_type not in valid_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid image type. Must be one of: {valid_types}",
+        )
+
+    query = select(Pose).where(
+        and_(Pose.id == pose_id, Pose.user_id == current_user.id)
+    )
+    result = await db.execute(query)
+    pose = result.scalar_one_or_none()
+
+    if not pose:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pose not found",
+        )
+
+    url_map = {
+        "schema": pose.schema_path,
+        "photo": pose.photo_path,
+        "muscle_layer": pose.muscle_layer_path,
+        "skeleton_layer": pose.skeleton_layer_path,
+    }
+    image_url = url_map.get(image_type)
+    if not image_url:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No {image_type} image for this pose",
+        )
+
+    # Signed URL valid for 10 minutes
+    query_string = create_signed_image_url(
+        pose_id=pose_id,
+        image_type=image_type,
+        user_id=current_user.id,
+        expires_in_seconds=600,
+    )
+    parsed = dict(urllib.parse.parse_qsl(query_string))
+    expires_at = int(parsed.get("expires", "0") or 0)
+
+    base_url = str(request.base_url).rstrip("/")
+    signed_url = f"{base_url}/api/v1/poses/{pose_id}/image/{image_type}?{query_string}"
+    if pose.version:
+        signed_url = f"{signed_url}&v={pose.version}"
+
+    return {"signed_url": signed_url, "expires_at": expires_at}
 
 
 @router.post("/{pose_id}/reanalyze-muscles", response_model=PoseResponse)

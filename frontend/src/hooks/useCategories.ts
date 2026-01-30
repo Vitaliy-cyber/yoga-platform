@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
+import { useAuthStore } from "../store/useAuthStore";
 import { categoriesApi } from "../services/api";
 
 export interface UseCategoriesReturn {
@@ -10,31 +11,23 @@ export interface UseCategoriesReturn {
 
 /**
  * Hook for fetching and managing categories data.
- * Uses AbortController for proper cleanup to prevent memory leaks.
- * Stores categories in the global app store to prevent duplicate API calls.
- * Includes staleness detection for multi-tab scenarios.
+ * Stores categories in the global app store.
  *
- * @returns Object containing loading and error states, plus refetch function
- *
- * @example
- * ```tsx
- * const { isLoading, error, refetch } = useCategories();
- * const { categories } = useAppStore();
- *
- * if (isLoading) return <LoadingSpinner />;
- * if (error) return <ErrorMessage message={error} />;
- * return <CategoryList categories={categories} />;
- * ```
+ * Handles React Strict Mode double-mount by using a ref to track
+ * if a fetch is already in progress.
  */
 export function useCategories(): UseCategoriesReturn {
-  const { categories, setCategories, isCategoriesStale } = useAppStore();
+  const { categories, setCategories, categoriesFetchedAt } = useAppStore();
+  const { isAuthenticated } = useAuthStore();
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const isFetchingRef = useRef(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
-  const fetchCategories = useCallback(async (signal?: AbortSignal) => {
-    // Prevent duplicate requests
+  // Track if fetch is in progress to prevent double-fetches in Strict Mode
+  const isFetchingRef = useRef(false);
+
+  const fetchCategories = useCallback(async () => {
+    // Prevent concurrent fetches
     if (isFetchingRef.current) {
       return;
     }
@@ -44,92 +37,59 @@ export function useCategories(): UseCategoriesReturn {
     setError(null);
 
     try {
-      const data = await categoriesApi.getAll(signal);
-
-      // Only update state if not aborted
-      if (!signal?.aborted) {
-        setCategories(data);
-        setIsLoading(false);
-      }
+      const data = await categoriesApi.getAll();
+      setCategories(data);
     } catch (err) {
-      // Ignore abort errors, they're expected during cleanup
+      // Ignore abort errors
       if (err instanceof Error && err.name === "AbortError") {
-        // Still need to reset loading state and fetching ref
-        setIsLoading(false);
-        isFetchingRef.current = false;
         return;
       }
-
-      // Only update state if not aborted
-      if (!signal?.aborted) {
-        const errorMessage = err instanceof Error ? err.message : "Failed to fetch categories";
-        setError(errorMessage);
-        setIsLoading(false);
-        console.error("Failed to fetch categories:", err);
-      }
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to fetch categories";
+      setError(errorMessage);
+      console.error("Failed to fetch categories:", err);
     } finally {
+      setIsLoading(false);
       isFetchingRef.current = false;
     }
   }, [setCategories]);
 
+  // Fetch on mount if needed and authenticated
   useEffect(() => {
-    // Check if we need to fetch:
-    // 1. No categories loaded yet
-    // 2. OR data is stale (supports multi-tab scenarios)
-    const needsFetch = categories.length === 0 || isCategoriesStale();
-
-    if (!needsFetch) {
+    // Don't fetch if not authenticated
+    if (!isAuthenticated) {
       return;
     }
 
-    // Cancel previous request if any
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+    // Check if we need to fetch
+    const isStale = !categoriesFetchedAt || Date.now() - categoriesFetchedAt > 30000;
+    const needsFetch = categories.length === 0 || isStale;
+
+    if (needsFetch) {
+      fetchCategories();
     }
+  }, [categories.length, categoriesFetchedAt, fetchCategories, isAuthenticated]);
 
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
-    fetchCategories(abortController.signal);
-
-    return () => {
-      abortController.abort();
-    };
-  }, [categories.length, isCategoriesStale, fetchCategories]);
-
-  // Also refetch when tab becomes visible and data is stale
+  // Refetch when tab becomes visible and data is stale
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && isCategoriesStale()) {
-        // Cancel any in-flight request
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-        const abortController = new AbortController();
-        abortControllerRef.current = abortController;
-        fetchCategories(abortController.signal);
+      if (!isAuthenticated) return;
+
+      const isStale = !categoriesFetchedAt || Date.now() - categoriesFetchedAt > 30000;
+      if (document.visibilityState === "visible" && isStale) {
+        fetchCategories();
       }
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [isCategoriesStale, fetchCategories]);
-
-  // Manual refetch function for components that need it
-  const refetch = useCallback(async () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-    await fetchCategories(abortController.signal);
-  }, [fetchCategories]);
+  }, [categoriesFetchedAt, fetchCategories, isAuthenticated]);
 
   return {
     isLoading,
     error,
-    refetch,
+    refetch: fetchCategories,
   };
 }

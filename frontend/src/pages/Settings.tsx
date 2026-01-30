@@ -70,7 +70,7 @@ export const Settings: React.FC = () => {
 
           <div className="flex gap-3">
             <button
-              onClick={() => startTransition(() => setLocale("en"))}
+              onClick={() => void startTransition(() => setLocale("en"))}
               className={cn(
                 "flex-1 py-3 px-4 rounded-xl border-2 transition-all duration-200 text-left",
                 locale === "en"
@@ -82,7 +82,7 @@ export const Settings: React.FC = () => {
               <span className="font-medium text-foreground">English</span>
             </button>
             <button
-              onClick={() => startTransition(() => setLocale("ua"))}
+              onClick={() => void startTransition(() => setLocale("ua"))}
               className={cn(
                 "flex-1 py-3 px-4 rounded-xl border-2 transition-all duration-200 text-left",
                 locale === "ua"

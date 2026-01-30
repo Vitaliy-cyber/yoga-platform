@@ -1,0 +1,146 @@
+import { describe, it, expect, beforeEach, afterEach, vi, beforeAll, afterAll } from "vitest";
+import { setupServer } from "msw/node";
+import { http, HttpResponse } from "msw";
+import { TokenManager } from "./api";
+import { useAuthStore } from "../store/useAuthStore";
+
+const server = setupServer();
+
+const resetTokenManager = () => {
+  (TokenManager as unknown as { instance: TokenManager | null }).instance = null;
+};
+
+const setAuthState = (overrides: Partial<ReturnType<typeof useAuthStore.getState>> = {}) => {
+  useAuthStore.setState({
+    user: { id: 1, name: "Test", created_at: "", last_login: "" },
+    accessToken: "token",
+    tokenExpiresAt: Date.now() + 3_600_000,
+    isAuthenticated: true,
+    isLoading: false,
+    isRefreshing: false,
+    refreshError: null,
+    lastRefreshAt: null,
+    ...overrides,
+  });
+};
+
+beforeAll(() => {
+  server.listen({ onUnhandledRequest: "error" });
+});
+
+afterAll(() => {
+  server.close();
+});
+
+beforeEach(() => {
+  resetTokenManager();
+  server.resetHandlers();
+  setAuthState();
+});
+
+afterEach(() => {
+  const manager = TokenManager.getInstance();
+  manager.stop();
+});
+
+describe("TokenManager", () => {
+  it("skips refresh when token is valid", async () => {
+    let refreshCount = 0;
+    server.use(
+      http.post("http://localhost:3000/api/v1/auth/refresh", () => {
+        refreshCount += 1;
+        return HttpResponse.json({
+          access_token: "new-token",
+          expires_in: 300,
+          user: { id: 1, name: "Test" },
+        });
+      })
+    );
+
+    const manager = TokenManager.getInstance();
+    const result = await manager.silentRefresh();
+
+    expect(result).toBe(true);
+    expect(refreshCount).toBe(0);
+  });
+
+  it("refreshes token when expired", async () => {
+    server.use(
+      http.post("http://localhost:3000/api/v1/auth/refresh", () => {
+        return HttpResponse.json({
+          access_token: "new-token",
+          expires_in: 300,
+          user: { id: 1, name: "Test" },
+        });
+      })
+    );
+
+    setAuthState({ tokenExpiresAt: Date.now() - 1000 });
+
+    const manager = TokenManager.getInstance();
+    const result = await manager.silentRefresh();
+
+    expect(result).toBe(true);
+    expect(useAuthStore.getState().accessToken).toBe("new-token");
+  });
+
+  it("returns false on refresh 400 without throwing", async () => {
+    server.use(
+      http.post("http://localhost:3000/api/v1/auth/refresh", () => {
+        return HttpResponse.json({ detail: "bad" }, { status: 400 });
+      })
+    );
+
+    setAuthState({ tokenExpiresAt: Date.now() - 1000 });
+
+    const manager = TokenManager.getInstance();
+    const result = await manager.silentRefresh();
+
+    expect(result).toBe(false);
+    expect(useAuthStore.getState().isRefreshing).toBe(false);
+  });
+
+  it("returns false when offline", async () => {
+    Object.defineProperty(navigator, "onLine", {
+      value: false,
+      configurable: true,
+    });
+
+    setAuthState({ tokenExpiresAt: Date.now() - 1000 });
+
+    const manager = TokenManager.getInstance();
+    const result = await manager.silentRefresh();
+
+    expect(result).toBe(false);
+    expect(useAuthStore.getState().refreshError).toBe("Network offline");
+
+    Object.defineProperty(navigator, "onLine", {
+      value: true,
+      configurable: true,
+    });
+  });
+
+  it("start is idempotent", () => {
+    const addSpy = vi.spyOn(document, "addEventListener");
+    const intervalSpy = vi.spyOn(global, "setInterval");
+
+    const manager = TokenManager.getInstance();
+    manager.start();
+    manager.start();
+
+    expect(intervalSpy).toHaveBeenCalledTimes(1);
+    expect(addSpy).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+  });
+
+  it("stop clears timers and listeners", () => {
+    const removeSpy = vi.spyOn(document, "removeEventListener");
+    const clearSpy = vi.spyOn(global, "clearInterval");
+
+    const manager = TokenManager.getInstance();
+    manager.start();
+    manager.stop();
+
+    expect(clearSpy).toHaveBeenCalled();
+    expect(removeSpy).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+  });
+});
