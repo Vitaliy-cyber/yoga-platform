@@ -209,6 +209,9 @@ async def login(
         metadata={"is_new_user": is_new_user},
     )
 
+    # Clear legacy cookie path to avoid duplicate refresh_token cookies (path=/api vs path=/)
+    response.delete_cookie(key="refresh_token", path="/api")
+
     # Set refresh token as httpOnly cookie
     response.set_cookie(
         key="refresh_token",
@@ -217,7 +220,7 @@ async def login(
         secure=settings.APP_MODE.value == "prod",  # HTTPS only in production
         samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        path="/api",
+        path="/",
     )
 
     # Generate and set CSRF token for Double-Submit Cookie pattern
@@ -309,6 +312,9 @@ async def refresh_tokens(
             user_agent=user_agent,
         )
 
+        # Clear legacy cookie path to avoid duplicate refresh_token cookies (path=/api vs path=/)
+        response.delete_cookie(key="refresh_token", path="/api")
+
         # Update refresh token cookie
         response.set_cookie(
             key="refresh_token",
@@ -317,7 +323,7 @@ async def refresh_tokens(
             secure=settings.APP_MODE.value == "prod",
             samesite="lax",
             max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-            path="/api",
+            path="/",
         )
 
         # Regenerate CSRF token on refresh
@@ -399,6 +405,10 @@ async def logout(
     # Clear the cookies
     response.delete_cookie(
         key="refresh_token",
+        path="/",
+    )
+    response.delete_cookie(
+        key="refresh_token",
         path="/api",
     )
     response.delete_cookie(
@@ -439,6 +449,10 @@ async def logout_all(
     )
 
     # Clear the cookies
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+    )
     response.delete_cookie(
         key="refresh_token",
         path="/api",

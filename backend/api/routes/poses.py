@@ -793,7 +793,14 @@ async def get_pose_image_signed_url(
     parsed = dict(urllib.parse.parse_qsl(query_string))
     expires_at = int(parsed.get("expires", "0") or 0)
 
-    base_url = str(request.base_url).rstrip("/")
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    if forwarded_proto or forwarded_host:
+        scheme = (forwarded_proto or request.url.scheme).split(",")[0].strip()
+        host = (forwarded_host or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
+        base_url = f"{scheme}://{host}".rstrip("/")
+    else:
+        base_url = str(request.base_url).rstrip("/")
     signed_url = f"{base_url}/api/v1/poses/{pose_id}/image/{image_type}?{query_string}"
     if pose.version:
         signed_url = f"{signed_url}&v={pose.version}"

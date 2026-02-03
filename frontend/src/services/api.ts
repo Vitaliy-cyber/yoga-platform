@@ -57,7 +57,50 @@ import {
 // Get API URL from env or use relative path (for same-origin requests)
 // Remove trailing slashes to prevent double-slash issues (e.g., "https://api.example.com/" + "${API_V1_PREFIX}/poses" = "https://api.example.com/${API_V1_PREFIX}/poses")
 const rawApiUrl = import.meta.env.VITE_API_URL || window.location.origin;
-const API_BASE_URL = rawApiUrl.replace(/\/+$/, '');
+
+const getPageProtocol = (): string => (typeof window !== 'undefined' ? window.location.protocol : 'http:');
+const getPageOrigin = (): string => (typeof window !== 'undefined' ? window.location.origin : '');
+
+const ensureHttpsIfNeeded = (url: string, pageProtocol: string = getPageProtocol()): string => {
+  // Avoid mixed-content: if the app is served over HTTPS, force HTTPS for any http:// URL.
+  if (pageProtocol === 'https:' && url.startsWith('http://')) {
+    return url.replace(/^http:\/\//, 'https://');
+  }
+  return url;
+};
+
+const normalizeApiBaseUrl = (
+  raw: string,
+  opts: { pageOrigin?: string; pageProtocol?: string } = {}
+): string => {
+  const fallback = opts.pageOrigin ?? getPageOrigin();
+  const pageProtocol = opts.pageProtocol ?? getPageProtocol();
+  const input = raw?.trim() ? raw.trim() : fallback;
+
+  try {
+    const url = new URL(input, fallback || undefined);
+
+    // Avoid mixed content on HTTPS pages
+    if (pageProtocol === 'https:' && url.protocol === 'http:') {
+      url.protocol = 'https:';
+    }
+
+    // Normalize base path:
+    // - remove trailing slashes
+    // - if user mistakenly includes /api or /api/v1 in VITE_API_URL, strip it
+    url.pathname = url.pathname.replace(/\/+$/, '');
+    url.pathname = url.pathname.replace(/\/api\/v1$/, '');
+    url.pathname = url.pathname.replace(/\/api$/, '');
+
+    const normalized = `${url.origin}${url.pathname}`.replace(/\/+$/, '');
+    return ensureHttpsIfNeeded(normalized, pageProtocol);
+  } catch {
+    // If it's not a valid URL, fall back to same-origin.
+    return fallback.replace(/\/+$/, '');
+  }
+};
+
+const API_BASE_URL = normalizeApiBaseUrl(rawApiUrl);
 
 // API version prefix - all endpoints use /api/v1/
 const API_V1_PREFIX = '/api/v1';
@@ -116,7 +159,7 @@ export const getImageUrl = (
   }
   // If we have a direct URL (e.g., S3 presigned URL), use it
   if (directPath && (directPath.startsWith('http://') || directPath.startsWith('https://'))) {
-    return directPath;
+    return ensureHttpsIfNeeded(directPath);
   }
   // Fallback to proxy endpoint (requires auth - may not work for <img> tags)
   return getImageProxyUrl(poseId, imageType);
@@ -139,7 +182,7 @@ export const getSignedImageUrl = async (
     const response = await api.get<{ signed_url: string }>(
       `${API_V1_PREFIX}/poses/${poseId}/image/${imageType}/signed-url`
     );
-    return response.data.signed_url;
+    return ensureHttpsIfNeeded(response.data.signed_url);
   } catch (error) {
     logger.warn(`Failed to get signed URL for pose ${poseId} ${imageType}:`, error);
     if (options.allowProxyFallback) {
@@ -147,6 +190,12 @@ export const getSignedImageUrl = async (
     }
     throw error;
   }
+};
+
+// Test-only exports (kept under a stable name to avoid accidental production usage)
+export const __test__ = {
+  ensureHttpsIfNeeded,
+  normalizeApiBaseUrl,
 };
 
 /**
