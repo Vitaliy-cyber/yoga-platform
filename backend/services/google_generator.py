@@ -17,6 +17,7 @@ from config import get_settings
 from services.image_validation import normalize_image_mime_type, sniff_image_mime_type
 from services.pose_fidelity import PoseFidelityEvaluator
 from services.pose_vision_describer import describe_pose_from_image
+from services.storage import get_storage
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -1203,6 +1204,15 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
 
             candidate_bytes = self._image_to_bytes(photo_img)
 
+            # Persist every attempt to disk for later review
+            try:
+                storage = get_storage()
+                attempt_key = f"generated/{task_id}_photo_attempt{attempt + 1}.png"
+                await storage.upload_bytes(candidate_bytes, attempt_key, "image/png")
+                logger.info("Saved fidelity attempt %d to %s", attempt + 1, attempt_key)
+            except Exception as exc:
+                logger.warning("Failed to save fidelity attempt %d: %s", attempt + 1, exc)
+
             # Evaluate pose fidelity against the reference
             try:
                 evaluator = self._get_pose_fidelity_evaluator()
@@ -1273,6 +1283,17 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 raise RuntimeError(
                     "Gemini failed to generate muscle visualization after retries."
                 )
+
+            # Persist every muscle attempt to disk for later review
+            try:
+                storage = get_storage()
+                muscle_candidate_bytes = self._image_to_bytes(muscle_img)
+                attempt_key = f"generated/{task_id}_muscles_attempt{attempt + 1}.png"
+                await storage.upload_bytes(muscle_candidate_bytes, attempt_key, "image/png")
+                logger.info("Saved muscle attempt %d to %s", attempt + 1, attempt_key)
+            except Exception as exc:
+                logger.warning("Failed to save muscle attempt %d: %s", attempt + 1, exc)
+
             metrics = self._muscle_image_metrics(muscle_img)
             score = self._muscle_quality_score(metrics)
             if best_muscle_img is None or score > best_muscle_score:
@@ -1387,6 +1408,17 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 raise RuntimeError(
                     "Gemini failed to generate muscle visualization from text."
                 )
+
+            # Persist every muscle attempt to disk for later review
+            try:
+                storage = get_storage()
+                muscle_candidate_bytes = self._image_to_bytes(muscle_img)
+                attempt_key = f"generated/{task_id}_muscles_attempt{attempt + 1}.png"
+                await storage.upload_bytes(muscle_candidate_bytes, attempt_key, "image/png")
+                logger.info("Saved muscle attempt %d to %s", attempt + 1, attempt_key)
+            except Exception as exc:
+                logger.warning("Failed to save muscle attempt %d: %s", attempt + 1, exc)
+
             metrics = self._muscle_image_metrics(muscle_img)
             score = self._muscle_quality_score(metrics)
             if best_muscle_img is None or score > best_muscle_score:
