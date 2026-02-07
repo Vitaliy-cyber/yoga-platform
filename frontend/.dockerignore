@@ -1,0 +1,17 @@
+node_modules
+dist
+test-results
+playwright-report
+screenshots
+test-screenshots
+e2e
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+.env*
+playwright.*.config.ts
+vitest.config.ts
+coverage
+htmlcov
+.pytest_cache
