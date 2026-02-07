@@ -150,13 +150,18 @@ export class GenerationTransport {
     }
 
     if (this.ws) {
-      if (
-        this.ws.readyState === WebSocket.OPEN ||
-        this.ws.readyState === WebSocket.CONNECTING
-      ) {
-        this.ws.close(1000, "Cleanup");
-      }
+      const oldWs = this.ws;
       this.ws = null;
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
+      if (
+        oldWs.readyState === WebSocket.OPEN ||
+        oldWs.readyState === WebSocket.CONNECTING
+      ) {
+        oldWs.close(1000, "Cleanup");
+      }
     }
 
     this.reconnectAttempt = 0;
@@ -249,8 +254,20 @@ export class GenerationTransport {
     if (this.stopped || isTerminal(this.snapshot.status)) return;
 
     if (this.ws) {
-      this.ws.close(1000, "New connection");
+      const oldWs = this.ws;
       this.ws = null;
+      // Neutralize handlers BEFORE closing to prevent stale onclose/onerror
+      // from triggering reconnection storms.
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
+      if (
+        oldWs.readyState === WebSocket.OPEN ||
+        oldWs.readyState === WebSocket.CONNECTING
+      ) {
+        oldWs.close(1000, "New connection");
+      }
     }
 
     const authState = useAuthStore.getState();

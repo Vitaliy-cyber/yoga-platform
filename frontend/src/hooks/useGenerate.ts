@@ -126,12 +126,17 @@ export function useGenerate() {
       wsSilentFallbackTimeoutRef.current = null;
     }
     if (wsRef.current) {
-      // Only close if not already closed/closing
-      if (wsRef.current.readyState === WebSocket.OPEN ||
-          wsRef.current.readyState === WebSocket.CONNECTING) {
-        wsRef.current.close(1000, "Cleanup");
-      }
+      const oldWs = wsRef.current;
       wsRef.current = null;
+      // Neutralize handlers to prevent stale onclose/onerror callbacks
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
+      if (oldWs.readyState === WebSocket.OPEN ||
+          oldWs.readyState === WebSocket.CONNECTING) {
+        oldWs.close(1000, "Cleanup");
+      }
     }
     taskIdRef.current = null;
     reconnectAttemptRef.current = 0;
@@ -297,9 +302,18 @@ export function useGenerate() {
       return;
     }
 
-    // Close existing connection if any
+    // Close existing connection if any — neutralize handlers first
     if (wsRef.current) {
-      wsRef.current.close(1000, "New connection");
+      const oldWs = wsRef.current;
+      wsRef.current = null;
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
+      if (oldWs.readyState === WebSocket.OPEN ||
+          oldWs.readyState === WebSocket.CONNECTING) {
+        oldWs.close(1000, "New connection");
+      }
     }
 
     // CRITICAL: Ensure token is fresh before WebSocket connection.

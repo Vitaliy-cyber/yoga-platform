@@ -255,7 +255,10 @@ async def websocket_generation_status(
                 break
 
     except Exception as e:
-        logger.error(f"WebSocket error: user={user.id}, task={task_id}, error={e}")
+        logger.error(
+            "WebSocket error: user=%s, task=%s, error_type=%s, error=%s",
+            user.id, task_id, type(e).__name__, e,
+        )
     finally:
         await manager.disconnect(websocket)
 
