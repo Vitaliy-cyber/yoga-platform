@@ -1,5 +1,6 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { usePoseImageSrc } from "../../hooks/usePoseImageSrc";
+import { cn } from "../../lib/utils";
 
 type PoseImageProps = {
   poseId: number;
@@ -11,6 +12,8 @@ type PoseImageProps = {
   onClick?: () => void;
   enabled?: boolean;
 };
+
+const loadedImageSrcCache = new Set<string>();
 
 export const PoseImage: React.FC<PoseImageProps> = ({
   poseId,
@@ -24,7 +27,12 @@ export const PoseImage: React.FC<PoseImageProps> = ({
 }) => {
   const { src, error, refresh } = usePoseImageSrc(directPath, poseId, imageType, { enabled });
   const [retrying, setRetrying] = useState(false);
+  const [loaded, setLoaded] = useState<boolean>(() => Boolean(src && loadedImageSrcCache.has(src)));
   const retryingRef = useRef(false);
+
+  useEffect(() => {
+    setLoaded(Boolean(src && loadedImageSrcCache.has(src)));
+  }, [src]);
 
   const handleError = useCallback(() => {
     if (retryingRef.current || retrying) return;
@@ -36,6 +44,13 @@ export const PoseImage: React.FC<PoseImageProps> = ({
     });
   }, [refresh, retrying]);
 
+  const handleLoad = useCallback(() => {
+    if (src) {
+      loadedImageSrcCache.add(src);
+    }
+    setLoaded(true);
+  }, [src]);
+
   if (error && fallbackSrc) {
     return <img src={fallbackSrc} alt={alt} className={className} onClick={onClick} />;
   }
@@ -45,16 +60,38 @@ export const PoseImage: React.FC<PoseImageProps> = ({
   }
 
   if (!src) {
-    return null;
+    return (
+      <div
+        className={cn("animate-shimmer", className)}
+        role="status"
+        aria-busy="true"
+      >
+        <span className="sr-only">Loading image...</span>
+      </div>
+    );
   }
 
   return (
-    <img
-      src={src}
-      alt={alt}
-      className={className}
-      onClick={onClick}
-      onError={handleError}
-    />
+    <div className={cn("relative overflow-hidden", className)} onClick={onClick}>
+      {!loaded && (
+        <div
+          className="absolute inset-0 animate-shimmer"
+          role="status"
+          aria-busy="true"
+        >
+          <span className="sr-only">Loading image...</span>
+        </div>
+      )}
+      <img
+        src={src}
+        alt={alt}
+        className={cn(
+          "w-full h-full object-cover transition-opacity duration-300",
+          loaded ? "opacity-100" : "opacity-0"
+        )}
+        onError={handleError}
+        onLoad={handleLoad}
+      />
+    </div>
   );
 };

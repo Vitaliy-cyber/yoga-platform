@@ -203,7 +203,7 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({ sequence }) => {
             {/* Progress bar */}
             <div className="relative h-2 bg-card/20 rounded-full overflow-hidden mb-2">
               <div
-                className="absolute inset-y-0 left-0 bg-primary transition-all duration-1000"
+                className="absolute inset-y-0 left-0 bg-primary transition-[width] duration-1000"
                 style={{ width: `${progress}%` }}
               />
             </div>
@@ -228,11 +228,11 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({ sequence }) => {
         >
           <AnimatePresence mode="wait">
             {isMuted ? (
-              <motion.span key="muted" initial={{ scale: 0.8 }} animate={{ scale: 1 }} exit={{ scale: 0.8 }}>
+              <motion.span key="muted" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <VolumeX className="w-5 h-5" />
               </motion.span>
             ) : (
-              <motion.span key="unmuted" initial={{ scale: 0.8 }} animate={{ scale: 1 }} exit={{ scale: 0.8 }}>
+              <motion.span key="unmuted" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <Volume2 className="w-5 h-5" />
               </motion.span>
             )}
@@ -256,11 +256,11 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({ sequence }) => {
         >
           <AnimatePresence mode="wait">
             {isPlaying ? (
-              <motion.span key="pause" initial={{ scale: 0.8 }} animate={{ scale: 1 }} exit={{ scale: 0.8 }}>
+              <motion.span key="pause" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <Pause className="w-6 h-6 text-white" />
               </motion.span>
             ) : (
-              <motion.span key="play" initial={{ scale: 0.8 }} animate={{ scale: 1 }} exit={{ scale: 0.8 }}>
+              <motion.span key="play" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                 <Play className="w-6 h-6 text-white ml-1" />
               </motion.span>
             )}
@@ -290,7 +290,7 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({ sequence }) => {
       {/* Overall progress */}
       <div className="h-1 bg-muted rounded-full overflow-hidden">
         <div
-          className="h-full bg-primary/50 transition-all duration-500"
+          className="h-full bg-primary/50 transition-[width] duration-500"
           style={{ width: `${overallProgress}%` }}
         />
       </div>
@@ -302,7 +302,7 @@ export const SequencePlayer: React.FC<SequencePlayerProps> = ({ sequence }) => {
             key={pose.id}
             onClick={() => handlePoseClick(index)}
             className={`
-              flex-shrink-0 w-20 rounded-lg overflow-hidden border-2 transition-all
+              flex-shrink-0 w-20 rounded-lg overflow-hidden border-2 transition-[border-color,opacity] duration-150 active:scale-95
               ${index === currentPoseIndex
                 ? 'border-primary ring-2 ring-primary/30'
                 : index < currentPoseIndex

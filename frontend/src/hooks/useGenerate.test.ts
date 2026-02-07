@@ -9,7 +9,11 @@ vi.mock('../services/api', () => ({
     generate: vi.fn(),
     generateFromPose: vi.fn(),
     generateFromText: vi.fn(),
+    getStatus: vi.fn(),
     getWebSocketUrl: vi.fn(() => 'ws://localhost:8000/ws/generate/test-task'),
+  },
+  tokenManager: {
+    silentRefresh: vi.fn(async () => true),
   },
 }))
 
@@ -46,6 +50,7 @@ describe('useGenerate', () => {
     generate: ReturnType<typeof vi.fn>
     generateFromPose: ReturnType<typeof vi.fn>
     generateFromText: ReturnType<typeof vi.fn>
+    getStatus: ReturnType<typeof vi.fn>
     getWebSocketUrl: ReturnType<typeof vi.fn>
   }
 
@@ -57,6 +62,7 @@ describe('useGenerate', () => {
     mockGenerateApi.generate.mockResolvedValue({ task_id: 'test-task-123' })
     mockGenerateApi.generateFromPose.mockResolvedValue({ task_id: 'test-task-456' })
     mockGenerateApi.generateFromText.mockResolvedValue({ task_id: 'test-task-789' })
+    mockGenerateApi.getStatus.mockResolvedValue({ task_id: 'test-task-123', status: 'processing', progress: 0 })
 
     // Mock WebSocket globally
     vi.stubGlobal('WebSocket', MockWebSocket)
@@ -223,7 +229,7 @@ describe('useGenerate', () => {
       const mockFile = new File(['test'], 'test.png', { type: 'image/png' })
 
       await act(async () => {
-        await result.current.generate(mockFile)
+        await expect(result.current.generate(mockFile)).rejects.toThrow('Network error')
       })
 
       expect(result.current.isGenerating).toBe(false)
@@ -236,7 +242,7 @@ describe('useGenerate', () => {
       const mockFile = new File(['test'], 'test.png', { type: 'image/png' })
 
       await act(async () => {
-        await result.current.generate(mockFile)
+        await expect(result.current.generate(mockFile)).rejects.toThrow('Network error')
       })
 
       expect(result.current.error).toBe('Network error')
@@ -247,6 +253,90 @@ describe('useGenerate', () => {
 
       expect(result.current.error).toBeNull()
     })
+  })
+
+  it('falls back to polling when WebSocket does not open', async () => {
+    const { result } = renderHook(() => useGenerate())
+    const mockFile = new File(['test'], 'test.png', { type: 'image/png' })
+
+    // WebSocket will be created but never opened (onopen never called in this mock).
+    mockGenerateApi.getStatus.mockResolvedValueOnce({
+      task_id: 'test-task-123',
+      status: 'completed',
+      progress: 100,
+      status_message: 'Completed!',
+      error_message: null,
+      photo_url: '/storage/generated/photo.png',
+      muscles_url: '/storage/generated/muscles.png',
+      quota_warning: false,
+      analyzed_muscles: [{ name: 'quadriceps', activation_level: 80 }],
+    })
+
+    await act(async () => {
+      await result.current.generate(mockFile)
+    })
+
+    // Advance timers past WS fallback delay so polling starts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2600)
+    })
+
+    expect(mockGenerateApi.getStatus).toHaveBeenCalled()
+    expect(result.current.status).toBe('completed')
+    expect(result.current.isGenerating).toBe(false)
+    expect(result.current.photoUrl).toBe('/storage/generated/photo.png')
+    expect(result.current.musclesUrl).toBe('/storage/generated/muscles.png')
+    expect(result.current.analyzedMuscles?.[0]?.name).toBe('quadriceps')
+  })
+
+  it('falls back to polling when WebSocket opens but stays silent', async () => {
+    const sockets: MockWebSocket[] = []
+    class AutoOpenSilentWebSocket extends MockWebSocket {
+      constructor() {
+        super()
+        sockets.push(this)
+        // Trigger onopen asynchronously after handlers are assigned.
+        setTimeout(() => this.onopen?.(), 0)
+      }
+    }
+
+    vi.stubGlobal('WebSocket', AutoOpenSilentWebSocket)
+
+    const { result } = renderHook(() => useGenerate())
+    const mockFile = new File(['test'], 'test.png', { type: 'image/png' })
+
+    // Polling should eventually complete even if WS never delivers progress_update.
+    mockGenerateApi.getStatus.mockResolvedValueOnce({
+      task_id: 'test-task-123',
+      status: 'completed',
+      progress: 100,
+      status_message: 'Completed!',
+      error_message: null,
+      photo_url: '/storage/generated/photo.png',
+      muscles_url: '/storage/generated/muscles.png',
+      quota_warning: false,
+      analyzed_muscles: null,
+    })
+
+    await act(async () => {
+      await result.current.generate(mockFile)
+    })
+
+    // Allow onopen to run.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(sockets.length).toBeGreaterThan(0)
+
+    // Advance past silent fallback delay so polling starts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+
+    expect(mockGenerateApi.getStatus).toHaveBeenCalled()
+    expect(result.current.status).toBe('completed')
+    expect(result.current.isGenerating).toBe(false)
+    expect(result.current.photoUrl).toBe('/storage/generated/photo.png')
   })
 
   describe('task ID handling', () => {

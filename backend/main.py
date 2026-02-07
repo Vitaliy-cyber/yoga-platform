@@ -2,18 +2,22 @@ import logging
 import sys
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Any
 
 from api.routes import analytics, auth, categories, compare, export, generate, import_, muscles, poses, sequences, versions, websocket
 from fastapi import APIRouter
 from config import AppMode, get_settings
 from db.database import init_db
 from fastapi import FastAPI, HTTPException, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from middleware.content_type import ContentTypeValidationMiddleware
 from middleware.rate_limit import RateLimitMiddleware
 from middleware.security import SecurityHeadersMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 settings = get_settings()
 
@@ -49,6 +53,10 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"Storage backend: {settings.STORAGE_BACKEND}")
 
+    # Start periodic auth token cleanup task (skip during pytest).
+    if "pytest" not in sys.modules:
+        auth.start_cleanup_task()
+
     # Initialize AI Generator (Google Gemini API)
     try:
         if settings.GOOGLE_API_KEY:
@@ -65,6 +73,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # === SHUTDOWN ===
+    if "pytest" not in sys.modules:
+        auth.stop_cleanup_task()
     logger.info("Shutting down Yoga Platform...")
 
 
@@ -76,6 +86,74 @@ app = FastAPI(
     lifespan=lifespan,
     debug=(settings.APP_MODE == AppMode.DEV),
 )
+
+MAX_ERROR_STRING_CHARS = 400
+MAX_ERROR_CONTAINER_ITEMS = 50
+MAX_ERROR_DEPTH = 8
+
+
+def _truncate_string(value: str, max_chars: int = MAX_ERROR_STRING_CHARS) -> str:
+    if len(value) <= max_chars:
+        return value
+    return f"{value[:max_chars]}…(truncated)"
+
+
+def _sanitize_for_json(value: Any, *, _depth: int = 0) -> Any:
+    """
+    Make sure error payloads are always UTF-8 encodable.
+
+    SECURITY/ROBUSTNESS: RequestValidationError details can include user-provided
+    strings. Certain Unicode sequences (e.g. unpaired surrogates) can crash
+    Starlette's JSONResponse encoder and turn 422 into 500 with a traceback.
+
+    SECURITY: also truncate large reflected inputs to avoid response amplification
+    (e.g. a 200KB invalid field producing a 200KB+ 422 body).
+    """
+    if _depth > MAX_ERROR_DEPTH:
+        return "<max depth reached>"
+    if value is None:
+        return None
+    if isinstance(value, (int, float, bool)):
+        return value
+    if isinstance(value, str):
+        safe = value.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+        return _truncate_string(safe)
+    if isinstance(value, bytes):
+        return _truncate_string(value.decode("utf-8", errors="replace"))
+    if isinstance(value, list):
+        out = [_sanitize_for_json(v, _depth=_depth + 1) for v in value[:MAX_ERROR_CONTAINER_ITEMS]]
+        if len(value) > MAX_ERROR_CONTAINER_ITEMS:
+            out.append(f"... ({len(value) - MAX_ERROR_CONTAINER_ITEMS} more items truncated)")
+        return out
+    if isinstance(value, tuple):
+        return _sanitize_for_json(list(value), _depth=_depth)
+    if isinstance(value, set):
+        return _sanitize_for_json(list(value), _depth=_depth)
+    if isinstance(value, dict):
+        items = list(value.items())
+        out: dict[str, Any] = {}
+        for k, v in items[:MAX_ERROR_CONTAINER_ITEMS]:
+            out[str(_sanitize_for_json(k, _depth=_depth + 1))] = _sanitize_for_json(v, _depth=_depth + 1)
+        if len(items) > MAX_ERROR_CONTAINER_ITEMS:
+            out["__truncated__"] = f"{len(items) - MAX_ERROR_CONTAINER_ITEMS} more keys truncated"
+        return out
+    # Pydantic/FastAPI validation contexts can include non-JSON-serializable
+    # objects (e.g. exception instances). Convert anything else to a safe string.
+    try:
+        return _sanitize_for_json(str(value), _depth=_depth + 1)
+    except Exception:
+        return "<unserializable>"
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    safe_errors = _sanitize_for_json(exc.errors())
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": safe_errors},
+    )
 
 # Security middlewares (order matters - first added = last executed)
 # 1. Security headers - adds security headers to all responses

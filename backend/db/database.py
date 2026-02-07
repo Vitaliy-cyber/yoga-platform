@@ -21,8 +21,10 @@ Limitations:
 For production, always use PostgreSQL with proper connection pooling.
 """
 
+import asyncio
 import hashlib
 import logging
+import os
 
 from config import get_settings
 from sqlalchemy import event
@@ -42,6 +44,23 @@ is_sqlite = database_url.startswith("sqlite")
 engine_kwargs: dict = {
     "echo": False,
 }
+
+if is_sqlite and os.getenv("AIOSQLITE_INLINE") == "1":
+    try:  # pragma: no cover - optional fallback for dev/test
+        import aiosqlite
+    except Exception:
+        pass
+    else:
+        async def _connect_inline(self):  # type: ignore[no-redef]
+            if self._connection is None:
+                self._connection = self._connector()
+            return self
+
+        async def _execute_inline(self, fn, *args, **kwargs):  # type: ignore[no-redef]
+            return fn(*args, **kwargs)
+
+        aiosqlite.core.Connection._connect = _connect_inline  # type: ignore[assignment]
+        aiosqlite.core.Connection._execute = _execute_inline  # type: ignore[assignment]
 
 if not is_sqlite:
     # PostgreSQL connection pool settings
@@ -76,8 +95,17 @@ if is_sqlite:
     @sa_event.listens_for(engine.sync_engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+            # Improve concurrent-read/write behavior for dev + E2E (SQLite allows one writer).
+            # WAL + busy_timeout significantly reduce "database is locked" flakiness.
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+        except Exception as e:
+            logging.warning(f"SQLite PRAGMA setup warning: {e}")
         cursor.close()
+
 
 AsyncSessionLocal = async_sessionmaker(
     engine,
@@ -86,6 +114,17 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False,
 )
+
+async def _asyncio_wakeup_task() -> None:
+    """
+    Work around aiosqlite + asyncio deadlocks in some environments.
+
+    Some runtimes do not reliably wake the event loop for thread-safe callbacks
+    used by aiosqlite. A lightweight periodic sleep keeps the loop active while
+    SQLite connections perform thread callbacks during startup.
+    """
+    while True:
+        await asyncio.sleep(0.05)
 
 
 class Base(DeclarativeBase):
@@ -125,25 +164,28 @@ async def _migrate_sqlite_users_table(conn):
     SQLite doesn't support ALTER TABLE ADD COLUMN with constraints properly,
     so we need to recreate the table with the new schema.
     """
-    from sqlalchemy import text
     import hashlib
+
+    from sqlalchemy import text
 
     # Check if migration is needed (old schema has 'token', new has 'token_hash')
     result = await conn.execute(text("PRAGMA table_info(users)"))
     columns = {row[1]: row for row in result.fetchall()}
 
-    if 'token_hash' in columns:
+    if "token_hash" in columns:
         # Already migrated
         return False
 
-    if 'token' not in columns:
+    if "token" not in columns:
         # Table doesn't exist or has unexpected schema
         return False
 
     logging.info("Migrating users table: token -> token_hash")
 
     # Get existing users
-    result = await conn.execute(text("SELECT id, token, name, created_at, last_login FROM users"))
+    result = await conn.execute(
+        text("SELECT id, token, name, created_at, last_login FROM users")
+    )
     existing_users = result.fetchall()
 
     # Drop old table and indexes
@@ -152,7 +194,8 @@ async def _migrate_sqlite_users_table(conn):
     await conn.execute(text("DROP TABLE users"))
 
     # Create new table with correct schema
-    await conn.execute(text("""
+    await conn.execute(
+        text("""
         CREATE TABLE users (
             id INTEGER NOT NULL PRIMARY KEY,
             token_hash VARCHAR(64) NOT NULL UNIQUE,
@@ -161,7 +204,8 @@ async def _migrate_sqlite_users_table(conn):
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_login DATETIME
         )
-    """))
+    """)
+    )
     await conn.execute(text("CREATE INDEX ix_users_id ON users (id)"))
     await conn.execute(text("CREATE INDEX ix_users_token_hash ON users (token_hash)"))
 
@@ -170,8 +214,17 @@ async def _migrate_sqlite_users_table(conn):
         user_id, token, name, created_at, last_login = user_row
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         await conn.execute(
-            text("INSERT INTO users (id, token_hash, name, created_at, updated_at, last_login) VALUES (:id, :token_hash, :name, :created_at, :updated_at, :last_login)"),
-            {"id": user_id, "token_hash": token_hash, "name": name, "created_at": created_at, "updated_at": created_at, "last_login": last_login}
+            text(
+                "INSERT INTO users (id, token_hash, name, created_at, updated_at, last_login) VALUES (:id, :token_hash, :name, :created_at, :updated_at, :last_login)"
+            ),
+            {
+                "id": user_id,
+                "token_hash": token_hash,
+                "name": name,
+                "created_at": created_at,
+                "updated_at": created_at,
+                "last_login": last_login,
+            },
         )
 
     logging.info(f"Migrated {len(existing_users)} users to new schema")
@@ -186,29 +239,65 @@ async def _seed_default_muscles():
     muscles as development without manual intervention.
     """
     from models.muscle import Muscle
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
 
     default_muscles = [
         {"name": "erector_spinae", "name_ua": "Прямий м'яз спини", "body_part": "back"},
-        {"name": "latissimus_dorsi", "name_ua": "Найширший м'яз спини", "body_part": "back"},
+        {
+            "name": "latissimus_dorsi",
+            "name_ua": "Найширший м'яз спини",
+            "body_part": "back",
+        },
         {"name": "trapezius", "name_ua": "Трапецієподібний м'яз", "body_part": "back"},
         {"name": "rhomboids", "name_ua": "Ромбоподібні м'язи", "body_part": "back"},
-        {"name": "rectus_abdominis", "name_ua": "Прямий м'яз живота", "body_part": "core"},
+        {
+            "name": "rectus_abdominis",
+            "name_ua": "Прямий м'яз живота",
+            "body_part": "core",
+        },
         {"name": "obliques", "name_ua": "Косі м'язи живота", "body_part": "core"},
-        {"name": "transverse_abdominis", "name_ua": "Поперечний м'яз живота", "body_part": "core"},
-        {"name": "quadriceps", "name_ua": "Чотириголовий м'яз стегна", "body_part": "legs"},
+        {
+            "name": "transverse_abdominis",
+            "name_ua": "Поперечний м'яз живота",
+            "body_part": "core",
+        },
+        {
+            "name": "quadriceps",
+            "name_ua": "Чотириголовий м'яз стегна",
+            "body_part": "legs",
+        },
         {"name": "hamstrings", "name_ua": "Задня поверхня стегна", "body_part": "legs"},
-        {"name": "gluteus_maximus", "name_ua": "Великий сідничний м'яз", "body_part": "legs"},
-        {"name": "gluteus_medius", "name_ua": "Середній сідничний м'яз", "body_part": "legs"},
+        {
+            "name": "gluteus_maximus",
+            "name_ua": "Великий сідничний м'яз",
+            "body_part": "legs",
+        },
+        {
+            "name": "gluteus_medius",
+            "name_ua": "Середній сідничний м'яз",
+            "body_part": "legs",
+        },
         {"name": "calves", "name_ua": "Литкові м'язи", "body_part": "legs"},
         {"name": "hip_flexors", "name_ua": "Згиначі стегна", "body_part": "legs"},
-        {"name": "deltoids", "name_ua": "Дельтоподібний м'яз", "body_part": "shoulders"},
-        {"name": "rotator_cuff", "name_ua": "Ротаторна манжета", "body_part": "shoulders"},
+        {
+            "name": "deltoids",
+            "name_ua": "Дельтоподібний м'яз",
+            "body_part": "shoulders",
+        },
+        {
+            "name": "rotator_cuff",
+            "name_ua": "Ротаторна манжета",
+            "body_part": "shoulders",
+        },
         {"name": "biceps", "name_ua": "Біцепс", "body_part": "arms"},
         {"name": "triceps", "name_ua": "Тріцепс", "body_part": "arms"},
         {"name": "forearms", "name_ua": "М'язи передпліччя", "body_part": "arms"},
         {"name": "pectoralis", "name_ua": "Грудні м'язи", "body_part": "chest"},
-        {"name": "serratus_anterior", "name_ua": "Передній зубчастий м'яз", "body_part": "chest"},
+        {
+            "name": "serratus_anterior",
+            "name_ua": "Передній зубчастий м'яз",
+            "body_part": "chest",
+        },
     ]
 
     async with AsyncSessionLocal() as db:
@@ -232,8 +321,6 @@ async def _seed_default_muscles():
 
 async def init_db():
     """Ініціалізація бази даних"""
-    from sqlalchemy import text
-
     # Імпортуємо моделі щоб вони зареєструвались
     from models import (
         auth_audit,
@@ -246,183 +333,250 @@ async def init_db():
         token_blacklist,
         user,
     )
+    from sqlalchemy import text
 
-    async with engine.begin() as conn:
-        # For PostgreSQL: use advisory lock to prevent race conditions
-        # when multiple workers start simultaneously
-        if not is_sqlite:
-            # Acquire advisory lock (key 1 = migration lock)
-            # pg_advisory_xact_lock is released automatically when transaction ends
-            await conn.execute(text("SELECT pg_advisory_xact_lock(1)"))
-            logging.info("Acquired database migration lock")
+    wakeup_task = None
+    if is_sqlite:
+        wakeup_task = asyncio.create_task(_asyncio_wakeup_task())
+    runtime_bootstrap_enabled = settings.runtime_schema_bootstrap_enabled
 
-        # SQLite-specific migrations (must run before create_all)
-        if is_sqlite:
-            try:
-                await _migrate_sqlite_users_table(conn)
-            except Exception as e:
-                logging.warning(f"SQLite migration warning: {e}")
+    try:
+        async with engine.begin() as conn:
+            # For PostgreSQL: use advisory lock to prevent race conditions
+            # when multiple workers start simultaneously
+            if runtime_bootstrap_enabled and not is_sqlite:
+                # Acquire advisory lock (key 1 = migration lock)
+                # pg_advisory_xact_lock is released automatically when transaction ends
+                await conn.execute(text("SELECT pg_advisory_xact_lock(1)"))
+                logging.info("Acquired database migration lock")
+            elif not runtime_bootstrap_enabled:
+                logging.info(
+                    "Runtime schema bootstrap is disabled; expecting Alembic-managed schema."
+                )
 
-            # Add missing columns to generation_tasks (SQLite supports ALTER TABLE ADD COLUMN)
-            try:
-                result = await conn.execute(text("PRAGMA table_info(generation_tasks)"))
-                columns = {row[1] for row in result.fetchall()}
+            # SQLite-specific migrations (must run before create_all)
+            if runtime_bootstrap_enabled and is_sqlite:
+                try:
+                    await _migrate_sqlite_users_table(conn)
+                except Exception as e:
+                    logging.warning(f"SQLite migration warning: {e}")
 
-                if 'analyzed_muscles_json' not in columns and 'generation_tasks' in columns or columns:
-                    # Check if table exists
-                    tables_result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='generation_tasks'"))
-                    if tables_result.fetchone():
-                        if 'analyzed_muscles_json' not in columns:
-                            await conn.execute(text("ALTER TABLE generation_tasks ADD COLUMN analyzed_muscles_json TEXT"))
-                            logging.info("Added analyzed_muscles_json column to generation_tasks")
-                        if 'additional_notes' not in columns:
-                            await conn.execute(text("ALTER TABLE generation_tasks ADD COLUMN additional_notes TEXT"))
-                            logging.info("Added additional_notes column to generation_tasks")
-            except Exception as e:
-                logging.warning(f"SQLite generation_tasks migration warning: {e}")
+                # Add missing columns to generation_tasks (SQLite supports ALTER TABLE ADD COLUMN)
+                try:
+                    result = await conn.execute(text("PRAGMA table_info(generation_tasks)"))
+                    columns = {row[1] for row in result.fetchall()}
 
-        # Використовуємо checkfirst=True щоб не падало на існуючих таблицях
-        await conn.run_sync(Base.metadata.create_all, checkfirst=True)
-
-        # Migration: Add user_id columns if they don't exist (for PostgreSQL)
-        if not is_sqlite:
-            try:
-                # Migrate users table: token -> token_hash (PostgreSQL)
-                # Check if token_hash column exists
-                result = await conn.execute(text("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = 'users' AND column_name = 'token_hash'
-                """))
-                has_token_hash = result.fetchone() is not None
-
-                # Also check if there are users with NULL token_hash that need migration
-                needs_hash_migration = False
-                if has_token_hash:
-                    result = await conn.execute(text("""
-                        SELECT EXISTS(SELECT 1 FROM users WHERE token_hash IS NULL LIMIT 1)
-                    """))
-                    needs_hash_migration = result.scalar()
-
-                if not has_token_hash:
-                    logging.info("Migrating users table: adding token_hash column")
-                    # Add token_hash column (nullable initially)
-                    await conn.execute(text("""
-                        ALTER TABLE users ADD COLUMN token_hash VARCHAR(64)
-                    """))
-
-                    # Check if old 'token' column exists and migrate data
-                    result = await conn.execute(text("""
-                        SELECT column_name FROM information_schema.columns
-                        WHERE table_name = 'users' AND column_name = 'token'
-                    """))
-                    has_old_token = result.fetchone() is not None
-
-                    if has_old_token:
-                        # Fetch users with old tokens and hash them in Python
-                        result = await conn.execute(text("""
-                            SELECT id, token FROM users WHERE token IS NOT NULL AND token_hash IS NULL
-                        """))
-                        users_to_migrate = result.fetchall()
-
-                        for user_id, token in users_to_migrate:
-                            # Hash using Python's hashlib (same as model code)
-                            token_hash = hashlib.sha256(token.encode()).hexdigest()
-                            await conn.execute(
-                                text("UPDATE users SET token_hash = :hash WHERE id = :id"),
-                                {"hash": token_hash, "id": user_id}
+                    if (
+                        "analyzed_muscles_json" not in columns
+                        and "generation_tasks" in columns
+                        or columns
+                    ):
+                        # Check if table exists
+                        tables_result = await conn.execute(
+                            text(
+                                "SELECT name FROM sqlite_master WHERE type='table' AND name='generation_tasks'"
                             )
-                        logging.info(f"Migrated {len(users_to_migrate)} existing user tokens to SHA256 hashes")
+                        )
+                        if tables_result.fetchone():
+                            if "analyzed_muscles_json" not in columns:
+                                await conn.execute(
+                                    text(
+                                        "ALTER TABLE generation_tasks ADD COLUMN analyzed_muscles_json TEXT"
+                                    )
+                                )
+                                logging.info(
+                                    "Added analyzed_muscles_json column to generation_tasks"
+                                )
+                            if "additional_notes" not in columns:
+                                await conn.execute(
+                                    text(
+                                        "ALTER TABLE generation_tasks ADD COLUMN additional_notes TEXT"
+                                    )
+                                )
+                                logging.info(
+                                    "Added additional_notes column to generation_tasks"
+                                )
+                except Exception as e:
+                    logging.warning(f"SQLite generation_tasks migration warning: {e}")
 
-                    # Create unique index (allows NULL values)
-                    await conn.execute(text("""
-                        CREATE UNIQUE INDEX IF NOT EXISTS ix_users_token_hash ON users(token_hash)
-                    """))
-                    logging.info("Users table migration completed")
+            if runtime_bootstrap_enabled:
+                # checkfirst avoids re-creating existing tables in dev/test bootstrap mode
+                await conn.run_sync(Base.metadata.create_all, checkfirst=True)
 
-                elif needs_hash_migration:
-                    # Column exists but some users have NULL token_hash - need to migrate
-                    logging.info("Migrating existing users with NULL token_hash")
-                    result = await conn.execute(text("""
+            # Migration: Add user_id columns if they don't exist (for PostgreSQL)
+            if runtime_bootstrap_enabled and not is_sqlite:
+                try:
+                    # Migrate users table: token -> token_hash (PostgreSQL)
+                    # Check if token_hash column exists
+                    result = await conn.execute(
+                        text("""
                         SELECT column_name FROM information_schema.columns
-                        WHERE table_name = 'users' AND column_name = 'token'
-                    """))
-                    has_old_token = result.fetchone() is not None
+                        WHERE table_name = 'users' AND column_name = 'token_hash'
+                    """)
+                    )
+                    has_token_hash = result.fetchone() is not None
 
-                    if has_old_token:
-                        # Fetch users with old tokens and hash them in Python
-                        result = await conn.execute(text("""
-                            SELECT id, token FROM users WHERE token IS NOT NULL AND token_hash IS NULL
-                        """))
-                        users_to_migrate = result.fetchall()
+                    # Also check if there are users with NULL token_hash that need migration
+                    needs_hash_migration = False
+                    if has_token_hash:
+                        result = await conn.execute(
+                            text("""
+                            SELECT EXISTS(SELECT 1 FROM users WHERE token_hash IS NULL LIMIT 1)
+                        """)
+                        )
+                        needs_hash_migration = result.scalar()
 
-                        for user_id, token in users_to_migrate:
-                            # Hash using Python's hashlib (same as model code)
-                            token_hash = hashlib.sha256(token.encode()).hexdigest()
-                            await conn.execute(
-                                text("UPDATE users SET token_hash = :hash WHERE id = :id"),
-                                {"hash": token_hash, "id": user_id}
+                    if not has_token_hash:
+                        logging.info("Migrating users table: adding token_hash column")
+                        # Add token_hash column (nullable initially)
+                        await conn.execute(
+                            text("""
+                            ALTER TABLE users ADD COLUMN token_hash VARCHAR(64)
+                        """)
+                        )
+
+                        # Check if old 'token' column exists and migrate data
+                        result = await conn.execute(
+                            text("""
+                            SELECT column_name FROM information_schema.columns
+                            WHERE table_name = 'users' AND column_name = 'token'
+                        """)
+                        )
+                        has_old_token = result.fetchone() is not None
+
+                        if has_old_token:
+                            # Fetch users with old tokens and hash them in Python
+                            result = await conn.execute(
+                                text("""
+                                SELECT id, token FROM users WHERE token IS NOT NULL AND token_hash IS NULL
+                            """)
                             )
-                        logging.info(f"Migrated {len(users_to_migrate)} users to SHA256 hashes")
+                            users_to_migrate = result.fetchall()
 
-                # Add updated_at column to users if missing
-                result = await conn.execute(text("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = 'users' AND column_name = 'updated_at'
-                """))
-                if result.fetchone() is None:
-                    await conn.execute(text("""
-                        ALTER TABLE users ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    """))
-                    logging.info("Added updated_at column to users table")
+                            for user_id, token in users_to_migrate:
+                                # Hash using Python's hashlib (same as model code)
+                                token_hash = hashlib.sha256(token.encode()).hexdigest()
+                                await conn.execute(
+                                    text(
+                                        "UPDATE users SET token_hash = :hash WHERE id = :id"
+                                    ),
+                                    {"hash": token_hash, "id": user_id},
+                                )
+                            logging.info(
+                                f"Migrated {len(users_to_migrate)} existing user tokens to SHA256 hashes"
+                            )
 
-                # Add user_id to poses if not exists
-                await conn.execute(
-                    text("""
-                    ALTER TABLE poses ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
-                """)
-                )
-                await conn.execute(
-                    text("""
-                    CREATE INDEX IF NOT EXISTS ix_poses_user_id ON poses(user_id)
-                """)
-                )
+                        # Create unique index (allows NULL values)
+                        await conn.execute(
+                            text("""
+                            CREATE UNIQUE INDEX IF NOT EXISTS ix_users_token_hash ON users(token_hash)
+                        """)
+                        )
+                        logging.info("Users table migration completed")
 
-                # Add user_id to categories if not exists
-                await conn.execute(
-                    text("""
-                    ALTER TABLE categories ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
-                """)
-                )
-                await conn.execute(
-                    text("""
-                    CREATE INDEX IF NOT EXISTS ix_categories_user_id ON categories(user_id)
-                """)
-                )
+                    elif needs_hash_migration:
+                        # Column exists but some users have NULL token_hash - need to migrate
+                        logging.info("Migrating existing users with NULL token_hash")
+                        result = await conn.execute(
+                            text("""
+                            SELECT column_name FROM information_schema.columns
+                            WHERE table_name = 'users' AND column_name = 'token'
+                        """)
+                        )
+                        has_old_token = result.fetchone() is not None
 
-                # Add analyzed_muscles_json to generation_tasks if not exists
-                await conn.execute(
-                    text("""
-                    ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS analyzed_muscles_json TEXT
-                """)
-                )
+                        if has_old_token:
+                            # Fetch users with old tokens and hash them in Python
+                            result = await conn.execute(
+                                text("""
+                                SELECT id, token FROM users WHERE token IS NOT NULL AND token_hash IS NULL
+                            """)
+                            )
+                            users_to_migrate = result.fetchall()
 
-                # Add additional_notes to generation_tasks if not exists
-                await conn.execute(
-                    text("""
-                    ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS additional_notes TEXT
-                """)
-                )
+                            for user_id, token in users_to_migrate:
+                                # Hash using Python's hashlib (same as model code)
+                                token_hash = hashlib.sha256(token.encode()).hexdigest()
+                                await conn.execute(
+                                    text(
+                                        "UPDATE users SET token_hash = :hash WHERE id = :id"
+                                    ),
+                                    {"hash": token_hash, "id": user_id},
+                                )
+                            logging.info(
+                                f"Migrated {len(users_to_migrate)} users to SHA256 hashes"
+                            )
 
-                # Add version column to poses if not exists (for optimistic locking)
-                await conn.execute(
-                    text("""
-                    ALTER TABLE poses ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1
-                """)
-                )
+                    # Add updated_at column to users if missing
+                    result = await conn.execute(
+                        text("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_name = 'users' AND column_name = 'updated_at'
+                    """)
+                    )
+                    if result.fetchone() is None:
+                        await conn.execute(
+                            text("""
+                            ALTER TABLE users ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        """)
+                        )
+                        logging.info("Added updated_at column to users table")
 
-                logging.info("Migration: user_id columns ensured")
-            except Exception as e:
-                logging.warning(f"Migration warning (may be normal): {e}")
+                    # Add user_id to poses if not exists
+                    await conn.execute(
+                        text("""
+                        ALTER TABLE poses ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
+                    """)
+                    )
+                    await conn.execute(
+                        text("""
+                        CREATE INDEX IF NOT EXISTS ix_poses_user_id ON poses(user_id)
+                    """)
+                    )
+
+                    # Add user_id to categories if not exists
+                    await conn.execute(
+                        text("""
+                        ALTER TABLE categories ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE
+                    """)
+                    )
+                    await conn.execute(
+                        text("""
+                        CREATE INDEX IF NOT EXISTS ix_categories_user_id ON categories(user_id)
+                    """)
+                    )
+
+                    # Add analyzed_muscles_json to generation_tasks if not exists
+                    await conn.execute(
+                        text("""
+                        ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS analyzed_muscles_json TEXT
+                    """)
+                    )
+
+                    # Add additional_notes to generation_tasks if not exists
+                    await conn.execute(
+                        text("""
+                        ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS additional_notes TEXT
+                    """)
+                    )
+
+                    # Add version column to poses if not exists (for optimistic locking)
+                    await conn.execute(
+                        text("""
+                        ALTER TABLE poses ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1
+                    """)
+                    )
+
+                    logging.info("Migration: user_id columns ensured")
+                except Exception as e:
+                    logging.warning(f"Migration warning (may be normal): {e}")
+    finally:
+        if wakeup_task:
+            wakeup_task.cancel()
+            try:
+                await wakeup_task
+            except asyncio.CancelledError:
+                pass
 
     # Seed default muscles if table is empty
     await _seed_default_muscles()

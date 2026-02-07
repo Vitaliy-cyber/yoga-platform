@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { NavLink, useLocation, useSearchParams, useNavigate } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import {
+  NavLink,
+  useLocation,
+  useSearchParams,
+  useNavigate,
+} from "react-router-dom";
 import {
   LayoutDashboard,
   Grid,
@@ -23,9 +27,9 @@ import {
 } from "lucide-react";
 import { useAppStore } from "../../store/useAppStore";
 import { useAuthStore } from "../../store/useAuthStore";
-import { useViewTransition } from "../../hooks/useViewTransition";
 import { cn } from "../../lib/utils";
 import { useI18n } from "../../i18n";
+import { authApi } from "../../services/api";
 import {
   Sheet,
   SheetContent,
@@ -35,7 +39,11 @@ import {
 } from "../ui/sheet";
 import { Button } from "../ui/button";
 import { VisuallyHidden } from "../ui/visually-hidden";
-import { CategoryModal, CategoryEditModal, CategoryDeleteModal } from "../Category";
+import {
+  CategoryModal,
+  CategoryEditModal,
+  CategoryDeleteModal,
+} from "../Category";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,9 +63,15 @@ interface MobileNavProps {
   className?: string;
   isLoading?: boolean;
   error?: string | null;
+  onRetry?: () => void | Promise<void>;
 }
 
-export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = false, error = null }) => {
+export const MobileNav: React.FC<MobileNavProps> = ({
+  className,
+  isLoading = false,
+  error = null,
+  onRetry,
+}) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -67,23 +81,28 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
   const toggleTheme = useAppStore((state) => state.toggleTheme);
   const { user, logout } = useAuthStore();
   const { t } = useI18n();
-  const { startTransition } = useViewTransition();
   const [isOpen, setIsOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
-  const [deletingCategory, setDeletingCategory] = useState<Category | null>(null);
+  const [deletingCategory, setDeletingCategory] = useState<Category | null>(
+    null,
+  );
 
   const handleLogout = useCallback(() => {
-    logout();
-    setIsOpen(false);
-    navigate("/login", { replace: true });
+    void (async () => {
+      await authApi.logout().catch(() => undefined);
+      logout();
+      setIsOpen(false);
+      navigate("/login", { replace: true });
+    })();
   }, [logout, navigate]);
 
   // Get current category from URL search params using URLSearchParams (issue 11)
   const currentCategoryId = useMemo(() => {
     return searchParams.get("category");
   }, [searchParams]);
+  const hasCategories = categories.length > 0;
 
   // Close menu on route change - use onOpenChange from Sheet instead of manual onClick
   // This prevents race conditions (issue 5)
@@ -98,8 +117,8 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
       <Button
         variant="ghost"
         size="icon"
-        onClick={() => void startTransition(() => setIsOpen(true))}
-        className="fixed top-3 left-3 z-[45] h-11 w-11 min-h-[44px] min-w-[44px] bg-card/95 backdrop-blur-sm shadow-md border rounded-xl hover:bg-accent active:scale-95 transition-all"
+        onClick={() => setIsOpen(true)}
+        className="fixed top-3 left-3 z-[45] h-11 w-11 min-h-[44px] min-w-[44px] bg-card/95 backdrop-blur-sm shadow-md border rounded-xl hover:bg-accent active:scale-95 transition-colors"
         aria-label={t("nav.open_menu")}
       >
         <Menu className="h-5 w-5 text-foreground" />
@@ -128,7 +147,9 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
                 <h1 className="font-sans font-bold text-lg text-foreground tracking-tight">
                   YogaFlow
                 </h1>
-                <p className="text-xs text-muted-foreground">{t("nav.premium")}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("nav.premium")}
+                </p>
               </div>
             </div>
             <SheetClose asChild>
@@ -158,10 +179,10 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
                       to={item.path}
                       className={({ isActive }) =>
                         cn(
-                          "flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all duration-200 min-h-[48px] touch-manipulation",
+                          "flex items-center gap-3 px-4 py-3.5 rounded-xl transition-colors duration-200 min-h-[48px] touch-manipulation",
                           isActive
                             ? "text-primary-foreground bg-primary shadow-md"
-                            : "text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground active:bg-accent/80",
                         )
                       }
                     >
@@ -197,17 +218,28 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
               {isLoading && (
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  <span className="ml-2 text-sm text-muted-foreground">{t("common.loading")}</span>
+                  <span className="ml-2 text-sm text-muted-foreground">
+                    {t("common.loading")}
+                  </span>
                 </div>
               )}
               {/* Error state */}
-              {error && !isLoading && (
-                <div className="px-4 py-3 text-sm text-red-600">
-                  {error}
+              {error && !isLoading && !hasCategories && (
+                <div className="px-4 py-3">
+                  <p className="text-sm text-red-600">{error}</p>
+                  {onRetry && (
+                    <button
+                      type="button"
+                      onClick={() => void onRetry()}
+                      className="mt-2 text-xs font-medium text-foreground/80 hover:text-foreground transition-colors"
+                    >
+                      {t("app.retry")}
+                    </button>
+                  )}
                 </div>
               )}
               {/* Categories list */}
-              {!isLoading && !error && categories.length > 0 && (
+              {!isLoading && hasCategories && (
                 <ul className="space-y-1">
                   {categories.map((category) => {
                     // Use URLSearchParams for proper category matching (issue 11)
@@ -222,12 +254,15 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
                               "flex items-center justify-between px-4 py-3 rounded-xl text-sm transition-colors min-h-[44px] touch-manipulation",
                               isActive
                                 ? "bg-accent text-foreground font-medium"
-                                : "text-muted-foreground hover:text-foreground hover:bg-accent/50 active:bg-accent"
+                                : "text-muted-foreground hover:text-foreground hover:bg-accent/50 active:bg-accent",
                             )
                           }
                         >
                           <div className="flex items-center gap-3 flex-1 min-w-0">
-                            <FolderOpen size={18} className="text-muted-foreground flex-shrink-0" />
+                            <FolderOpen
+                              size={18}
+                              className="text-muted-foreground flex-shrink-0"
+                            />
                             <span className="truncate">{category.name}</span>
                           </div>
                           <div className="flex items-center gap-2">
@@ -280,7 +315,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
                 </ul>
               )}
               {/* Empty state */}
-              {!isLoading && !error && categories.length === 0 && (
+              {!isLoading && !error && !hasCategories && (
                 <div className="px-4 py-3 text-sm text-muted-foreground">
                   {t("nav.no_categories")}
                 </div>
@@ -291,57 +326,78 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
           {/* Footer / User Area */}
           <div className="p-4 border-t bg-muted/50 safe-area-pb relative">
             {/* User Menu Dropdown */}
-            <AnimatePresence>
-              {showUserMenu && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  transition={{ duration: 0.15 }}
-                  className="absolute bottom-full left-4 right-4 mb-2 rounded-xl border bg-card shadow-lg overflow-hidden z-50"
-                >
-                  <div className="p-1">
-                    <button
-                      onClick={() => {
-                        toggleTheme();
-                      }}
-                      className="flex items-center gap-3 w-full p-3.5 rounded-lg hover:bg-accent transition-colors text-left min-h-[48px] touch-manipulation"
-                    >
-                      {theme === "light" ? (
-                        <Moon size={20} className="text-muted-foreground" />
-                      ) : (
-                        <Sun size={20} className="text-muted-foreground" />
-                      )}
-                      <span className="text-sm font-medium text-foreground">
-                        {theme === "light" ? t("nav.dark_mode") : t("nav.light_mode")}
-                      </span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        void startTransition(() => setShowUserMenu(false));
-                        setIsOpen(false);
-                        navigate("/settings");
-                      }}
-                      className="flex items-center gap-3 w-full p-3.5 rounded-lg hover:bg-accent transition-colors text-left min-h-[48px] touch-manipulation"
-                    >
-                      <Settings size={20} className="text-muted-foreground" />
-                      <span className="text-sm font-medium text-foreground">{t("nav.settings")}</span>
-                    </button>
-                    <button
-                      onClick={handleLogout}
-                      className="flex items-center gap-3 w-full p-3.5 rounded-lg hover:bg-red-50 hover:text-red-600 transition-colors text-left min-h-[48px] touch-manipulation"
-                    >
-                      <LogOut size={20} />
-                      <span className="text-sm font-medium">{t("app.logout")}</span>
-                    </button>
-                  </div>
-                </motion.div>
+            <div
+              className={cn(
+                "absolute bottom-full left-4 right-4 mb-2 rounded-xl border bg-card shadow-lg overflow-hidden z-50 origin-bottom transition-[opacity,transform,visibility] duration-200 ease-out transform-gpu",
+                showUserMenu
+                  ? "opacity-100 translate-y-0 visible pointer-events-auto"
+                  : "opacity-0 translate-y-2 invisible pointer-events-none",
               )}
-            </AnimatePresence>
+              aria-hidden={!showUserMenu}
+            >
+              <div className="p-1">
+                <button
+                  onClick={() => {
+                    toggleTheme();
+                  }}
+                  className={cn(
+                    "flex items-center gap-3 w-full p-3.5 rounded-lg hover:bg-accent transition-[color,background-color,opacity,transform] duration-200 ease-out text-left min-h-[48px] touch-manipulation",
+                    showUserMenu
+                      ? "opacity-100 translate-y-0 delay-75"
+                      : "opacity-0 translate-y-1 delay-0",
+                  )}
+                >
+                  {theme === "light" ? (
+                    <Moon size={20} className="text-muted-foreground" />
+                  ) : (
+                    <Sun size={20} className="text-muted-foreground" />
+                  )}
+                  <span className="text-sm font-medium text-foreground">
+                    {theme === "light"
+                      ? t("nav.dark_mode")
+                      : t("nav.light_mode")}
+                  </span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    setIsOpen(false);
+                    navigate("/settings");
+                  }}
+                  className={cn(
+                    "flex items-center gap-3 w-full p-3.5 rounded-lg hover:bg-accent transition-[color,background-color,opacity,transform] duration-200 ease-out text-left min-h-[48px] touch-manipulation",
+                    showUserMenu
+                      ? "opacity-100 translate-y-0 delay-100"
+                      : "opacity-0 translate-y-1 delay-0",
+                  )}
+                >
+                  <Settings size={20} className="text-muted-foreground" />
+                  <span className="text-sm font-medium text-foreground">
+                    {t("nav.settings")}
+                  </span>
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className={cn(
+                    "flex items-center gap-3 w-full p-3.5 rounded-lg hover:bg-red-50 hover:text-red-600 transition-[color,background-color,opacity,transform] duration-200 ease-out text-left min-h-[48px] touch-manipulation",
+                    showUserMenu
+                      ? "opacity-100 translate-y-0 delay-150"
+                      : "opacity-0 translate-y-1 delay-0",
+                  )}
+                >
+                  <LogOut size={20} />
+                  <span className="text-sm font-medium">
+                    {t("app.logout")}
+                  </span>
+                </button>
+              </div>
+            </div>
 
             {/* User Button */}
             <button
-              onClick={() => void startTransition(() => setShowUserMenu(!showUserMenu))}
+              onClick={() =>
+                setShowUserMenu(!showUserMenu)
+              }
               className="flex items-center gap-3 w-full p-3 rounded-xl hover:bg-accent active:bg-accent/80 transition-colors text-left min-h-[56px] touch-manipulation"
               aria-label={t("nav.user_settings")}
               aria-expanded={showUserMenu}
@@ -354,17 +410,21 @@ export const MobileNav: React.FC<MobileNavProps> = ({ className, isLoading = fal
                 <p className="text-sm font-medium text-foreground truncate">
                   {user?.name || `User #${user?.id || "?"}`}
                 </p>
-                <p className="text-xs text-muted-foreground">{t("nav.user_plan")}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("nav.user_plan")}
+                </p>
               </div>
-              <motion.div
-                animate={{ rotate: showUserMenu ? 0 : 180 }}
-                transition={{ duration: 0.2 }}
+              <div
+                className={cn(
+                  "transition-transform duration-200 ease-out",
+                  showUserMenu ? "rotate-0" : "rotate-180",
+                )}
               >
                 <ChevronUp
                   size={20}
                   className="text-muted-foreground flex-shrink-0"
                 />
-              </motion.div>
+              </div>
             </button>
           </div>
         </SheetContent>

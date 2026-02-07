@@ -69,6 +69,54 @@ describe("usePoseImageSrc", () => {
     expect(getSignedImageUrlMock.mock.calls.length).toBe(initialCalls);
   });
 
+  it("invalidates cache when version changes", async () => {
+    getSignedImageUrlMock
+      .mockResolvedValueOnce("https://example.com/v1.png?expires=9999999999&sig=abc&v=1")
+      .mockResolvedValueOnce("https://example.com/v2.png?expires=9999999999&sig=def&v=2");
+
+    const { result, rerender } = renderHook(
+      ({ version }: { version: number }) =>
+        usePoseImageSrc("https://example.com/original.png", 33, "photo", { version }),
+      { initialProps: { version: 1 } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.src).toContain("https://example.com/v1.png");
+    });
+
+    rerender({ version: 2 });
+
+    await waitFor(() => {
+      expect(result.current.src).toContain("https://example.com/v2.png");
+    });
+
+    expect(getSignedImageUrlMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates cache when directPath changes (no version provided)", async () => {
+    getSignedImageUrlMock
+      .mockResolvedValueOnce("https://example.com/a.png?expires=9999999999&sig=abc")
+      .mockResolvedValueOnce("https://example.com/b.png?expires=9999999999&sig=def");
+
+    const { result, rerender } = renderHook(
+      ({ directPath }: { directPath: string }) =>
+        usePoseImageSrc(directPath, 44, "photo"),
+      { initialProps: { directPath: "https://example.com/original-a.png" } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.src).toContain("https://example.com/a.png");
+    });
+
+    rerender({ directPath: "https://example.com/original-b.png" });
+
+    await waitFor(() => {
+      expect(result.current.src).toContain("https://example.com/b.png");
+    });
+
+    expect(getSignedImageUrlMock).toHaveBeenCalledTimes(2);
+  });
+
   it("forces refresh when requested", async () => {
     getSignedImageUrlMock
       .mockResolvedValueOnce("https://example.com/first.png?expires=9999999999&sig=abc")
@@ -95,7 +143,7 @@ describe("usePoseImageSrc", () => {
     expect(getSignedImageUrlMock.mock.calls.length).toBeGreaterThan(initialCalls);
   });
 
-  it("falls back to direct path once on signed URL failure", async () => {
+  it("falls back to direct path on signed URL failure (stable across retries)", async () => {
     getSignedImageUrlMock.mockRejectedValueOnce(new Error("fail"));
 
     const { result } = renderHook(() =>
@@ -115,7 +163,8 @@ describe("usePoseImageSrc", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.error).toBe(true);
+      expect(result.current.src).toBe("https://example.com/fallback.png");
     });
+    expect(result.current.error).toBe(false);
   });
 });

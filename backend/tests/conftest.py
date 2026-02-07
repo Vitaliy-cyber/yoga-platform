@@ -2,7 +2,6 @@
 Test fixtures and configuration for pytest.
 """
 
-import asyncio
 import os
 import sys
 from io import BytesIO
@@ -14,6 +13,45 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import event as sa_event
+
+# Patch aiosqlite for Python 3.14 test reliability.
+# aiosqlite's worker-thread + call_soon_threadsafe path can hang when returning
+# sqlite3 objects across threads under Python 3.14. For tests, we run sqlite
+# operations synchronously in the event loop thread to avoid cross-thread futures.
+try:
+    import aiosqlite.core as aiosqlite_core
+
+    if not getattr(aiosqlite_core, "_patched_no_thread", False):
+        async def _connect(self):
+            if self._connection is None:
+                self._connection = self._connector()
+            return self
+
+        async def _execute(self, fn, *args, **kwargs):
+            if not self._connection:
+                raise ValueError("Connection closed")
+            return fn(*args, **kwargs)
+
+        def __await__(self):
+            return _connect(self).__await__()
+
+        async def close(self) -> None:
+            if self._connection is None:
+                return
+            self._connection.close()
+            self._connection = None
+            self._running = False
+
+        aiosqlite_core.Connection._connect = _connect
+        aiosqlite_core.Connection._execute = _execute
+        aiosqlite_core.Connection.__await__ = __await__
+        aiosqlite_core.Connection.close = close
+        aiosqlite_core._patched_no_thread = True
+except Exception:
+    # If aiosqlite isn't available in this environment, tests that require it
+    # will fail anyway; let pytest surface the import error as needed.
+    pass
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -27,26 +65,41 @@ from models.user import User
 TEST_DATABASE_URL = "sqlite+aiosqlite:///./test.db"
 
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+
+# Enable SQLite foreign keys + sane journaling for test DB parity with production.
+@sa_event.listens_for(engine.sync_engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
 TestingSessionLocal = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
 )
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Create a fresh database session for each test."""
     # Import models to register them
-    from models import category, muscle, pose, user
+    from models import (
+        auth_audit,
+        category,
+        generation_task,
+        muscle,
+        pose,
+        pose_version,
+        refresh_token,
+        sequence,
+        token_blacklist,
+        user,
+    )
 
     async with engine.begin() as conn:
+        # Ensure deterministic isolation even if a prior run crashed mid-teardown.
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
 
     async with TestingSessionLocal() as session:
@@ -130,9 +183,6 @@ def mock_google_generator():
                 muscles_bytes=b"fake-muscles-bytes",
                 used_placeholders=False,
             )
-        )
-        mock_instance._analyze_pose_from_image = AsyncMock(
-            return_value="warrior pose with arms extended"
         )
         MockGen.get_instance.return_value = mock_instance
         MockGen.is_available.return_value = True
@@ -319,7 +369,11 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
     app.dependency_overrides[get_db] = override_get_db
 
-    transport = ASGITransport(app=app)
+    try:
+        transport = ASGITransport(app=app, lifespan="off")
+    except TypeError:
+        # Older httpx versions don't support the lifespan parameter.
+        transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
@@ -349,7 +403,11 @@ async def client_with_mocked_storage(
 
     app.dependency_overrides[get_db] = override_get_db
 
-    transport = ASGITransport(app=app)
+    try:
+        transport = ASGITransport(app=app, lifespan="off")
+    except TypeError:
+        # Older httpx versions don't support the lifespan parameter.
+        transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 

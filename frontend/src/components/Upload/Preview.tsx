@@ -50,7 +50,7 @@ export const Preview: React.FC<PreviewProps> = ({
           <div className="w-48 mt-4">
             <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
               <div
-                className="h-full bg-yoga-sage transition-all duration-300"
+                className="h-full bg-yoga-sage transition-[width] duration-300"
                 style={{ width: `${progress}%` }}
               />
             </div>

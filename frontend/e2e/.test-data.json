@@ -1,102 +1,1091 @@
 {
   "categories": [
     {
-      "name": "Balance Poses",
-      "description": "Poses that improve balance",
-      "id": 2,
-      "created_at": "2026-01-20T22:01:09",
-      "pose_count": 1
+      "name": "Atomic Import Bml9aetec",
+      "description": "atomic import",
+      "id": 9,
+      "created_at": "2026-02-05T10:02:02",
+      "pose_count": 2
     },
     {
-      "name": "Seated Poses",
-      "description": "Poses performed while seated",
-      "id": 3,
-      "created_at": "2026-01-20T22:01:09",
-      "pose_count": 1
+      "name": "Atomic Import Bml9b3suo",
+      "description": "atomic import",
+      "id": 10,
+      "created_at": "2026-02-05T10:21:27",
+      "pose_count": 2
     },
     {
-      "name": "Standing Poses",
-      "description": "Poses performed while standing",
+      "name": "E2E Core",
+      "description": "Persistent deterministic seed data for core E2E suite",
       "id": 1,
-      "created_at": "2026-01-20T22:01:09",
-      "pose_count": 3
+      "created_at": "2026-02-04T22:32:05",
+      "pose_count": 2
+    },
+    {
+      "name": "E2E Signed Images",
+      "description": "Persistent E2E signed image tests",
+      "id": 2,
+      "created_at": "2026-02-04T22:32:06",
+      "pose_count": 1
+    },
+    {
+      "name": "Seq Race 1770252973634-4",
+      "description": "atomic sequences",
+      "id": 3,
+      "created_at": "2026-02-05T00:56:13",
+      "pose_count": 8
+    },
+    {
+      "name": "Seq Race 1770258696709-3",
+      "description": "atomic sequences",
+      "id": 4,
+      "created_at": "2026-02-05T02:31:36",
+      "pose_count": 8
+    },
+    {
+      "name": "Seq Race 1770261934825-1",
+      "description": "atomic sequences",
+      "id": 5,
+      "created_at": "2026-02-05T03:25:34",
+      "pose_count": 8
+    },
+    {
+      "name": "Seq Race 1770275169738-4",
+      "description": "atomic sequences",
+      "id": 6,
+      "created_at": "2026-02-05T07:06:09",
+      "pose_count": 8
+    },
+    {
+      "name": "Seq Race 1770282780955-3",
+      "description": "atomic sequences",
+      "id": 7,
+      "created_at": "2026-02-05T09:13:00",
+      "pose_count": 8
+    },
+    {
+      "name": "Seq Race 1770282906887-5",
+      "description": "atomic sequences",
+      "id": 8,
+      "created_at": "2026-02-05T09:15:06",
+      "pose_count": 8
     }
   ],
   "poses": [
     {
-      "id": 7,
-      "code": "TEST_DOWNWARD_DOG",
-      "name": "Downward Dog",
-      "name_en": "Adho Mukha Svanasana",
-      "category_id": 1,
-      "category_name": "Standing Poses",
+      "id": 215,
+      "code": "1770327232721",
+      "name": "E2E Upload Text 1770327231546",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
       "schema_path": null,
+      "photo_path": "/storage/generated/6c352972-194e-42d3-9933-8da75768b29d_photo.png"
+    },
+    {
+      "id": 214,
+      "code": "1770327232082",
+      "name": "E2E Upload 1770327230154",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/04faab18-ec2f-462b-b238-61f22149ee93.png",
+      "photo_path": null
+    },
+    {
+      "id": 213,
+      "code": "1770324938078",
+      "name": "E2E Upload Text 1770324936754",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": null,
+      "photo_path": "/storage/generated/80f7e2bb-8d1a-426c-b6c7-1de3aba62f91_photo.png"
+    },
+    {
+      "id": 212,
+      "code": "1770324937282",
+      "name": "E2E Upload 1770324935594",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/9d905798-edcf-4f19-b74d-9c8f1cb718fd.png",
+      "photo_path": null
+    },
+    {
+      "id": 211,
+      "code": "1770323592384",
+      "name": "E2E Upload Text 1770323590949",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": null,
+      "photo_path": "/storage/generated/0721218e-f13f-43f9-8be3-8519c0f2b16f_photo.png"
+    },
+    {
+      "id": 210,
+      "code": "1770323591567",
+      "name": "E2E Upload 1770323589911",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/40a40612-7eda-4fa3-a4b1-46090aadf216.png",
+      "photo_path": null
+    },
+    {
+      "id": 209,
+      "code": "UI_ml9mevlr",
+      "name": "Atomic UI_ml9mevlr",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/4984017f-a3eb-439d-a5ee-17895cfe7857.png",
+      "photo_path": "/storage/generated/f999ab99-82be-4137-b970-3fe2e09014f0_photo.png"
+    },
+    {
+      "id": 207,
+      "code": "XSSml9jbdug",
+      "name": "ATOMIC XSS 1770300678616",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 206,
+      "code": "XSSml9j7gyy",
+      "name": "ATOMIC XSS 1770300496042",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 205,
+      "code": "1770297835348",
+      "name": "E2E Upload 1770297834499",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/b0067c33-2bd5-4495-abaf-bca08e224978.png",
+      "photo_path": null
+    },
+    {
+      "id": 201,
+      "code": "1770292281483",
+      "name": "E2E Upload 1770292280610",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/0dd7861b-d395-40e2-8280-c009518da278.png",
+      "photo_path": null
+    },
+    {
+      "id": 196,
+      "code": "NOTES_ml9dg53m",
+      "name": "Atomic Notes NOTES_ml9dg53m",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/d01697f4-b995-434a-8500-5b9a06b65953.png",
+      "photo_path": null
+    },
+    {
+      "id": 189,
+      "code": "NOTES_ml9ciw22",
+      "name": "Atomic Notes NOTES_ml9ciw22",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/d255ecbe-cf2d-424c-88d0-2d9c37df235b.png",
+      "photo_path": null
+    },
+    {
+      "id": 188,
+      "code": "NOTES_ml9c6kg5",
+      "name": "Atomic Notes NOTES_ml9c6kg5",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/26c4c06d-8b44-4fff-b8fe-e8b3f59aba0d.png",
+      "photo_path": null
+    },
+    {
+      "id": 183,
+      "code": "IBBml9b3suoB",
+      "name": "Atomic Pose Bml9b3suo B",
+      "name_en": null,
+      "category_id": 10,
+      "category_name": "Atomic Import Bml9b3suo",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 182,
+      "code": "IBBml9b3suoA",
+      "name": "Atomic Pose Bml9b3suo A",
+      "name_en": null,
+      "category_id": 10,
+      "category_name": "Atomic Import Bml9b3suo",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 178,
+      "code": "UNK_ml9afi75",
+      "name": "Atomic Unknown Muscles UNK_ml9afi75",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/fb949ae4-109e-40f0-99b5-c2b5bcefcf40.png",
+      "photo_path": null
+    },
+    {
+      "id": 177,
+      "code": "IBBml9aetecB",
+      "name": "Atomic Pose Bml9aetec B",
+      "name_en": null,
+      "category_id": 9,
+      "category_name": "Atomic Import Bml9aetec",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 176,
+      "code": "IBBml9aetecA",
+      "name": "Atomic Pose Bml9aetec A",
+      "name_en": null,
+      "category_id": 9,
+      "category_name": "Atomic Import Bml9aetec",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 175,
+      "code": "ABC",
+      "name": "unterminated,desc",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 173,
+      "code": "SR1770282906887-54",
+      "name": "Seq Race Pose 4",
+      "name_en": null,
+      "category_id": 8,
+      "category_name": "Seq Race 1770282906887-5",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 172,
+      "code": "SR1770282906887-56",
+      "name": "Seq Race Pose 6",
+      "name_en": null,
+      "category_id": 8,
+      "category_name": "Seq Race 1770282906887-5",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 171,
+      "code": "SR1770282906887-51",
+      "name": "Seq Race Pose 1",
+      "name_en": null,
+      "category_id": 8,
+      "category_name": "Seq Race 1770282906887-5",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 170,
+      "code": "SR1770282906887-55",
+      "name": "Seq Race Pose 5",
+      "name_en": null,
+      "category_id": 8,
+      "category_name": "Seq Race 1770282906887-5",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 169,
+      "code": "SR1770282906887-52",
+      "name": "Seq Race Pose 2",
+      "name_en": null,
+      "category_id": 8,
+      "category_name": "Seq Race 1770282906887-5",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 168,
+      "code": "SR1770282906887-57",
+      "name": "Seq Race Pose 7",
+      "name_en": null,
+      "category_id": 8,
+      "category_name": "Seq Race 1770282906887-5",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 167,
+      "code": "SR1770282906887-50",
+      "name": "Seq Race Pose 0",
+      "name_en": null,
+      "category_id": 8,
+      "category_name": "Seq Race 1770282906887-5",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 166,
+      "code": "SR1770282906887-53",
+      "name": "Seq Race Pose 3",
+      "name_en": null,
+      "category_id": 8,
+      "category_name": "Seq Race 1770282906887-5",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 164,
+      "code": "SR1770282780955-33",
+      "name": "Seq Race Pose 3",
+      "name_en": null,
+      "category_id": 7,
+      "category_name": "Seq Race 1770282780955-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 163,
+      "code": "SR1770282780955-30",
+      "name": "Seq Race Pose 0",
+      "name_en": null,
+      "category_id": 7,
+      "category_name": "Seq Race 1770282780955-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 162,
+      "code": "SR1770282780955-37",
+      "name": "Seq Race Pose 7",
+      "name_en": null,
+      "category_id": 7,
+      "category_name": "Seq Race 1770282780955-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 161,
+      "code": "SR1770282780955-34",
+      "name": "Seq Race Pose 4",
+      "name_en": null,
+      "category_id": 7,
+      "category_name": "Seq Race 1770282780955-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 160,
+      "code": "SR1770282780955-35",
+      "name": "Seq Race Pose 5",
+      "name_en": null,
+      "category_id": 7,
+      "category_name": "Seq Race 1770282780955-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 159,
+      "code": "SR1770282780955-31",
+      "name": "Seq Race Pose 1",
+      "name_en": null,
+      "category_id": 7,
+      "category_name": "Seq Race 1770282780955-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 158,
+      "code": "SR1770282780955-36",
+      "name": "Seq Race Pose 6",
+      "name_en": null,
+      "category_id": 7,
+      "category_name": "Seq Race 1770282780955-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 157,
+      "code": "SR1770282780955-32",
+      "name": "Seq Race Pose 2",
+      "name_en": null,
+      "category_id": 7,
+      "category_name": "Seq Race 1770282780955-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 106,
+      "code": "1770281837075",
+      "name": "E2E Upload 1770281836216",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/2d5aeebc-0d09-4235-b1dc-e8f070b18dbd.png",
+      "photo_path": null
+    },
+    {
+      "id": 105,
+      "code": "SR1770275169738-44",
+      "name": "Seq Race Pose 4",
+      "name_en": null,
+      "category_id": 6,
+      "category_name": "Seq Race 1770275169738-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 104,
+      "code": "SR1770275169738-43",
+      "name": "Seq Race Pose 3",
+      "name_en": null,
+      "category_id": 6,
+      "category_name": "Seq Race 1770275169738-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 103,
+      "code": "SR1770275169738-40",
+      "name": "Seq Race Pose 0",
+      "name_en": null,
+      "category_id": 6,
+      "category_name": "Seq Race 1770275169738-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 102,
+      "code": "SR1770275169738-42",
+      "name": "Seq Race Pose 2",
+      "name_en": null,
+      "category_id": 6,
+      "category_name": "Seq Race 1770275169738-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 101,
+      "code": "SR1770275169738-46",
+      "name": "Seq Race Pose 6",
+      "name_en": null,
+      "category_id": 6,
+      "category_name": "Seq Race 1770275169738-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 100,
+      "code": "SR1770275169738-47",
+      "name": "Seq Race Pose 7",
+      "name_en": null,
+      "category_id": 6,
+      "category_name": "Seq Race 1770275169738-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 99,
+      "code": "SR1770275169738-45",
+      "name": "Seq Race Pose 5",
+      "name_en": null,
+      "category_id": 6,
+      "category_name": "Seq Race 1770275169738-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 98,
+      "code": "SR1770275169738-41",
+      "name": "Seq Race Pose 1",
+      "name_en": null,
+      "category_id": 6,
+      "category_name": "Seq Race 1770275169738-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 57,
+      "code": "SR1770261934825-17",
+      "name": "Seq Race Pose 7",
+      "name_en": null,
+      "category_id": 5,
+      "category_name": "Seq Race 1770261934825-1",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 56,
+      "code": "SR1770261934825-13",
+      "name": "Seq Race Pose 3",
+      "name_en": null,
+      "category_id": 5,
+      "category_name": "Seq Race 1770261934825-1",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 55,
+      "code": "SR1770261934825-10",
+      "name": "Seq Race Pose 0",
+      "name_en": null,
+      "category_id": 5,
+      "category_name": "Seq Race 1770261934825-1",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 54,
+      "code": "SR1770261934825-14",
+      "name": "Seq Race Pose 4",
+      "name_en": null,
+      "category_id": 5,
+      "category_name": "Seq Race 1770261934825-1",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 52,
+      "code": "SR1770261934825-15",
+      "name": "Seq Race Pose 5",
+      "name_en": null,
+      "category_id": 5,
+      "category_name": "Seq Race 1770261934825-1",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 50,
+      "code": "SR1770261934825-16",
+      "name": "Seq Race Pose 6",
+      "name_en": null,
+      "category_id": 5,
+      "category_name": "Seq Race 1770261934825-1",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 49,
+      "code": "SR1770261934825-11",
+      "name": "Seq Race Pose 1",
+      "name_en": null,
+      "category_id": 5,
+      "category_name": "Seq Race 1770261934825-1",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 48,
+      "code": "SR1770261934825-12",
+      "name": "Seq Race Pose 2",
+      "name_en": null,
+      "category_id": 5,
+      "category_name": "Seq Race 1770261934825-1",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 37,
+      "code": "NOTES_ml8v9829",
+      "name": "Atomic Notes NOTES_ml8v9829",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/2bdef632-8074-43c0-8bef-dc35601ef732.png",
+      "photo_path": null
+    },
+    {
+      "id": 36,
+      "code": "RGNml8v4aag",
+      "name": "Atomic Regen RGNml8v4aag",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/4ebd5ad9-7850-44c9-8c90-7195235746db.png",
+      "photo_path": null
+    },
+    {
+      "id": 35,
+      "code": "SR1770258696709-32",
+      "name": "Seq Race Pose 2",
+      "name_en": null,
+      "category_id": 4,
+      "category_name": "Seq Race 1770258696709-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 34,
+      "code": "SR1770258696709-34",
+      "name": "Seq Race Pose 4",
+      "name_en": null,
+      "category_id": 4,
+      "category_name": "Seq Race 1770258696709-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 33,
+      "code": "SR1770258696709-30",
+      "name": "Seq Race Pose 0",
+      "name_en": null,
+      "category_id": 4,
+      "category_name": "Seq Race 1770258696709-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 32,
+      "code": "SR1770258696709-33",
+      "name": "Seq Race Pose 3",
+      "name_en": null,
+      "category_id": 4,
+      "category_name": "Seq Race 1770258696709-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 31,
+      "code": "SR1770258696709-35",
+      "name": "Seq Race Pose 5",
+      "name_en": null,
+      "category_id": 4,
+      "category_name": "Seq Race 1770258696709-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 30,
+      "code": "SR1770258696709-37",
+      "name": "Seq Race Pose 7",
+      "name_en": null,
+      "category_id": 4,
+      "category_name": "Seq Race 1770258696709-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 29,
+      "code": "SR1770258696709-36",
+      "name": "Seq Race Pose 6",
+      "name_en": null,
+      "category_id": 4,
+      "category_name": "Seq Race 1770258696709-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 28,
+      "code": "SR1770258696709-31",
+      "name": "Seq Race Pose 1",
+      "name_en": null,
+      "category_id": 4,
+      "category_name": "Seq Race 1770258696709-3",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 27,
+      "code": "Vml8u1kyq",
+      "name": "Version Pose",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 26,
+      "code": "RGNml8t9vlp",
+      "name": "Atomic Regen RGNml8t9vlp",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/609b4e6e-bf2e-49c6-82bc-10c9e5d0a3df.png",
+      "photo_path": null
+    },
+    {
+      "id": 25,
+      "code": "1770256685026",
+      "name": "E2E Upload 1770256684212",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/013984f9-6af8-470e-a341-0d73ffb7663a.png",
+      "photo_path": null
+    },
+    {
+      "id": 24,
+      "code": "RGNml8swr4j",
+      "name": "Atomic Regen RGNml8swr4j",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/0a641fa5-5bd6-4238-b8bb-9dff3ca7942b.png",
+      "photo_path": null
+    },
+    {
+      "id": 22,
+      "code": "RGNml8svsx3",
+      "name": "Atomic Regen RGNml8svsx3",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/89900c4a-566b-4581-a8e9-383210f89645.png",
+      "photo_path": null
+    },
+    {
+      "id": 20,
+      "code": "1770253919779",
+      "name": "E2E Upload 1770253918990",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/3fb9c846-d80f-434c-9aa7-e67148467a5e.png",
+      "photo_path": null
+    },
+    {
+      "id": 19,
+      "code": "1770253147954",
+      "name": "E2E Upload 1770253147175",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/6981d374-b56b-4fae-8cec-a4c51b5564e9.png",
+      "photo_path": null
+    },
+    {
+      "id": 18,
+      "code": "SR1770252973634-43",
+      "name": "Seq Race Pose 3",
+      "name_en": null,
+      "category_id": 3,
+      "category_name": "Seq Race 1770252973634-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 17,
+      "code": "SR1770252973634-44",
+      "name": "Seq Race Pose 4",
+      "name_en": null,
+      "category_id": 3,
+      "category_name": "Seq Race 1770252973634-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 16,
+      "code": "SR1770252973634-42",
+      "name": "Seq Race Pose 2",
+      "name_en": null,
+      "category_id": 3,
+      "category_name": "Seq Race 1770252973634-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 15,
+      "code": "SR1770252973634-47",
+      "name": "Seq Race Pose 7",
+      "name_en": null,
+      "category_id": 3,
+      "category_name": "Seq Race 1770252973634-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 14,
+      "code": "SR1770252973634-45",
+      "name": "Seq Race Pose 5",
+      "name_en": null,
+      "category_id": 3,
+      "category_name": "Seq Race 1770252973634-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 13,
+      "code": "SR1770252973634-46",
+      "name": "Seq Race Pose 6",
+      "name_en": null,
+      "category_id": 3,
+      "category_name": "Seq Race 1770252973634-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 12,
+      "code": "SR1770252973634-40",
+      "name": "Seq Race Pose 0",
+      "name_en": null,
+      "category_id": 3,
+      "category_name": "Seq Race 1770252973634-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 11,
+      "code": "SR1770252973634-41",
+      "name": "Seq Race Pose 1",
+      "name_en": null,
+      "category_id": 3,
+      "category_name": "Seq Race 1770252973634-4",
+      "schema_path": null,
+      "photo_path": null
+    },
+    {
+      "id": 10,
+      "code": "1770252501678",
+      "name": "E2E Upload 1770252500860",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/27c06bdb-617b-42c7-bd19-f70fc121ec54.png",
+      "photo_path": null
+    },
+    {
+      "id": 9,
+      "code": "1770250910027",
+      "name": "E2E Upload 1770250909232",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/94784adc-0fbc-4ba6-a1e5-7812ca3c949b.png",
       "photo_path": null
     },
     {
       "id": 8,
-      "code": "TEST_SEATED_FORWARD",
-      "name": "Seated Forward Bend",
-      "name_en": "Paschimottanasana",
-      "category_id": 3,
-      "category_name": "Seated Poses",
-      "schema_path": null,
+      "code": "1770250206303",
+      "name": "E2E Upload 1770250205515",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/7affce3c-9805-4244-ad3d-7feced5227ec.png",
+      "photo_path": null
+    },
+    {
+      "id": 7,
+      "code": "1770250040562",
+      "name": "E2E Upload 1770250039770",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/9661426f-493c-4b3e-8069-bf019e3ef1d2.png",
       "photo_path": null
     },
     {
       "id": 6,
-      "code": "TEST_TREE",
-      "name": "Tree Pose",
-      "name_en": "Vrksasana",
-      "category_id": 2,
-      "category_name": "Balance Poses",
-      "schema_path": null,
-      "photo_path": null
-    },
-    {
-      "id": 4,
-      "code": "TEST_WARRIOR_I",
-      "name": "Warrior I",
-      "name_en": "Virabhadrasana I",
-      "category_id": 1,
-      "category_name": "Standing Poses",
-      "schema_path": null,
+      "code": "1770249173230",
+      "name": "E2E Upload 1770249172435",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/0540eabf-73cc-4313-8c38-b06570a808ab.png",
       "photo_path": null
     },
     {
       "id": 5,
-      "code": "TEST_WARRIOR_II",
-      "name": "Warrior II",
-      "name_en": "Virabhadrasana II",
-      "category_id": 1,
-      "category_name": "Standing Poses",
-      "schema_path": null,
+      "code": "1770247131664",
+      "name": "E2E Upload 1770247130620",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/b97ae94a-7adf-444f-b7fd-f0174c9e77e0.png",
       "photo_path": null
+    },
+    {
+      "id": 4,
+      "code": "1770245417047",
+      "name": "E2E Upload 1770245416188",
+      "name_en": null,
+      "category_id": null,
+      "category_name": null,
+      "schema_path": "/storage/uploads/schemas/00af1b5d-767d-4cc2-9a87-43fc2000077f.png",
+      "photo_path": null
+    },
+    {
+      "id": 3,
+      "code": "E2E_SIGNED_IMG",
+      "name": "E2E Signed Image Pose",
+      "name_en": null,
+      "category_id": 2,
+      "category_name": "E2E Signed Images",
+      "schema_path": "/storage/uploads/schemas/67cef0f3-9e45-4d1f-94cf-3d4278a383cf.png",
+      "photo_path": null
+    },
+    {
+      "id": 2,
+      "code": "E2E_CORE_B",
+      "name": "E2E Core Pose B",
+      "name_en": null,
+      "category_id": 1,
+      "category_name": "E2E Core",
+      "schema_path": "/storage/uploads/schemas/f0cb1547-0068-49c1-864d-84c2e9e190c5.png",
+      "photo_path": "/storage/generated/de575192-efde-4757-a8e3-323d9545deb1_photo.png"
+    },
+    {
+      "id": 1,
+      "code": "E2E_CORE_A",
+      "name": "E2E Core Pose A",
+      "name_en": null,
+      "category_id": 1,
+      "category_name": "E2E Core",
+      "schema_path": "/storage/uploads/schemas/35d0af3e-f357-4951-881f-f9e586d92d4e.png",
+      "photo_path": "/storage/generated/ca78e130-5c3b-4004-ab43-9b5fee2af5b9_photo.png"
     }
   ],
   "sequences": [
     {
-      "id": 1,
-      "name": "Morning Flow",
-      "description": "An energizing morning yoga sequence",
+      "id": 9,
+      "name": "Seq Race 1770282906887-5",
+      "description": "atomic",
       "difficulty": "beginner",
-      "duration_seconds": 180,
-      "pose_count": 4,
-      "created_at": "2026-01-20T22:01:09",
-      "updated_at": "2026-01-20T22:01:09"
+      "duration_seconds": 0,
+      "pose_count": 0,
+      "created_at": "2026-02-05T09:15:06",
+      "updated_at": "2026-02-05T09:15:06"
+    },
+    {
+      "id": 8,
+      "name": "Seq Race 1770282780955-3",
+      "description": "atomic",
+      "difficulty": "beginner",
+      "duration_seconds": 0,
+      "pose_count": 0,
+      "created_at": "2026-02-05T09:13:01",
+      "updated_at": "2026-02-05T09:13:01"
+    },
+    {
+      "id": 7,
+      "name": "Seq Race 1770275169738-4",
+      "description": "atomic",
+      "difficulty": "beginner",
+      "duration_seconds": 64,
+      "pose_count": 6,
+      "created_at": "2026-02-05T07:06:09",
+      "updated_at": "2026-02-05T07:06:09"
+    },
+    {
+      "id": 6,
+      "name": "Seq Race 1770261934825-1",
+      "description": "atomic",
+      "difficulty": "beginner",
+      "duration_seconds": 60,
+      "pose_count": 7,
+      "created_at": "2026-02-05T03:25:35",
+      "updated_at": "2026-02-05T03:25:35"
+    },
+    {
+      "id": 4,
+      "name": "Seq Race 1770258696709-3",
+      "description": "atomic",
+      "difficulty": "beginner",
+      "duration_seconds": 57,
+      "pose_count": 6,
+      "created_at": "2026-02-05T02:31:36",
+      "updated_at": "2026-02-05T02:31:36"
+    },
+    {
+      "id": 3,
+      "name": "Seq Race 1770252973634-4",
+      "description": "atomic",
+      "difficulty": "beginner",
+      "duration_seconds": 0,
+      "pose_count": 0,
+      "created_at": "2026-02-05T00:56:13",
+      "updated_at": "2026-02-05T00:56:13"
     },
     {
       "id": 2,
-      "name": "Strength Builder",
-      "description": "A sequence focused on building leg strength",
-      "difficulty": "intermediate",
-      "duration_seconds": 165,
-      "pose_count": 3,
-      "created_at": "2026-01-20T22:01:09",
-      "updated_at": "2026-01-20T22:01:09"
+      "name": "E2E Core Sequence",
+      "description": "Persistent core seeded sequence with 2 poses",
+      "difficulty": "beginner",
+      "duration_seconds": 75,
+      "pose_count": 2,
+      "created_at": "2026-02-04T22:32:22",
+      "updated_at": "2026-02-04T22:32:22"
     }
   ],
   "muscles": [
+    {
+      "name": "atomic_muscle_ml9hbii4_9y3k1z",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 21
+    },
+    {
+      "name": "atomic_muscle_ml9hhgkz_xy6jpb",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 22
+    },
+    {
+      "name": "atomic_muscle_ml9j54ag_2vef2y",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 23
+    },
+    {
+      "name": "atomic_muscle_ml9jdplq_5j50jn",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 24
+    },
+    {
+      "name": "atomic_muscle_ml9x2w4g_f0ztzy",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 25
+    },
+    {
+      "name": "atomic_muscle_ml9xvnbb_kn79ij",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 26
+    },
+    {
+      "name": "atomic_muscle_ml9y6qaz_2sgnkb",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 27
+    },
+    {
+      "name": "atomic_muscle_ml9ycvie_1r9xp6",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 28
+    },
+    {
+      "name": "atomic_muscle_ml9ylvwg_08kf5s",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 29
+    },
+    {
+      "name": "atomic_muscle_ml9yrisp_zk8as8",
+      "name_ua": "Атомік м'яз",
+      "body_part": "arms",
+      "id": 30
+    },
     {
       "name": "biceps",
       "name_ua": "Біцепс",
@@ -217,5 +1206,15 @@
       "body_part": "shoulders",
       "id": 15
     }
-  ]
+  ],
+  "created": {
+    "categoryId": 2,
+    "poseId": 3,
+    "coreCategoryId": 1,
+    "corePoseIds": [
+      1,
+      2
+    ],
+    "coreSequenceId": 2
+  }
 }

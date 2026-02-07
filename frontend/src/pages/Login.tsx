@@ -1,12 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { authApi } from '../services/api';
 import { useAuthStore } from '../store/useAuthStore';
-import { useViewTransition } from '../hooks/useViewTransition';
 import { Loader2, Key, Sparkles } from 'lucide-react';
 import { useI18n } from '../i18n';
 
@@ -17,7 +15,6 @@ export const Login: React.FC = () => {
   const navigate = useNavigate();
   const setAuth = useAuthStore((state) => state.setAuth);
   const { t } = useI18n();
-  const { startTransition } = useViewTransition();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,7 +23,7 @@ export const Login: React.FC = () => {
       return;
     }
 
-    void startTransition(() => setIsLoading(true));
+    setIsLoading(true);
     setError(null);
 
     try {
@@ -97,19 +94,14 @@ export const Login: React.FC = () => {
               </p>
             </div>
 
-            <AnimatePresence>
-              {error && (
-                <motion.div
-                  initial={{ opacity: 0, y: -10, height: 0 }}
-                  animate={{ opacity: 1, y: 0, height: "auto" }}
-                  exit={{ opacity: 0, y: -10, height: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 px-4 py-3 rounded-xl text-sm overflow-hidden"
-                >
-                  {error}
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {error && (
+              <div
+                className="bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 px-4 py-3 rounded-xl text-sm overflow-hidden"
+                role="alert"
+              >
+                {error}
+              </div>
+            )}
 
             <Button
               type="submit"

@@ -150,7 +150,7 @@ export const MuscleComparisonChart: React.FC<MuscleComparisonChartProps> = ({
                               <>
                                 {/* Filled bar */}
                                 <div
-                                  className={`absolute inset-y-0 left-0 ${colors.bg} rounded transition-all duration-500`}
+                                  className={`absolute inset-y-0 left-0 ${colors.bg} rounded transition-[width] duration-500`}
                                   style={{ width: `${activation}%` }}
                                 />
 

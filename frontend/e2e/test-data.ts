@@ -7,17 +7,17 @@
  * NO FAKE DATA IS CREATED - tests work with real existing data!
  */
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import type { TestDataStore } from './test-api.js';
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import type { TestDataStore } from "./test-api.js";
 
 // ES module __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Path to test data file
-const TEST_DATA_FILE = path.join(__dirname, '.test-data.json');
+const TEST_DATA_FILE = path.join(__dirname, ".test-data.json");
 
 // Cached test data
 let cachedData: TestDataStore | null = null;
@@ -31,7 +31,9 @@ export function loadTestData(): TestDataStore {
   }
 
   if (!fs.existsSync(TEST_DATA_FILE)) {
-    console.warn('[test-data] Test data file not found. Tests may skip data-dependent assertions.');
+    console.warn(
+      "[test-data] Test data file not found. Tests may skip data-dependent assertions.",
+    );
     return {
       categories: [],
       poses: [],
@@ -41,11 +43,11 @@ export function loadTestData(): TestDataStore {
   }
 
   try {
-    const data = JSON.parse(fs.readFileSync(TEST_DATA_FILE, 'utf-8'));
+    const data = JSON.parse(fs.readFileSync(TEST_DATA_FILE, "utf-8"));
     cachedData = data;
     return data;
   } catch (error) {
-    console.error('[test-data] Failed to load test data:', error);
+    console.error("[test-data] Failed to load test data:", error);
     return {
       categories: [],
       poses: [],
@@ -58,31 +60,41 @@ export function loadTestData(): TestDataStore {
 /**
  * Get a pose by ID
  */
-export function getPoseById(id: number): { id: number; name: string; code: string } | undefined {
+export function getPoseById(
+  id: number,
+): { id: number; name: string; code: string } | undefined {
   const data = loadTestData();
-  return data.poses.find(p => p.id === id);
+  return data.poses.find((p) => p.id === id);
 }
 
 /**
  * Get a category by ID
  */
-export function getCategoryById(id: number): { id: number; name: string } | undefined {
+export function getCategoryById(
+  id: number,
+): { id: number; name: string } | undefined {
   const data = loadTestData();
-  return data.categories.find(c => c.id === id);
+  return data.categories.find((c) => c.id === id);
 }
 
 /**
  * Get a sequence by ID
  */
-export function getSequenceById(id: number): { id: number; name: string } | undefined {
+export function getSequenceById(
+  id: number,
+): { id: number; name: string } | undefined {
   const data = loadTestData();
-  return data.sequences.find(s => s.id === id);
+  return data.sequences.find((s) => s.id === id);
 }
 
 /**
  * Get all poses
  */
-export function getAllPoses(): Array<{ id: number; name: string; code: string }> {
+export function getAllPoses(): Array<{
+  id: number;
+  name: string;
+  code: string;
+}> {
   return loadTestData().poses;
 }
 
@@ -94,6 +106,31 @@ export function getCreatedPoseId(): number | null {
 export function getCreatedCategoryId(): number | null {
   const data = loadTestData();
   return data.created?.categoryId ?? null;
+}
+
+export function getCoreCategoryId(): number | null {
+  const data = loadTestData();
+  return data.created?.coreCategoryId ?? null;
+}
+
+export function getCorePoseIds(): number[] {
+  const data = loadTestData();
+  return data.created?.corePoseIds ?? [];
+}
+
+export function getCorePoseIdA(): number | null {
+  const ids = getCorePoseIds();
+  return ids[0] ?? null;
+}
+
+export function getCorePoseIdB(): number | null {
+  const ids = getCorePoseIds();
+  return ids[1] ?? null;
+}
+
+export function getCoreSequenceId(): number | null {
+  const data = loadTestData();
+  return data.created?.coreSequenceId ?? null;
 }
 
 /**
@@ -117,7 +154,7 @@ export function getAllSequences(): Array<{ id: number; name: string }> {
 export function getFirstPoseId(): number {
   const data = loadTestData();
   if (data.poses.length === 0) {
-    console.warn('[test-data] No poses available, using ID 1 as fallback');
+    console.warn("[test-data] No poses available, using ID 1 as fallback");
     return 1;
   }
   return data.poses[0].id;
@@ -129,7 +166,9 @@ export function getFirstPoseId(): number {
 export function getTwoPoseIds(): [number, number] {
   const data = loadTestData();
   if (data.poses.length < 2) {
-    console.warn('[test-data] Need at least 2 poses for comparison, using IDs 1, 2 as fallback');
+    console.warn(
+      "[test-data] Need at least 2 poses for comparison, using IDs 1, 2 as fallback",
+    );
     return [1, 2];
   }
   return [data.poses[0].id, data.poses[1].id];
@@ -142,7 +181,7 @@ export function getTwoPoseIds(): [number, number] {
 export function getFirstSequenceId(): number {
   const data = loadTestData();
   if (data.sequences.length === 0) {
-    console.warn('[test-data] No sequences available, using ID 1 as fallback');
+    console.warn("[test-data] No sequences available, using ID 1 as fallback");
     return 1;
   }
   return data.sequences[0].id;
@@ -155,7 +194,7 @@ export function getFirstSequenceId(): number {
 export function getFirstCategoryId(): number {
   const data = loadTestData();
   if (data.categories.length === 0) {
-    console.warn('[test-data] No categories available, using ID 1 as fallback');
+    console.warn("[test-data] No categories available, using ID 1 as fallback");
     return 1;
   }
   return data.categories[0].id;
@@ -207,7 +246,9 @@ export function getSequenceCount(): number {
 /**
  * Get a random pose (useful for varied testing)
  */
-export function getRandomPose(): { id: number; name: string; code: string } | undefined {
+export function getRandomPose():
+  | { id: number; name: string; code: string }
+  | undefined {
   const data = loadTestData();
   if (data.poses.length === 0) return undefined;
   const randomIndex = Math.floor(Math.random() * data.poses.length);

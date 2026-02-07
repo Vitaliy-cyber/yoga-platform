@@ -8,9 +8,9 @@ import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 import { PoseImage } from "../Pose";
 import { useAuthStore } from "../../store/useAuthStore";
-import { useViewTransition } from "../../hooks/useViewTransition";
 import { useI18n } from "../../i18n";
-
+import { authApi } from "../../services/api";
+import { dropdownVariants, fastTransition } from "../../lib/animation-variants";
 
 export const Header: React.FC = () => {
   const navigate = useNavigate();
@@ -20,14 +20,15 @@ export const Header: React.FC = () => {
   const [activeIndex, setActiveIndex] = useState(-1);
   const { user, logout } = useAuthStore();
   const { t, locale, setLocale } = useI18n();
-  const { startTransition } = useViewTransition();
   const resultsRef = useRef<HTMLDivElement>(null);
 
   const handleLogout = useCallback(() => {
-    logout();
-    navigate("/login", { replace: true });
+    void (async () => {
+      await authApi.logout().catch(() => undefined);
+      logout();
+      navigate("/login", { replace: true });
+    })();
   }, [logout, navigate]);
-
 
   const handleSearch = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -37,7 +38,7 @@ export const Header: React.FC = () => {
       setShowResults(query.length > 0);
       setActiveIndex(-1);
     },
-    [search]
+    [search],
   );
 
   const handleSelectResult = useCallback(
@@ -47,7 +48,7 @@ export const Header: React.FC = () => {
       setActiveIndex(-1);
       navigate(`/poses/${poseId}`);
     },
-    [navigate]
+    [navigate],
   );
 
   const handleKeyDown = useCallback(
@@ -57,7 +58,9 @@ export const Header: React.FC = () => {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          setActiveIndex((prev) => (prev < results.length - 1 ? prev + 1 : prev));
+          setActiveIndex((prev) =>
+            prev < results.length - 1 ? prev + 1 : prev,
+          );
           break;
         case "ArrowUp":
           e.preventDefault();
@@ -75,7 +78,7 @@ export const Header: React.FC = () => {
           break;
       }
     },
-    [showResults, results, activeIndex, handleSelectResult]
+    [showResults, results, activeIndex, handleSelectResult],
   );
 
   return (
@@ -85,25 +88,27 @@ export const Header: React.FC = () => {
         <div className="flex-1 max-w-lg relative">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder={t("header.search_placeholder")}
-                className="pl-9 bg-secondary/50 border-transparent focus:bg-background focus:border-input transition-all"
-                value={searchQuery}
-                onChange={handleSearch}
-                onKeyDown={handleKeyDown}
-                onFocus={() => {
-                  searchQuery && setShowResults(true);
-                }}
-                onBlur={() => {
-                  setTimeout(() => setShowResults(false), 200);
-                }}
-                role="combobox"
-                aria-expanded={showResults}
-                aria-controls="search-results"
-                aria-activedescendant={activeIndex >= 0 ? `search-result-${activeIndex}` : undefined}
-                aria-autocomplete="list"
-                aria-label={t("header.search_placeholder")}
-              />
+            <Input
+              placeholder={t("header.search_placeholder")}
+              className="pl-9 bg-secondary/50 border-transparent focus:bg-background focus:border-input transition-colors"
+              value={searchQuery}
+              onChange={handleSearch}
+              onKeyDown={handleKeyDown}
+              onFocus={() => {
+                searchQuery && setShowResults(true);
+              }}
+              onBlur={() => {
+                setTimeout(() => setShowResults(false), 200);
+              }}
+              role="combobox"
+              aria-expanded={showResults}
+              aria-controls="search-results"
+              aria-activedescendant={
+                activeIndex >= 0 ? `search-result-${activeIndex}` : undefined
+              }
+              aria-autocomplete="list"
+              aria-label={t("header.search_placeholder")}
+            />
 
             {isSearching && (
               <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
@@ -118,10 +123,11 @@ export const Header: React.FC = () => {
                 id="search-results"
                 role="listbox"
                 aria-label={t("header.search_results")}
-                initial={{ opacity: 0, y: -4, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -4, scale: 0.98 }}
-                transition={{ duration: 0.15 }}
+                variants={dropdownVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={fastTransition}
                 className="absolute top-full left-0 right-0 mt-2 rounded-xl border bg-card/95 backdrop-blur-md shadow-lg overflow-hidden z-50"
               >
                 <div className="max-h-[300px] overflow-y-auto p-1">
@@ -137,7 +143,7 @@ export const Header: React.FC = () => {
                           "flex items-center gap-3 w-full p-2 rounded-lg transition-colors duration-150 text-left group",
                           index === activeIndex
                             ? "bg-accent text-accent-foreground"
-                            : "hover:bg-accent"
+                            : "hover:bg-accent",
                         )}
                       >
                         {pose.photo_path ? (
@@ -154,7 +160,9 @@ export const Header: React.FC = () => {
                           </div>
                         )}
                         <div className="flex-1 overflow-hidden">
-                          <p className="text-sm font-medium truncate group-hover:text-primary transition-colors duration-150">{pose.name}</p>
+                          <p className="text-sm font-medium truncate group-hover:text-primary transition-colors duration-150">
+                            {pose.name}
+                          </p>
                           <p className="text-xs text-muted-foreground truncate opacity-70">
                             {pose.category_name} • #{pose.code}
                           </p>
@@ -162,7 +170,10 @@ export const Header: React.FC = () => {
                       </button>
                     ))
                   ) : (
-                    <div className="p-4 text-center text-sm text-muted-foreground" role="status">
+                    <div
+                      className="p-4 text-center text-sm text-muted-foreground"
+                      role="status"
+                    >
                       {t("header.no_results")}
                     </div>
                   )}
@@ -177,7 +188,9 @@ export const Header: React.FC = () => {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => void startTransition(() => setLocale(locale === "ua" ? "en" : "ua"))}
+            onClick={() =>
+              setLocale(locale === "ua" ? "en" : "ua")
+            }
             className="text-muted-foreground hover:text-foreground hover:bg-accent"
             aria-label={t("app.language_toggle")}
           >

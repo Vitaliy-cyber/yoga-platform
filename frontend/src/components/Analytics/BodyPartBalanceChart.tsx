@@ -12,7 +12,7 @@ import {
 import type { BodyPartBalance } from '../../types';
 import { useI18n } from '../../i18n';
 import { cn } from '../../lib/utils';
-import { Activity, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Activity, AlertTriangle, ShieldCheck } from 'lucide-react';
 
 interface BodyPartBalanceChartProps {
   balanceData: BodyPartBalance[];
@@ -98,7 +98,7 @@ const BalanceScoreIndicator: React.FC<{ score: number }> = ({ score }) => {
   const getScoreConfig = () => {
     if (score >= 70) {
       return {
-        icon: CheckCircle,
+        icon: ShieldCheck,
         color: 'text-emerald-600',
         bgColor: 'bg-emerald-100',
         label: locale === 'ua' ? 'Добре збалансовано' : 'Well Balanced',

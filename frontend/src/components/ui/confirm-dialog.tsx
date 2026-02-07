@@ -10,7 +10,7 @@ import {
 } from "./dialog";
 import { Button } from "./button";
 import { Loader2, AlertTriangle, Trash2, Info } from "lucide-react";
-import { useViewTransition } from "../../hooks/useViewTransition";
+import { fadeIn } from "../../lib/animation-variants";
 
 type ConfirmVariant = "danger" | "warning" | "info";
 
@@ -24,23 +24,31 @@ interface ConfirmDialogProps {
   cancelText?: string;
   variant?: ConfirmVariant;
   isLoading?: boolean;
+  /**
+   * Optional base test id for stable E2E selectors.
+   * When provided, renders:
+   * - data-testid={testId} on the dialog content
+   * - data-testid={`${testId}-cancel`} on cancel button
+   * - data-testid={`${testId}-confirm`} on confirm button
+   */
+  testId?: string;
 }
 
 const variantStyles: Record<ConfirmVariant, { icon: typeof AlertTriangle; iconColor: string; buttonClass: string }> = {
   danger: {
     icon: Trash2,
     iconColor: "text-red-500",
-    buttonClass: "bg-red-500 hover:bg-red-600 text-white",
+    buttonClass: "bg-red-500 hover:bg-red-600 text-white transition-colors duration-150",
   },
   warning: {
     icon: AlertTriangle,
     iconColor: "text-amber-500",
-    buttonClass: "bg-amber-500 hover:bg-amber-600 text-white",
+    buttonClass: "bg-amber-500 hover:bg-amber-600 text-white transition-colors duration-150",
   },
   info: {
     icon: Info,
     iconColor: "text-blue-500",
-    buttonClass: "bg-blue-500 hover:bg-blue-600 text-white",
+    buttonClass: "bg-blue-500 hover:bg-blue-600 text-white transition-colors duration-150",
   },
 };
 
@@ -54,9 +62,9 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   cancelText = "Cancel",
   variant = "danger",
   isLoading = false,
+  testId,
 }) => {
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
-  const { startTransition } = useViewTransition();
   const { icon: Icon, iconColor, buttonClass } = variantStyles[variant];
 
   // Focus cancel button on open for safety (user must actively choose to confirm)
@@ -83,7 +91,11 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md" mobileFullscreen={false}>
+      <DialogContent
+        className="sm:max-w-md"
+        mobileFullscreen={false}
+        data-testid={testId}
+      >
         <DialogHeader>
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded-full bg-muted ${iconColor}`}>
@@ -102,21 +114,24 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             variant="outline"
             onClick={onClose}
             disabled={isLoading}
+            data-testid={testId ? `${testId}-cancel` : undefined}
           >
             {cancelText}
           </Button>
           <Button
-            onClick={() => void startTransition(() => handleConfirm())}
+            onClick={() => void handleConfirm()}
             disabled={isLoading}
             className={buttonClass}
+            data-testid={testId ? `${testId}-confirm` : undefined}
           >
             <AnimatePresence mode="wait">
               {isLoading ? (
                 <motion.span
                   key="loading"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+                  variants={fadeIn}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
                   className="flex items-center"
                 >
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -125,9 +140,10 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
               ) : (
                 <motion.span
                   key="idle"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+                  variants={fadeIn}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
                 >
                   {confirmText}
                 </motion.span>

@@ -5,6 +5,40 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Yoga Pose Platform</title>
+    <style>
+      html,
+      body,
+      #root {
+        min-height: 100%;
+      }
+
+      html,
+      body {
+        margin: 0;
+        background: rgb(250 250 249);
+        color: rgb(28 25 23);
+      }
+
+      html.dark,
+      html.dark body {
+        background: rgb(23 23 23);
+        color: rgb(250 250 249);
+      }
+    </style>
+    <script>
+      (function applyInitialTheme() {
+        try {
+          var stored = localStorage.getItem("yoga-platform-theme");
+          var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var theme = stored === "light" || stored === "dark"
+            ? stored
+            : (prefersDark ? "dark" : "light");
+          document.documentElement.classList.add(theme);
+        } catch (_error) {
+          document.documentElement.classList.add("light");
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">

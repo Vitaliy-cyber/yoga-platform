@@ -55,9 +55,11 @@ describe("PoseCard", () => {
       refresh: vi.fn(),
     });
     render(<PoseCard pose={poseWithPhoto} />);
-    const img = screen.getByAltText("Тадасана");
     return waitFor(() => {
-      expect(img.getAttribute("src")).toContain("/storage/test.jpg");
+      const card = screen.getByTestId("pose-card-1");
+      const img = card.querySelector("img");
+      expect(img).toBeTruthy();
+      expect(img?.getAttribute("src")).toContain("/storage/test.jpg");
     });
   });
 
@@ -88,9 +90,11 @@ describe("PoseCard", () => {
 
     render(<PoseCard pose={poseWithSchema} />);
 
-    const img = await screen.findByAltText("Тадасана");
     await waitFor(() => {
-      expect(img.getAttribute("src")).toContain("/storage/schema.png");
+      const card = screen.getByTestId("pose-card-1");
+      const img = card.querySelector("img");
+      expect(img).toBeTruthy();
+      expect(img?.getAttribute("src")).toContain("/storage/schema.png");
     });
   });
 });

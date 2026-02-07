@@ -55,7 +55,7 @@ const CustomTooltip: React.FC<CustomTooltipProps> = ({ active, payload }) => {
     <motion.div
       initial={{ opacity: 0, scale: 0.9 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="rounded-xl bg-card px-4 py-3 shadow-lg ring-1 ring-black/5"
+      className="rounded-xl bg-card px-4 py-3 shadow-lg ring-1 ring-black/5 z-30"
     >
       <p className="font-semibold text-foreground">{data.name}</p>
       <div className="mt-2 space-y-1 text-sm text-muted-foreground">
@@ -93,31 +93,29 @@ const LegendItem: React.FC<LegendItemProps> = ({
   isSelected,
   onClick,
 }) => (
-  <motion.button
+  <button
     onClick={onClick}
-    whileHover={{ scale: 1.02 }}
-    whileTap={{ scale: 0.98 }}
     className={cn(
-      'flex w-full items-center justify-between rounded-lg px-3 py-2 text-left transition-all',
+      'flex w-full items-center justify-between rounded-xl border border-transparent px-3 py-2.5 min-h-[42px] text-left transition-[background-color,border-color,box-shadow,transform] duration-200 ease-out',
       isSelected
-        ? 'bg-muted ring-2 ring-primary/20'
-        : 'hover:bg-accent'
+        ? 'bg-muted border-primary/30 shadow-[inset_0_0_0_1px_rgba(99,102,241,0.18)]'
+        : 'hover:bg-accent hover:border-border/60'
     )}
   >
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       <div
-        className="h-3 w-3 rounded-full"
+        className="h-3 w-3 rounded-full flex-shrink-0"
         style={{ backgroundColor: color }}
       />
-      <span className="text-sm font-medium text-foreground">{name}</span>
+      <span className="truncate text-sm font-medium leading-tight text-foreground">{name}</span>
     </div>
-    <div className="flex items-center gap-3">
-      <span className="text-sm text-muted-foreground">{value}</span>
-      <span className="min-w-[48px] rounded-full bg-muted px-2 py-0.5 text-center text-xs font-medium text-muted-foreground">
+    <div className="ml-3 flex flex-shrink-0 items-center gap-3">
+      <span className="text-sm tabular-nums text-muted-foreground">{value}</span>
+      <span className="min-w-[52px] whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-center text-xs font-medium tabular-nums text-muted-foreground">
         {percentage.toFixed(1)}%
       </span>
     </div>
-  </motion.button>
+  </button>
 );
 
 export const CategoryPieChart: React.FC<CategoryPieChartProps> = ({
@@ -170,7 +168,7 @@ export const CategoryPieChart: React.FC<CategoryPieChartProps> = ({
   return (
     <div className={cn('flex flex-col lg:flex-row gap-6', className)}>
       {/* Pie Chart */}
-      <div className="flex-1 min-h-[280px]">
+      <div className="relative flex-1 min-h-[280px]">
         <ResponsiveContainer width="100%" height={280}>
           <PieChart>
             <Pie
@@ -206,18 +204,18 @@ export const CategoryPieChart: React.FC<CategoryPieChartProps> = ({
                       selectedCategory === entry.name
                         ? 'drop-shadow(0 4px 6px rgba(0, 0, 0, 0.1))'
                         : 'none',
-                    transition: 'all 0.2s ease',
+                    transition: 'opacity 0.2s ease, filter 0.2s ease',
                     cursor: 'pointer',
                   }}
                 />
               ))}
             </Pie>
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={<CustomTooltip />} wrapperStyle={{ zIndex: 30, pointerEvents: 'none' }} />
           </PieChart>
         </ResponsiveContainer>
 
         {/* Center label */}
-        <div className="relative -mt-[180px] flex items-center justify-center pointer-events-none">
+        <div className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center">
           <div className="text-center">
             <p className="text-3xl font-bold text-foreground">
               {categories.reduce((sum, cat) => sum + cat.pose_count, 0)}
@@ -227,11 +225,10 @@ export const CategoryPieChart: React.FC<CategoryPieChartProps> = ({
             </p>
           </div>
         </div>
-        <div className="h-[120px]" /> {/* Spacer to account for the -mt offset */}
       </div>
 
       {/* Legend */}
-      <div className="lg:w-64 space-y-1 max-h-[300px] overflow-y-auto scrollbar-hide">
+      <div className="lg:w-64 space-y-1.5 max-h-[300px] overflow-y-auto overflow-x-hidden scrollbar-hide py-1 pr-1">
         {chartData.map((cat) => (
           <LegendItem
             key={cat.id}

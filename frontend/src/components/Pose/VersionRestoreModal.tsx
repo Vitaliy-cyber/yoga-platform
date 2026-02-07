@@ -13,7 +13,6 @@ import {
   DialogFooter,
 } from '../ui/dialog';
 import { Loader2, RotateCcw, AlertTriangle } from 'lucide-react';
-import { useViewTransition } from '../../hooks/useViewTransition';
 import { useI18n } from '../../i18n';
 
 interface RestoreResponse {
@@ -53,13 +52,12 @@ export const VersionRestoreModal: React.FC<VersionRestoreModalProps> = ({
   onRestored,
 }) => {
   const { t } = useI18n();
-  const { startTransition } = useViewTransition();
   const [changeNote, setChangeNote] = useState('');
   const [isRestoring, setIsRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleRestore = async () => {
-    void startTransition(() => setIsRestoring(true));
+    setIsRestoring(true);
     setError(null);
     try {
       const response: RestoreResponse = await versionsApi.restore(poseId, versionId, {

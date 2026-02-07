@@ -43,6 +43,8 @@ export interface Pose {
   photo_path: string | null;
   muscle_layer_path: string | null;
   skeleton_layer_path: string | null;
+  // Backend optimistic-lock version (used for cache-busting signed URLs)
+  version?: number;
   created_at: string;
   updated_at: string;
   muscles: PoseMuscle[];
@@ -57,6 +59,7 @@ export interface PoseListItem {
   category_name: string | null;
   schema_path: string | null;
   photo_path: string | null;
+  version?: number;
 }
 
 export interface PoseCreate {
@@ -105,6 +108,36 @@ export interface GenerateResponse {
   quota_warning: boolean;
   // Analyzed muscles from AI
   analyzed_muscles: AnalyzedMuscle[] | null;
+}
+
+export type GenerationMode = "generate" | "regenerate";
+
+export type BackgroundGenerationAutoApplyStatus =
+  | "pending"
+  | "applying"
+  | "applied"
+  | "failed";
+
+export interface BackgroundGenerationTask {
+  taskId: string;
+  poseId: number;
+  poseName: string;
+  mode: GenerationMode;
+  status: GenerateStatus;
+  progress: number;
+  statusMessage: string | null;
+  errorMessage: string | null;
+  photoUrl: string | null;
+  musclesUrl: string | null;
+  quotaWarning: boolean;
+  analyzedMuscles: AnalyzedMuscle[] | null;
+  autoApplyStatus: BackgroundGenerationAutoApplyStatus;
+  autoApplyError: string | null;
+  appliedAt: number | null;
+  appliedPose: Pose | null;
+  startedAt: number;
+  updatedAt: number;
+  dismissedAt: number | null;
 }
 
 // API Response типи
@@ -181,6 +214,7 @@ export interface PoseComparisonItem {
   category_name: string | null;
   photo_path: string | null;
   muscle_layer_path: string | null;
+  version?: number;
   muscles: PoseMuscle[];
 }
 

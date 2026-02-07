@@ -7,6 +7,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from models.sequence import DifficultyLevel
+from .validators import ensure_utf8_encodable
 
 
 # HTML tag stripping pattern for XSS prevention
@@ -36,7 +37,9 @@ class SequencePoseBase(BaseModel):
             # Strip HTML tags first to prevent XSS, then normalize whitespace
             sanitized = strip_html_tags(value)
             normalized = sanitized.strip()
-            return normalized or None
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
         return value
 
 
@@ -59,7 +62,9 @@ class SequencePoseUpdate(BaseModel):
             # Strip HTML tags first to prevent XSS, then normalize whitespace
             sanitized = strip_html_tags(value)
             normalized = sanitized.strip()
-            return normalized or None
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
         return value
 
 
@@ -94,7 +99,7 @@ class SequenceBase(BaseModel):
             normalized = value.strip()
             if not normalized:
                 raise ValueError("Name cannot be blank")
-            return normalized
+            return ensure_utf8_encodable(normalized)
         return value
 
     @field_validator("description", mode="before")
@@ -104,7 +109,9 @@ class SequenceBase(BaseModel):
             return None
         if isinstance(value, str):
             normalized = value.strip()
-            return normalized or None
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
         return value
 
 
@@ -128,7 +135,7 @@ class SequenceUpdate(BaseModel):
             normalized = value.strip()
             if not normalized:
                 raise ValueError("Name cannot be blank")
-            return normalized
+            return ensure_utf8_encodable(normalized)
         return value
 
     @field_validator("description", mode="before")
@@ -138,7 +145,9 @@ class SequenceUpdate(BaseModel):
             return None
         if isinstance(value, str):
             normalized = value.strip()
-            return normalized or None
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
         return value
 
 

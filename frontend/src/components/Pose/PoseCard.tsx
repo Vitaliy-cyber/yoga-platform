@@ -2,7 +2,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Eye, Sparkles, CheckCircle2, ExternalLink, ImageIcon } from "lucide-react";
+import {
+  Eye,
+  Sparkles,
+  CheckCircle2,
+  ExternalLink,
+  ImageIcon,
+} from "lucide-react";
 import type { PoseListItem } from "../../types";
 import { useI18n } from "../../i18n";
 import { CompareButton } from "./CompareButton";
@@ -14,17 +20,28 @@ interface PoseCardProps {
   onGenerate?: (pose: PoseListItem) => void;
 }
 
-export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) => {
+export const PoseCard: React.FC<PoseCardProps> = ({
+  pose,
+  onView,
+  onGenerate,
+}) => {
   const [imageError, setImageError] = useState(false);
   const [forceSchema, setForceSchema] = useState(false);
+  const [renderedSrc, setRenderedSrc] = useState("");
+  const [pendingSrc, setPendingSrc] = useState<string | null>(null);
   const retryingRef = useRef(false);
   const { t } = useI18n();
 
   const status = pose.photo_path ? "complete" : "draft";
-  const statusLabel = t(status === "complete" ? "pose.status.complete" : "pose.status.draft");
-  const statusColor = status === "complete" ? "bg-emerald-100 text-emerald-700" : "bg-stone-100 text-stone-600";
+  const statusLabel = t(
+    status === "complete" ? "pose.status.complete" : "pose.status.draft",
+  );
+  const statusPillStyle =
+    status === "complete"
+      ? "bg-emerald-500/95 text-white shadow-lg shadow-emerald-900/25 ring-1 ring-white/30 dark:ring-white/20"
+      : "bg-amber-500/95 text-white shadow-lg shadow-amber-900/25 ring-1 ring-white/30 dark:ring-white/20";
   const StatusIcon = status === "complete" ? CheckCircle2 : null;
-  
+
   // Check for actual non-empty paths
   const hasGeneratedPhoto = Boolean(pose.photo_path && pose.photo_path.trim());
   const hasSchema = Boolean(pose.schema_path && pose.schema_path.trim());
@@ -34,16 +51,22 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
 
   const imageType = showPhoto ? "photo" : "schema";
   const directPath = showPhoto ? pose.photo_path : pose.schema_path;
-  const { src, error: signedError, refresh } = usePoseImageSrc(
-    directPath,
-    pose.id,
-    imageType,
-    { enabled: shouldLoadImage }
-  );
+  const {
+    src,
+    loading,
+    error: signedError,
+    refresh,
+  } = usePoseImageSrc(directPath, pose.id, imageType, {
+    enabled: shouldLoadImage,
+    version: pose.version,
+  });
 
   useEffect(() => {
     setForceSchema(false);
     setImageError(false);
+    setRenderedSrc("");
+    setPendingSrc(null);
+    retryingRef.current = false;
   }, [pose.id, pose.photo_path, pose.schema_path]);
 
   useEffect(() => {
@@ -55,6 +78,18 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
       setImageError(true);
     }
   }, [signedError, showPhoto, hasSchema]);
+
+  useEffect(() => {
+    if (!src) return;
+    setImageError(false);
+    if (!renderedSrc) {
+      setRenderedSrc(src);
+      return;
+    }
+    if (src !== renderedSrc) {
+      setPendingSrc(src);
+    }
+  }, [renderedSrc, src]);
 
   const handleImageError = () => {
     if (!retryingRef.current) {
@@ -72,87 +107,139 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
     setImageError(true);
   };
 
-  const showPlaceholder = imageError || !shouldLoadImage || !src;
+  const handlePendingLoad: React.ReactEventHandler<HTMLImageElement> = (
+    event,
+  ) => {
+    setRenderedSrc(event.currentTarget.currentSrc || event.currentTarget.src);
+    setPendingSrc(null);
+  };
+
+  const handlePendingError = () => {
+    setPendingSrc(null);
+  };
+
+  const activeSrc = renderedSrc || src;
+  const showPlaceholder =
+    imageError || !shouldLoadImage || (!activeSrc && !loading);
 
   return (
-    <div className="group bg-white rounded-2xl border border-stone-200 overflow-hidden hover:shadow-lg hover:border-stone-300 transition-shadow duration-200">
-      <div className="aspect-[4/3] relative overflow-hidden bg-gradient-to-br from-stone-200 to-stone-300">
+    <div
+      className="group bg-card rounded-2xl border border-border/80 overflow-hidden hover:shadow-lg hover:border-border transition-shadow duration-200"
+      data-testid={`pose-card-${pose.id}`}
+    >
+      <div className="aspect-[4/3] relative overflow-hidden bg-gradient-to-br from-muted to-muted/70 dark:from-muted/80 dark:to-muted/55">
         {/* Generated photo */}
-        {showPhoto && !imageError && src && (
+        {showPhoto && !imageError && activeSrc && (
           <img
-            src={src}
-            alt={pose.name}
+            src={activeSrc}
+            alt=""
+            aria-hidden="true"
             className="absolute inset-0 w-full h-full object-cover"
             onError={handleImageError}
           />
         )}
 
         {/* Schema image */}
-        {showSchema && !imageError && src && (
+        {showSchema && !imageError && activeSrc && (
           <img
-            src={src}
-            alt={pose.name}
-            className="absolute inset-0 w-full h-full object-contain p-4 bg-white/90"
+            src={activeSrc}
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 w-full h-full object-contain p-4 bg-card/90 dark:bg-card/80"
             onError={handleImageError}
           />
         )}
-        
+
+        {pendingSrc && (
+          <img
+            src={pendingSrc}
+            alt=""
+            aria-hidden="true"
+            className="hidden"
+            onLoad={handlePendingLoad}
+            onError={handlePendingError}
+          />
+        )}
+
         {/* Placeholder - show when no images or image failed to load */}
         {showPlaceholder && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center">
-              <div className="w-14 h-14 rounded-xl bg-white/90 shadow-sm flex items-center justify-center mx-auto mb-3">
-                <ImageIcon className="w-6 h-6 text-stone-400" />
+              <div className="w-14 h-14 rounded-xl bg-card/90 border border-border/70 shadow-sm flex items-center justify-center mx-auto mb-3">
+                <ImageIcon className="w-6 h-6 text-muted-foreground/70" />
               </div>
-              <p className="text-stone-500 text-sm font-medium">{t("pose.no_image")}</p>
-              <p className="text-stone-400 text-xs mt-0.5">{t("pose.hover_generate")}</p>
+              <p className="text-muted-foreground text-sm font-medium">
+                {t("pose.no_image")}
+              </p>
+              <p className="text-muted-foreground/70 text-xs mt-0.5">
+                {t("pose.hover_generate")}
+              </p>
             </div>
           </div>
         )}
 
         <div className="absolute top-3 left-3">
-          <Badge className={`${statusColor} border-0 font-medium`}>
-            {StatusIcon && <StatusIcon className="w-3 h-3 mr-1" />}
-            {statusLabel}
+          <Badge
+            aria-label={statusLabel}
+            className={`inline-flex h-6 items-center overflow-hidden rounded-full border-0 px-2 text-[11px] font-semibold tracking-[0.01em] backdrop-blur-sm ${statusPillStyle}`}
+          >
+            {StatusIcon ? (
+              <StatusIcon className="h-3 w-3 flex-shrink-0 transition-[margin] duration-200 group-hover:mr-1" />
+            ) : (
+              <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-white/90 dark:bg-white/80 transition-[margin] duration-200 group-hover:mr-1" />
+            )}
+            <span
+              aria-hidden="true"
+              className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-[max-width,opacity] duration-200 ease-out group-hover:max-w-[6.5rem] group-hover:opacity-100"
+            >
+              {statusLabel}
+            </span>
           </Badge>
         </div>
 
         {/* Compare button */}
         <CompareButton pose={pose} variant="card" />
 
-          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-            <div className="absolute bottom-4 left-4 right-4 flex gap-2">
-              {hasGeneratedPhoto && onView && (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => onView(pose)}
-                  className="flex-1 bg-white/90 backdrop-blur-sm hover:bg-white"
-                >
-                  <Eye className="w-4 h-4 mr-1" />
-                  {t("pose.view")}
-                </Button>
-              )}
-              {!hasGeneratedPhoto && onGenerate && (
-                <Button
-                  size="sm"
-                  onClick={() => onGenerate(pose)}
-                  className="flex-1 bg-stone-800 hover:bg-stone-900 text-white"
-                >
-                  <Sparkles className="w-4 h-4 mr-1" />
-                  {hasSchema ? t("pose.generate") : t("pose.upload_generate")}
-                </Button>
-              )}
-            </div>
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+          <div className="absolute bottom-4 left-4 right-4 flex gap-2">
+            {hasGeneratedPhoto && onView && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onView(pose)}
+                data-testid={`pose-card-view-${pose.id}`}
+                className="flex-1 bg-white/90 text-stone-900 backdrop-blur-sm hover:bg-white dark:bg-black/55 dark:text-white dark:hover:bg-black/70 dark:border dark:border-white/15"
+              >
+                <Eye className="w-4 h-4 mr-1" />
+                {t("pose.view")}
+              </Button>
+            )}
+            {!hasGeneratedPhoto && onGenerate && (
+              <Button
+                size="sm"
+                onClick={() => onGenerate(pose)}
+                data-testid={`pose-card-generate-${pose.id}`}
+                className="flex-1 bg-stone-900 hover:bg-black text-white dark:bg-white dark:text-stone-900 dark:hover:bg-stone-200"
+              >
+                <Sparkles className="w-4 h-4 mr-1" />
+                {hasSchema ? t("pose.generate") : t("pose.upload_generate")}
+              </Button>
+            )}
           </div>
-
+        </div>
       </div>
 
       <div className="p-4">
         <div className="flex items-center justify-between">
-          <h3 className="font-medium text-stone-800 text-lg truncate flex-1">{pose.name}</h3>
-          <Link to={`/poses/${pose.id}`}>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-stone-400 hover:text-stone-600">
+          <h3 className="font-medium text-foreground text-lg truncate flex-1">
+            {pose.name}
+          </h3>
+          <Link to={`/poses/${pose.id}`} state={{ preloadedPose: pose }}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            >
               <ExternalLink className="w-4 h-4" />
             </Button>
           </Link>
@@ -160,7 +247,10 @@ export const PoseCard: React.FC<PoseCardProps> = ({ pose, onView, onGenerate }) 
 
         <div className="flex flex-wrap gap-2 mt-2">
           {pose.category_name && (
-            <Badge variant="outline" className="text-xs border-stone-200 text-stone-500">
+            <Badge
+              variant="outline"
+              className="text-xs border-border text-muted-foreground"
+            >
               {pose.category_name}
             </Badge>
           )}

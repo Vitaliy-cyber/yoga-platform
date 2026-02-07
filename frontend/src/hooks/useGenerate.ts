@@ -81,10 +81,50 @@ export function useGenerate() {
   // Base delay for exponential backoff (ms)
   const BASE_RECONNECT_DELAY = 1000;
 
+  // Polling fallback (for environments where WebSocket is blocked/unreliable).
+  // Note: backend rate limiting may apply to /generate/status, so we use adaptive delays.
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingTaskRef = useRef<string | null>(null);
+  const pollDelayRef = useRef<number>(0);
+
+  const wsOpenedRef = useRef<boolean>(false);
+  const wsFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsSilentFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsGotProgressRef = useRef<boolean>(false);
+
+  // Guard against double finalize/toasts from WS + polling.
+  const finalizedTaskRef = useRef<string | null>(null);
+
+  const WS_FALLBACK_DELAY_MS = 2500;
+  const WS_SILENT_FALLBACK_DELAY_MS = 3500;
+  const POLL_BASE_DELAY_MS = 2000;
+  const POLL_MAX_DELAY_MS = 15_000;
+
+  const stopPolling = useCallback(() => {
+    pollingTaskRef.current = null;
+    pollDelayRef.current = 0;
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+  }, []);
+
   /**
    * Clean up WebSocket connection and timers.
    */
   const cleanup = useCallback(() => {
+    stopPolling();
+    finalizedTaskRef.current = null;
+    wsOpenedRef.current = false;
+    wsGotProgressRef.current = false;
+    if (wsFallbackTimeoutRef.current) {
+      clearTimeout(wsFallbackTimeoutRef.current);
+      wsFallbackTimeoutRef.current = null;
+    }
+    if (wsSilentFallbackTimeoutRef.current) {
+      clearTimeout(wsSilentFallbackTimeoutRef.current);
+      wsSilentFallbackTimeoutRef.current = null;
+    }
     if (wsRef.current) {
       // Only close if not already closed/closing
       if (wsRef.current.readyState === WebSocket.OPEN ||
@@ -99,7 +139,144 @@ export function useGenerate() {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
-  }, []);
+  }, [stopPolling]);
+
+  const handleTerminalState = useCallback(
+    (taskId: string, status: GenerateStatus, opts: { quotaWarning?: boolean; errorMessage?: string | null } = {}) => {
+      if (finalizedTaskRef.current === taskId) return;
+      finalizedTaskRef.current = taskId;
+
+      if (status === "completed") {
+        if (opts.quotaWarning) {
+          addToast({ type: "warning", message: t("generate.toast_placeholder") });
+        } else {
+          addToast({ type: "success", message: t("generate.toast_complete") });
+        }
+      } else if (status === "failed") {
+        const fallbackError = t("generate.error_failed");
+        const mismatchError = t("generate.error_pose_mismatch");
+        const rawError = opts.errorMessage || "";
+        const isPoseMismatch =
+          rawError.toLowerCase().includes("does not match source pose") ||
+          rawError.toLowerCase().includes("pose closely enough");
+        addToast({
+          type: "error",
+          message: isPoseMismatch ? mismatchError : (opts.errorMessage || fallbackError),
+        });
+      }
+
+      // Always cleanup transport resources for terminal tasks.
+      stopPolling();
+      cleanup();
+    },
+    [addToast, cleanup, stopPolling, t],
+  );
+
+  const pollStatusOnce = useCallback(
+    async (taskId: string) => {
+      if (!isMountedRef.current || taskIdRef.current !== taskId) return;
+      if (pollingTaskRef.current !== taskId) return;
+
+      try {
+        const status = await generateApi.getStatus(taskId);
+        if (!isMountedRef.current || taskIdRef.current !== taskId) return;
+
+        const isCompleted = status.status === "completed";
+        const isFailed = status.status === "failed";
+
+        setState((prev) => ({
+          ...prev,
+          isGenerating: !isCompleted && !isFailed,
+          progress: isCompleted ? 100 : Math.max(prev.progress, status.progress ?? 0),
+          status: status.status ?? prev.status,
+          statusMessage: status.status_message ?? prev.statusMessage,
+          error: status.error_message ?? prev.error,
+          photoUrl: status.photo_url ?? prev.photoUrl,
+          musclesUrl: status.muscles_url ?? prev.musclesUrl,
+          quotaWarning: status.quota_warning ?? prev.quotaWarning,
+          analyzedMuscles: status.analyzed_muscles ?? prev.analyzedMuscles,
+        }));
+
+        if (isCompleted) {
+          handleTerminalState(taskId, "completed", { quotaWarning: status.quota_warning });
+          return;
+        }
+        if (isFailed) {
+          handleTerminalState(taskId, "failed", { errorMessage: status.error_message });
+          return;
+        }
+
+        // Backoff gently while processing; keep under common 5/min limits if needed.
+        const nextDelay = Math.min(
+          pollDelayRef.current ? Math.floor(pollDelayRef.current * 1.2) : POLL_BASE_DELAY_MS,
+          POLL_MAX_DELAY_MS,
+        );
+        pollDelayRef.current = nextDelay;
+        pollTimeoutRef.current = setTimeout(() => void pollStatusOnce(taskId), nextDelay);
+      } catch (err) {
+        if (!isMountedRef.current || taskIdRef.current !== taskId) return;
+        const anyErr = err as Error & {
+          retryAfter?: number;
+          isRateLimited?: boolean;
+          status?: number;
+        };
+
+        // Terminal polling failures: don't spin forever if the task can't be found or auth is invalid.
+        // These can happen if the task was deleted, the backend restarted with a different DB,
+        // or the session/token expired.
+        if (anyErr?.status === 404) {
+          const message = anyErr.message || t("generate.error_failed");
+          setState((prev) => ({
+            ...prev,
+            isGenerating: false,
+            status: "failed",
+            error: message,
+          }));
+          handleTerminalState(taskId, "failed", { errorMessage: message });
+          return;
+        }
+        if (anyErr?.status === 401 || anyErr?.status === 403) {
+          const message = t("generate.session_expired");
+          setState((prev) => ({
+            ...prev,
+            isGenerating: false,
+            status: "failed",
+            error: message,
+          }));
+          handleTerminalState(taskId, "failed", { errorMessage: message });
+          return;
+        }
+
+        // Respect backend Retry-After to avoid tight loops on 429.
+        const retryAfterMs =
+          anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+            ? Math.max(1000, anyErr.retryAfter * 1000)
+            : null;
+        const nextDelay = Math.min(
+          retryAfterMs ?? (pollDelayRef.current ? Math.floor(pollDelayRef.current * 1.5) : POLL_BASE_DELAY_MS),
+          POLL_MAX_DELAY_MS,
+        );
+        pollDelayRef.current = nextDelay;
+        pollTimeoutRef.current = setTimeout(() => void pollStatusOnce(taskId), nextDelay);
+      }
+    },
+    [handleTerminalState, t],
+  );
+
+  const startPolling = useCallback(
+    (taskId: string) => {
+      if (!isMountedRef.current || taskIdRef.current !== taskId) return;
+      if (pollingTaskRef.current === taskId) return;
+      pollingTaskRef.current = taskId;
+      pollDelayRef.current = POLL_BASE_DELAY_MS;
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+      void pollStatusOnce(taskId);
+    },
+    [pollStatusOnce],
+  );
 
   // Cleanup on unmount
   useEffect(() => {
@@ -125,8 +302,8 @@ export function useGenerate() {
       wsRef.current.close(1000, "New connection");
     }
 
-    // CRITICAL: Ensure token is fresh before WebSocket connection
-    // WebSocket URL contains the token, so we need a valid one
+    // CRITICAL: Ensure token is fresh before WebSocket connection.
+    // Token is sent via Sec-WebSocket-Protocol (not in URL), so we need a valid one.
     const authState = useAuthStore.getState();
     const tokenExpiresAt = authState.tokenExpiresAt;
     const isExpiredOrClose = tokenExpiresAt
@@ -156,19 +333,64 @@ export function useGenerate() {
       }
     }
 
-    // Get fresh WebSocket URL with updated token
+    // Get WebSocket URL (token will be passed via subprotocol)
     const wsUrl = generateApi.getWebSocketUrl(taskId);
-    logger.debug("Connecting to WebSocket:", wsUrl.replace(/token=[^&]+/, "token=***"));
+    logger.debug("Connecting to WebSocket:", wsUrl);
 
-    const ws = new WebSocket(wsUrl);
+    const token = useAuthStore.getState().accessToken;
+    const protocols = token ? ["jwt", token] : undefined;
+    wsOpenedRef.current = false;
+    wsGotProgressRef.current = false;
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(wsUrl, protocols);
+    } catch (err) {
+      logger.warn("WebSocket construction failed; falling back to polling", err);
+      startPolling(taskId);
+      return;
+    }
+
+    if (wsFallbackTimeoutRef.current) {
+      clearTimeout(wsFallbackTimeoutRef.current);
+      wsFallbackTimeoutRef.current = null;
+    }
+    if (wsSilentFallbackTimeoutRef.current) {
+      clearTimeout(wsSilentFallbackTimeoutRef.current);
+      wsSilentFallbackTimeoutRef.current = null;
+    }
+    wsFallbackTimeoutRef.current = setTimeout(() => {
+      if (!isMountedRef.current || taskIdRef.current !== taskId) return;
+      if (wsOpenedRef.current) return;
+      startPolling(taskId);
+    }, WS_FALLBACK_DELAY_MS);
 
     ws.onopen = () => {
       if (!isMountedRef.current || taskIdRef.current !== taskId) {
         ws.close(1000, "Task changed");
         return;
       }
+      wsOpenedRef.current = true;
+      if (wsFallbackTimeoutRef.current) {
+        clearTimeout(wsFallbackTimeoutRef.current);
+        wsFallbackTimeoutRef.current = null;
+      }
+      // Prefer WS when available; stop polling to reduce load.
+      stopPolling();
       logger.info("WebSocket connected for task:", taskId);
       reconnectAttemptRef.current = 0; // Reset on successful connection
+
+      // Some proxies allow WS connections but drop/never deliver messages.
+      // If we don't see a progress_update soon, fall back to polling to avoid a "stuck" UI.
+      if (wsSilentFallbackTimeoutRef.current) {
+        clearTimeout(wsSilentFallbackTimeoutRef.current);
+        wsSilentFallbackTimeoutRef.current = null;
+      }
+      wsSilentFallbackTimeoutRef.current = setTimeout(() => {
+        if (!isMountedRef.current || taskIdRef.current !== taskId) return;
+        if (wsGotProgressRef.current) return;
+        startPolling(taskId);
+      }, WS_SILENT_FALLBACK_DELAY_MS);
     };
 
     ws.onmessage = (event) => {
@@ -184,6 +406,11 @@ export function useGenerate() {
         }
 
         if (message.type === "progress_update") {
+          wsGotProgressRef.current = true;
+          if (wsSilentFallbackTimeoutRef.current) {
+            clearTimeout(wsSilentFallbackTimeoutRef.current);
+            wsSilentFallbackTimeoutRef.current = null;
+          }
           const isCompleted = message.status === "completed";
           const isFailed = message.status === "failed";
 
@@ -201,23 +428,13 @@ export function useGenerate() {
             analyzedMuscles: message.analyzed_muscles ?? prev.analyzedMuscles,
           }));
 
-          // Show toast on completion or failure
+          // Stop polling once WS updates are flowing.
+          stopPolling();
+
           if (isCompleted) {
-            if (message.quota_warning) {
-              addToast({ type: "warning", message: t("generate.toast_placeholder") });
-            } else {
-              addToast({ type: "success", message: t("generate.toast_complete") });
-            }
-            // Clean up WebSocket after completion
-            cleanup();
+            handleTerminalState(taskId, "completed", { quotaWarning: message.quota_warning });
           } else if (isFailed) {
-            const fallbackError = t("generate.error_failed");
-            addToast({
-              type: "error",
-              message: message.error_message || fallbackError,
-            });
-            // Clean up WebSocket after failure
-            cleanup();
+            handleTerminalState(taskId, "failed", { errorMessage: message.error_message });
           }
         }
       } catch (err) {
@@ -227,11 +444,23 @@ export function useGenerate() {
 
     ws.onerror = (event) => {
       logger.error("WebSocket error:", event);
+      // In some environments, ws errors never transition to onclose reliably.
+      // Ensure we keep making progress via polling.
+      startPolling(taskId);
     };
 
     ws.onclose = (event) => {
       if (!isMountedRef.current || taskIdRef.current !== taskId) {
         return;
+      }
+
+      if (wsFallbackTimeoutRef.current) {
+        clearTimeout(wsFallbackTimeoutRef.current);
+        wsFallbackTimeoutRef.current = null;
+      }
+      if (wsSilentFallbackTimeoutRef.current) {
+        clearTimeout(wsSilentFallbackTimeoutRef.current);
+        wsSilentFallbackTimeoutRef.current = null;
       }
 
       // Normal closure (task completed) - code 1000
@@ -254,6 +483,9 @@ export function useGenerate() {
         if (currentState.isGenerating &&
             currentState.status !== "completed" &&
             currentState.status !== "failed") {
+
+          // Start polling immediately as a fallback (WS may be blocked by network/proxy).
+          startPolling(taskId);
 
           // Attempt reconnection with exponential backoff
           if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {
@@ -294,7 +526,7 @@ export function useGenerate() {
     };
 
     wsRef.current = ws;
-  }, [addToast, cleanup, t]);
+  }, [addToast, cleanup, handleTerminalState, startPolling, stopPolling, t]);
 
   /**
    * Start generation from an uploaded file.
@@ -320,6 +552,10 @@ export function useGenerate() {
           return;
         }
 
+        if (typeof (response as any)?.task_id !== "string" || !(response as any).task_id.trim()) {
+          throw new Error(t("generate.error_failed"));
+        }
+
         // Store task ID for this generation
         taskIdRef.current = response.task_id;
         setState((prev) => ({ ...prev, taskId: response.task_id }));
@@ -341,6 +577,7 @@ export function useGenerate() {
           error: message,
         }));
         addToast({ type: "error", message });
+        throw err instanceof Error ? err : new Error(message);
       }
     },
     [addToast, connectWebSocket, cleanup, t],
@@ -371,6 +608,10 @@ export function useGenerate() {
           return;
         }
 
+        if (typeof (response as any)?.task_id !== "string" || !(response as any).task_id.trim()) {
+          throw new Error(t("generate.error_failed"));
+        }
+
         // Store task ID for this generation
         taskIdRef.current = response.task_id;
         setState((prev) => ({ ...prev, taskId: response.task_id }));
@@ -392,6 +633,7 @@ export function useGenerate() {
           error: message,
         }));
         addToast({ type: "error", message });
+        throw err instanceof Error ? err : new Error(message);
       }
     },
     [addToast, connectWebSocket, cleanup, t],
@@ -426,6 +668,10 @@ export function useGenerate() {
           return;
         }
 
+        if (typeof (response as any)?.task_id !== "string" || !(response as any).task_id.trim()) {
+          throw new Error(t("generate.error_failed"));
+        }
+
         // Store task ID for this generation
         taskIdRef.current = response.task_id;
         setState((prev) => ({ ...prev, taskId: response.task_id }));
@@ -447,6 +693,7 @@ export function useGenerate() {
           error: message,
         }));
         addToast({ type: "error", message });
+        throw err instanceof Error ? err : new Error(message);
       }
     },
     [addToast, connectWebSocket, cleanup, t],
@@ -477,6 +724,10 @@ export function useGenerate() {
           return;
         }
 
+        if (typeof (response as any)?.task_id !== "string" || !(response as any).task_id.trim()) {
+          throw new Error(t("generate.error_failed"));
+        }
+
         // Store task ID for this generation
         taskIdRef.current = response.task_id;
         setState((prev) => ({ ...prev, taskId: response.task_id }));
@@ -498,6 +749,7 @@ export function useGenerate() {
           error: message,
         }));
         addToast({ type: "error", message });
+        throw err instanceof Error ? err : new Error(message);
       }
     },
     [addToast, connectWebSocket, cleanup, t],

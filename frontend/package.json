@@ -12,6 +12,9 @@
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:e2e:legacy": "playwright test -c playwright.legacy.config.ts",
+    "test:e2e:atomic": "playwright test -c playwright.atomic.config.ts",
+    "test:e2e:full": "npm run test:e2e && npm run test:e2e:atomic && npm run test:e2e:legacy",
     "test:e2e:https-probe": "playwright test -c playwright.https-probe.config.ts",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
@@ -31,6 +34,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.0",
     "framer-motion": "^12.24.11",
+    "jspdf": "^4.1.0",
     "lucide-react": "^0.562.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -38,6 +42,7 @@
     "react-router-dom": "^6.21.0",
     "recharts": "^3.6.0",
     "tailwind-merge": "^2.2.0",
+    "tailwindcss-animate": "^1.0.7",
     "zustand": "^4.4.0"
   },
   "devDependencies": {

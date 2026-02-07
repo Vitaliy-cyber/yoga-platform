@@ -1,97 +1,274 @@
-import { describe, it, expect } from 'vitest'
-import { categoriesApi, musclesApi, posesApi, generateApi } from './api'
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe('API Services', () => {
-  describe('categoriesApi', () => {
-    it('getAll returns list of categories', async () => {
-      const categories = await categoriesApi.getAll()
-      expect(Array.isArray(categories)).toBe(true)
-      expect(categories.length).toBeGreaterThan(0)
-      expect(categories[0]).toHaveProperty('id')
-      expect(categories[0]).toHaveProperty('name')
-    })
+const axiosMock = vi.hoisted(() => {
+  const get = vi.fn();
+  const post = vi.fn();
+  const put = vi.fn();
+  const del = vi.fn();
+  const requestUse = vi.fn();
+  const requestEject = vi.fn();
+  const responseUse = vi.fn();
+  const responseEject = vi.fn();
+  const create = vi.fn(() => ({
+    get,
+    post,
+    put,
+    delete: del,
+    defaults: { headers: { common: {} as Record<string, string> } },
+    interceptors: {
+      request: { use: requestUse, eject: requestEject },
+      response: { use: responseUse, eject: responseEject },
+    },
+  }));
+  const isCancel = vi.fn(() => false);
+  const isAxiosError = vi.fn(() => false);
 
-    it('getById returns a specific category', async () => {
-      const category = await categoriesApi.getById(1)
-      expect(category).toHaveProperty('id', 1)
-      expect(category).toHaveProperty('name')
-    })
+  return {
+    create,
+    get,
+    post,
+    put,
+    del,
+    requestUse,
+    requestEject,
+    responseUse,
+    responseEject,
+    isCancel,
+    isAxiosError,
+  };
+});
 
-    it('create creates a new category', async () => {
+vi.mock("axios", () => {
+  const axiosDefault = {
+    create: axiosMock.create,
+    isCancel: axiosMock.isCancel,
+    isAxiosError: axiosMock.isAxiosError,
+  };
+  return {
+    default: axiosDefault,
+    create: axiosMock.create,
+    isCancel: axiosMock.isCancel,
+    isAxiosError: axiosMock.isAxiosError,
+  };
+});
+
+import { categoriesApi, generateApi, musclesApi, posesApi } from "./api";
+
+describe("API Services", () => {
+  beforeEach(() => {
+    axiosMock.get.mockReset();
+    axiosMock.post.mockReset();
+    axiosMock.put.mockReset();
+    axiosMock.del.mockReset();
+    axiosMock.isCancel.mockReset();
+    axiosMock.isAxiosError.mockReset();
+    axiosMock.isCancel.mockReturnValue(false);
+    axiosMock.isAxiosError.mockReturnValue(false);
+  });
+
+  describe("categoriesApi", () => {
+    it("getAll returns list of categories", async () => {
+      const payload = [{ id: 1, name: "Standing", description: null }];
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
+
+      const categories = await categoriesApi.getAll();
+
+      expect(categories).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/categories", {
+        signal: undefined,
+      });
+    });
+
+    it("getById returns a specific category", async () => {
+      const payload = { id: 1, name: "Standing", description: null };
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
+
+      const category = await categoriesApi.getById(1);
+
+      expect(category).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/categories/1");
+    });
+
+    it("create creates a new category", async () => {
+      const payload = {
+        id: 2,
+        name: "Test Category",
+        description: "Test Description",
+      };
+      axiosMock.post.mockResolvedValueOnce({ data: payload });
+
       const newCategory = await categoriesApi.create({
-        name: 'Test Category',
-        description: 'Test Description',
-      })
-      expect(newCategory).toHaveProperty('id')
-      expect(newCategory.name).toBe('Test Category')
-    })
-  })
+        name: "Test Category",
+        description: "Test Description",
+      });
 
-  describe('musclesApi', () => {
-    it('getAll returns list of muscles', async () => {
-      const muscles = await musclesApi.getAll()
-      expect(Array.isArray(muscles)).toBe(true)
-      expect(muscles.length).toBeGreaterThan(0)
-      expect(muscles[0]).toHaveProperty('id')
-      expect(muscles[0]).toHaveProperty('name')
-    })
+      expect(newCategory).toEqual(payload);
+      expect(axiosMock.post).toHaveBeenCalledWith("/api/v1/categories", {
+        name: "Test Category",
+        description: "Test Description",
+      });
+    });
 
-    it('getAll with body_part filter returns filtered muscles', async () => {
-      const muscles = await musclesApi.getAll('legs')
-      expect(Array.isArray(muscles)).toBe(true)
-      muscles.forEach((m) => {
-        expect(m.body_part).toBe('legs')
-      })
-    })
+    it("getAll throws AbortError when axios cancels request", async () => {
+      const canceled = new Error("canceled");
+      axiosMock.get.mockRejectedValueOnce(canceled);
+      axiosMock.isCancel.mockReturnValueOnce(true);
 
-    it('getById returns a specific muscle', async () => {
-      const muscle = await musclesApi.getById(1)
-      expect(muscle).toHaveProperty('id', 1)
-      expect(muscle).toHaveProperty('name')
-      expect(muscle).toHaveProperty('body_part')
-    })
-  })
+      await expect(categoriesApi.getAll()).rejects.toMatchObject({
+        name: "AbortError",
+        message: "Request aborted",
+      });
+    });
 
-  describe('posesApi', () => {
-    it('getAll returns list of poses', async () => {
-      const poses = await posesApi.getAll()
-      expect(Array.isArray(poses)).toBe(true)
-    })
+    it("getAll throws AbortError for ERR_CANCELED axios error code", async () => {
+      const canceled = Object.assign(new Error("canceled"), { code: "ERR_CANCELED" });
+      axiosMock.get.mockRejectedValueOnce(canceled);
+      axiosMock.isAxiosError.mockReturnValueOnce(true);
 
-    it('search returns matching poses', async () => {
-      const poses = await posesApi.search('Mountain')
-      expect(Array.isArray(poses)).toBe(true)
-      poses.forEach((p) => {
-        const hasMatch =
-          p.name.toLowerCase().includes('mountain') ||
-          (p.name_en?.toLowerCase().includes('mountain') ?? false) ||
-          p.code.toLowerCase().includes('mountain')
-        expect(hasMatch).toBe(true)
-      })
-    })
+      await expect(categoriesApi.getAll()).rejects.toMatchObject({
+        name: "AbortError",
+        message: "Request aborted",
+      });
+    });
+  });
 
-    it('getById returns a specific pose', async () => {
-      const pose = await posesApi.getById(1)
-      expect(pose).toHaveProperty('id', 1)
-      expect(pose).toHaveProperty('name')
-      expect(pose).toHaveProperty('code')
-    })
+  describe("musclesApi", () => {
+    it("getAll returns list of muscles", async () => {
+      const payload = [
+        { id: 1, name: "quadriceps", name_ua: null, body_part: "legs" },
+      ];
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
 
-    it('getByCategory returns poses for a category', async () => {
-      const poses = await posesApi.getByCategory(1)
-      expect(Array.isArray(poses)).toBe(true)
-      poses.forEach((p) => {
-        expect(p.category_id).toBe(1)
-      })
-    })
-  })
+      const muscles = await musclesApi.getAll();
 
-  describe('generateApi', () => {
-    it('getStatus returns generation status', async () => {
-      const status = await generateApi.getStatus('test-task-123')
-      expect(status).toHaveProperty('task_id')
-      expect(status).toHaveProperty('status')
-      expect(status).toHaveProperty('progress')
-    })
-  })
-})
+      expect(muscles).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/muscles", {
+        params: {},
+      });
+    });
+
+    it("getAll with body_part filter returns filtered muscles", async () => {
+      const payload = [
+        { id: 1, name: "quadriceps", name_ua: null, body_part: "legs" },
+      ];
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
+
+      const muscles = await musclesApi.getAll("legs");
+
+      expect(muscles).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/muscles", {
+        params: { body_part: "legs" },
+      });
+    });
+
+    it("getById returns a specific muscle", async () => {
+      const payload = {
+        id: 1,
+        name: "quadriceps",
+        name_ua: null,
+        body_part: "legs",
+      };
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
+
+      const muscle = await musclesApi.getById(1);
+
+      expect(muscle).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/muscles/1");
+    });
+  });
+
+  describe("posesApi", () => {
+    it("getAll returns list of poses", async () => {
+      const items = [
+        {
+          id: 1,
+          code: "TADASANA",
+          name: "Mountain Pose",
+          name_en: "Mountain Pose",
+          category_id: 1,
+          category_name: "Standing",
+          schema_path: null,
+          photo_path: null,
+        },
+      ];
+      axiosMock.get.mockResolvedValueOnce({
+        data: { items, total: 1, skip: 0, limit: 100 },
+      });
+
+      const poses = await posesApi.getAll();
+
+      expect(poses).toEqual(items);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/poses", {
+        params: { skip: 0, limit: 100 },
+        signal: undefined,
+      });
+    });
+
+    it("search returns matching poses", async () => {
+      const payload = [
+        {
+          id: 1,
+          code: "TADASANA",
+          name: "Mountain Pose",
+          name_en: "Mountain Pose",
+          category_id: 1,
+          category_name: "Standing",
+          schema_path: null,
+          photo_path: null,
+        },
+      ];
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
+
+      const poses = await posesApi.search("Mountain");
+
+      expect(poses).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/poses/search", {
+        params: { q: "Mountain" },
+      });
+    });
+
+    it("getById returns a specific pose", async () => {
+      const payload = { id: 1, name: "Mountain Pose", code: "TADASANA" };
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
+
+      const pose = await posesApi.getById(1);
+
+      expect(pose).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/poses/1");
+    });
+
+    it("getByCategory returns poses for a category", async () => {
+      const payload = [{ id: 1, name: "Mountain Pose", category_id: 1 }];
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
+
+      const poses = await posesApi.getByCategory(1);
+
+      expect(poses).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith("/api/v1/poses/category/1");
+    });
+  });
+
+  describe("generateApi", () => {
+    it("getStatus returns generation status", async () => {
+      const payload = {
+        task_id: "test-task-123",
+        status: "processing",
+        progress: 55,
+        status_message: "Generating...",
+        error_message: null,
+        photo_url: null,
+        muscles_url: null,
+        quota_warning: false,
+        analyzed_muscles: null,
+      };
+      axiosMock.get.mockResolvedValueOnce({ data: payload });
+
+      const status = await generateApi.getStatus("test-task-123");
+
+      expect(status).toEqual(payload);
+      expect(axiosMock.get).toHaveBeenCalledWith(
+        "/api/v1/generate/status/test-task-123"
+      );
+    });
+  });
+});

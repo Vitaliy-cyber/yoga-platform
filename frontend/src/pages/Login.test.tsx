@@ -18,6 +18,10 @@ import { I18nProvider } from '../i18n';
 
 // Mock useNavigate (router behavior mock, not data mock)
 const mockNavigate = vi.fn();
+const { mockLogin } = vi.hoisted(() => ({
+  mockLogin: vi.fn(),
+}));
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
   return {
@@ -25,6 +29,12 @@ vi.mock('react-router-dom', async () => {
     useNavigate: () => mockNavigate,
   };
 });
+
+vi.mock('../services/api', () => ({
+  authApi: {
+    login: mockLogin,
+  },
+}));
 
 const renderLogin = () => {
   return render(
@@ -36,14 +46,36 @@ const renderLogin = () => {
   );
 };
 
+const buildLoginResponse = () => ({
+  access_token: 'test-access-token',
+  refresh_token: 'test-refresh-token',
+  token_type: 'bearer',
+  expires_in: 3600,
+  user: {
+    id: 1,
+    name: 'Test User',
+    created_at: new Date().toISOString(),
+    last_login: null,
+  },
+});
+
 describe('Login', () => {
   beforeEach(() => {
+    window.localStorage.setItem('yoga_locale', 'ua');
     mockNavigate.mockClear();
+    mockLogin.mockReset();
+    mockLogin.mockResolvedValue(buildLoginResponse());
     useAuthStore.setState({
       user: null,
       accessToken: null,
+      refreshToken: null,
+      tokenExpiresAt: null,
       isAuthenticated: false,
       isLoading: false,
+      isRefreshing: false,
+      _hasHydrated: true,
+      lastRefreshAt: null,
+      refreshError: null,
     });
   });
 
@@ -105,6 +137,13 @@ describe('Login', () => {
 
   describe('Login Flow', () => {
     it('shows loading state when submitting', async () => {
+      let resolveLogin: ((value: ReturnType<typeof buildLoginResponse>) => void) | undefined;
+      mockLogin.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveLogin = resolve;
+        })
+      );
+
       renderLogin();
       const user = userEvent.setup();
 
@@ -116,10 +155,14 @@ describe('Login', () => {
 
       // Should show loading text immediately after click
       expect(screen.getByText(/вхід/i)).toBeInTheDocument();
+
+      resolveLogin?.(buildLoginResponse());
+      await waitFor(() => {
+        expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
+      });
     });
 
     it('navigates to home on successful login', async () => {
-      // Uses real API - backend must be running
       renderLogin();
       const user = userEvent.setup();
 
@@ -135,7 +178,6 @@ describe('Login', () => {
     });
 
     it('sets auth state on successful login', async () => {
-      // Uses real API - backend must be running
       renderLogin();
       const user = userEvent.setup();
 
@@ -188,6 +230,13 @@ describe('Login', () => {
     });
 
     it('can submit form with Enter key', async () => {
+      let resolveLogin: ((value: ReturnType<typeof buildLoginResponse>) => void) | undefined;
+      mockLogin.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveLogin = resolve;
+        })
+      );
+
       renderLogin();
       const user = userEvent.setup();
 
@@ -196,8 +245,10 @@ describe('Login', () => {
       await user.keyboard('{Enter}');
 
       // Form should submit (loading state appears)
+      expect(screen.getByText(/вхід/i)).toBeInTheDocument();
+      resolveLogin?.(buildLoginResponse());
       await waitFor(() => {
-        expect(screen.getByText(/вхід/i)).toBeInTheDocument();
+        expect(mockNavigate).toHaveBeenCalled();
       });
     });
   });

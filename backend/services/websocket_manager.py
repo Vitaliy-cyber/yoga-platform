@@ -93,7 +93,13 @@ class ConnectionManager:
         # Lock for thread-safe operations
         self._lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket, user_id: int, task_id: str) -> None:
+    async def connect(
+        self,
+        websocket: WebSocket,
+        user_id: int,
+        task_id: str,
+        subprotocol: str | None = None,
+    ) -> None:
         """
         Register a WebSocket connection for a task.
 
@@ -102,7 +108,10 @@ class ConnectionManager:
             user_id: The authenticated user's ID
             task_id: The generation task ID to subscribe to
         """
-        await websocket.accept()
+        if subprotocol:
+            await websocket.accept(subprotocol=subprotocol)
+        else:
+            await websocket.accept()
 
         async with self._lock:
             if task_id not in self._subscriptions:

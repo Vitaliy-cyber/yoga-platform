@@ -4,12 +4,10 @@ import { Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { useI18n } from "../i18n";
 import { useAuthStore } from "../store/useAuthStore";
-import { useViewTransition } from "../hooks/useViewTransition";
 import { cn } from "../lib/utils";
 
 export const Settings: React.FC = () => {
   const { t, locale, setLocale, formatDate } = useI18n();
-  const { startTransition } = useViewTransition();
   const user = useAuthStore((state) => state.user);
 
   return (
@@ -70,25 +68,27 @@ export const Settings: React.FC = () => {
 
           <div className="flex gap-3">
             <button
-              onClick={() => void startTransition(() => setLocale("en"))}
+              onClick={() => setLocale("en")}
               className={cn(
-                "flex-1 py-3 px-4 rounded-xl border-2 transition-all duration-200 text-left",
+                "flex-1 py-3 px-4 rounded-xl border-2 transition-colors duration-200 text-left",
                 locale === "en"
                   ? "border-primary bg-muted"
-                  : "border-border hover:border-border/80"
+                  : "border-border hover:border-border/80",
               )}
+              data-testid="settings-locale-en"
             >
               <span className="text-2xl mb-1 block">🇬🇧</span>
               <span className="font-medium text-foreground">English</span>
             </button>
             <button
-              onClick={() => void startTransition(() => setLocale("ua"))}
+              onClick={() => setLocale("ua")}
               className={cn(
-                "flex-1 py-3 px-4 rounded-xl border-2 transition-all duration-200 text-left",
+                "flex-1 py-3 px-4 rounded-xl border-2 transition-colors duration-200 text-left",
                 locale === "ua"
                   ? "border-primary bg-muted"
-                  : "border-border hover:border-border/80"
+                  : "border-border hover:border-border/80",
               )}
+              data-testid="settings-locale-ua"
             >
               <span className="text-2xl mb-1 block">🇺🇦</span>
               <span className="font-medium text-foreground">Українська</span>
@@ -103,7 +103,10 @@ export const Settings: React.FC = () => {
           </h2>
 
           <div className="space-y-2 text-sm text-muted-foreground">
-            <p><span className="font-medium text-foreground">YogaFlow</span> - {t("settings.app_description")}</p>
+            <p>
+              <span className="font-medium text-foreground">YogaFlow</span> -{" "}
+              {t("settings.app_description")}
+            </p>
             <p>{t("settings.version")}: 1.0.0</p>
           </div>
         </section>

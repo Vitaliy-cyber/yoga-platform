@@ -4,9 +4,9 @@ import { versionsApi } from '../../services/api';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Loader2, History, RotateCcw, GitCompare, Eye, ChevronDown, AlertCircle } from 'lucide-react';
-import { useViewTransition } from '../../hooks/useViewTransition';
 import type { PoseVersionListItem } from '../../types';
 import { useI18n } from '../../i18n';
+import { collapseVariants, normalTransition } from '../../lib/animation-variants';
 
 interface VersionHistoryProps {
   poseId: number;
@@ -29,7 +29,6 @@ export const VersionHistory: React.FC<VersionHistoryProps> = ({
   refreshKey = 0,
 }) => {
   const { t } = useI18n();
-  const { startTransition } = useViewTransition();
   const [versions, setVersions] = useState<PoseVersionListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -195,16 +194,16 @@ export const VersionHistory: React.FC<VersionHistoryProps> = ({
   }
 
   return (
-    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+    <div className="bg-card rounded-2xl border border-border overflow-hidden" data-testid="pose-version-history">
       <button
-        onClick={() => void startTransition(() => setIsExpanded(!isExpanded))}
+        onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-center justify-between p-4 hover:bg-accent transition-colors"
       >
         <div className="flex items-center gap-3">
           <History className="w-5 h-5 text-muted-foreground" />
           <h3 className="text-lg font-medium text-foreground">{t('versions.title')}</h3>
           <Badge variant="secondary" className="bg-muted">
-            {versions.length}
+            <span data-testid="pose-version-count">{versions.length}</span>
           </Badge>
         </div>
         <motion.div
@@ -218,10 +217,11 @@ export const VersionHistory: React.FC<VersionHistoryProps> = ({
       <AnimatePresence>
         {isExpanded && (
           <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
+            variants={collapseVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={normalTransition}
             className="border-t border-border/50 overflow-hidden"
           >
           {/* Compare action bar */}
@@ -302,7 +302,7 @@ export const VersionHistory: React.FC<VersionHistoryProps> = ({
                         className={`p-2 ${
                           selectedForCompare.includes(version.id)
                             ? 'text-blue-600 bg-blue-100'
-                            : 'text-muted-foreground hover:text-muted-foreground'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-accent'
                         }`}
                         title={t('versions.select_for_compare')}
                       >
@@ -312,7 +312,7 @@ export const VersionHistory: React.FC<VersionHistoryProps> = ({
                         variant="ghost"
                         size="sm"
                         onClick={() => onViewVersion(version.id)}
-                        className="p-2 text-muted-foreground hover:text-muted-foreground"
+                        className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent"
                         title={t('versions.view')}
                       >
                         <Eye className="w-4 h-4" />

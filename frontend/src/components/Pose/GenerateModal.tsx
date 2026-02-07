@@ -7,17 +7,20 @@ import { Textarea } from "../ui/textarea";
 import { Loader2, Sparkles, Camera, Activity, Check, Upload, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
-import { useGenerate } from "../../hooks/useGenerate";
-import { posesApi } from "../../services/api";
 import { useI18n } from "../../i18n";
+import { logger } from "../../lib/logger";
 import { generationSteps, getStepState } from "./generation-steps";
 import { usePoseImageSrc } from "../../hooks/usePoseImageSrc";
+import {
+  selectLatestTaskForPose,
+  useGenerationStore,
+} from "../../store/useGenerationStore";
 
 interface GenerateModalProps {
   pose: Pose | PoseListItem | null;
   isOpen: boolean;
   onClose: () => void;
-  onComplete?: () => void;
+  onComplete?: (updatedPose?: Pose) => void | Promise<void>;
 }
 
 export const GenerateModal: React.FC<GenerateModalProps> = ({
@@ -32,16 +35,35 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [schemaLoadError, setSchemaLoadError] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { isGenerating, progress, statusMessage, error, photoUrl, musclesUrl, taskId, generate, generateFromPose, reset } = useGenerate();
-  const [generationStarted, setGenerationStarted] = useState(false);
+  const closeCleanupTimerRef = useRef<number | null>(null);
+  const handledAppliedAtRef = useRef<number | null>(null);
   const { t } = useI18n();
+
+  const startFromPose = useGenerationStore((state) => state.startFromPose);
+  const startFromUpload = useGenerationStore((state) => state.startFromUpload);
+
+  const generationTask = useGenerationStore(
+    useCallback(
+      (state) => (pose ? selectLatestTaskForPose(pose.id, "generate")(state) : null),
+      [pose],
+    ),
+  );
+
+  const isGenerating = generationTask
+    ? generationTask.status === "pending" ||
+      generationTask.status === "processing" ||
+      generationTask.autoApplyStatus === "applying"
+    : false;
+
+  const progress = generationTask?.progress ?? 0;
+  const statusMessage = generationTask?.statusMessage;
+  const taskError = generationTask?.errorMessage;
 
   // Track if generation is fully complete (100%)
   const isComplete = progress >= 100;
-  
-  // Ref to prevent double saves
-  const savingRef = useRef(false);
 
   // Helper to clear uploaded file
   const handleClearFile = useCallback(() => {
@@ -52,6 +74,16 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
       }
       return null;
     });
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const openFilePicker = useCallback(() => {
+    if (!fileInputRef.current) return;
+    // Allow selecting the same file repeatedly.
+    fileInputRef.current.value = "";
+    fileInputRef.current.click();
   }, []);
 
   // Cleanup preview URL on unmount to prevent memory leaks
@@ -76,85 +108,96 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     }
   }, []);
 
-  // Check if pose has existing schema (and it loaded successfully)
-  const hasExistingSchema = Boolean(pose?.schema_path && pose.schema_path.trim()) && !schemaLoadError;
-  const { src: schemaSrc, refresh: refreshSchema } = usePoseImageSrc(
+  // Check if pose has existing schema (on the server). Preview may still fail to load in the browser.
+  const hasSchema = Boolean(pose?.schema_path && pose.schema_path.trim());
+  const {
+    src: schemaSrc,
+    loading: schemaLoading,
+    error: schemaError,
+    refresh: refreshSchema,
+  } = usePoseImageSrc(
     pose?.schema_path,
     pose?.id ?? 0,
     "schema",
-    { enabled: hasExistingSchema }
+    { enabled: hasSchema, version: pose?.version },
   );
+  const showSchemaPreview =
+    hasSchema &&
+    !schemaLoadError &&
+    (Boolean(schemaSrc) || schemaLoading || !schemaError);
   const hasUploadedFile = Boolean(uploadedFile);
-  const canGenerate = hasUploadedFile || (hasExistingSchema && !schemaLoadError);
-  
-  // Save generated images to database when generation completes
+
+  // Preview failures should not block generation:
+  // - <img> load errors can be caused by proxy/CORS/network issues even when the server can still access schema.
+  // - We handle server-side failures (missing/corrupt schema) when the request is made.
+  const canGenerate = hasUploadedFile || hasSchema;
+
+  // React on successful auto-apply even if the modal is currently closed.
   useEffect(() => {
-    const saveGeneratedImages = async () => {
-      // Prevent multiple saves with ref (more reliable than state)
-      if (!generationStarted || !photoUrl || isGenerating || savingRef.current || !pose || !taskId) {
-        return;
-      }
+    if (!generationTask) return;
+    if (generationTask.autoApplyStatus !== "applied") return;
+    if (!generationTask.appliedAt) return;
+    if (handledAppliedAtRef.current === generationTask.appliedAt) return;
 
-      savingRef.current = true;
+    handledAppliedAtRef.current = generationTask.appliedAt;
 
-      try {
-        // Apply generation results to the pose (photo, muscle layer, AND muscle associations)
-        await posesApi.applyGeneration(pose.id, taskId);
+    void Promise.resolve(onComplete?.(generationTask.appliedPose ?? undefined)).catch(
+      (err) => {
+        logger.warn("GenerateModal onComplete failed", err);
+      },
+    );
 
-        // Notify parent to refresh data
-        onComplete?.();
-      } catch (err) {
-        console.error(t("generate.save_failed"), err);
-        // Still notify parent - the images are generated, just not saved to pose
-        onComplete?.();
-      } finally {
-        // Reset and close
-        savingRef.current = false;
-        setGenerationStarted(false);
-        reset();
-        handleClearFile();
-        setSchemaLoadError(false);
-        setAdditionalNotes("");
-        onClose();
-      }
-    };
+    handleClearFile();
+    setSchemaLoadError(false);
+    setAdditionalNotes("");
+    setLocalError(null);
 
-    saveGeneratedImages();
-  }, [photoUrl, musclesUrl, isGenerating, pose, generationStarted, taskId, onComplete, onClose, reset, handleClearFile, t]);
+    if (isOpen) {
+      onClose();
+    }
+  }, [generationTask, handleClearFile, isOpen, onClose, onComplete]);
 
   /**
    * Handles the generation process:
    * 1. If user uploaded a file, use it directly
    * 2. If pose has existing schema, use server-side fetch (avoids CORS)
-   * 3. Shows errors to user via localError state if generation fails
    */
   const handleGenerate = async () => {
+    if (!pose || isStarting) return;
+
     setLocalError(null);
-    
+    setIsStarting(true);
+
     try {
-      // Mark that generation started in this session
-      setGenerationStarted(true);
-      
       // Pass additional notes if provided
       const notes = additionalNotes.trim() || undefined;
 
       if (uploadedFile) {
         // User uploaded a new file - use it directly
-        await generate(uploadedFile, notes);
-      } else if (pose?.schema_path) {
+        await startFromUpload({
+          poseId: pose.id,
+          poseName: pose.name,
+          mode: "generate",
+          file: uploadedFile,
+          additionalNotes: notes,
+        });
+      } else if (pose.schema_path) {
         // Use server-side fetch to avoid CORS issues
-        await generateFromPose(pose.id, notes);
+        await startFromPose({
+          poseId: pose.id,
+          poseName: pose.name,
+          mode: "generate",
+          additionalNotes: notes,
+        });
       } else {
         setLocalError(t("generate.error_failed"));
-        setGenerationStarted(false);
         return;
       }
-      // onComplete will be called by useEffect when photoUrl is set
     } catch (err) {
-      console.error("Generation error:", err);
       const message = err instanceof Error ? err.message : t("generate.error_failed");
       setLocalError(message);
-      setGenerationStarted(false);
+    } finally {
+      setIsStarting(false);
     }
   };
 
@@ -162,17 +205,34 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
     // Only handle close events (open=false), not open events
     if (open) return;
 
-    // Only close if not currently saving
-    if (savingRef.current) {
-      return;
-    }
-    reset();
-    handleClearFile();
-    setSchemaLoadError(false);
-    setGenerationStarted(false);
-    setAdditionalNotes("");
+    // Closing is always allowed; generation continues in background.
     onClose();
-  }, [reset, handleClearFile, onClose]);
+  }, [onClose]);
+
+  // Defer cleanup until close animation is finished to avoid layout "jumping".
+  useEffect(() => {
+    if (isOpen) return;
+
+    if (closeCleanupTimerRef.current) {
+      window.clearTimeout(closeCleanupTimerRef.current);
+    }
+
+    closeCleanupTimerRef.current = window.setTimeout(() => {
+      handleClearFile();
+      setSchemaLoadError(false);
+      setLocalError(null);
+      setAdditionalNotes("");
+      setIsStarting(false);
+      closeCleanupTimerRef.current = null;
+    }, 220);
+
+    return () => {
+      if (closeCleanupTimerRef.current) {
+        window.clearTimeout(closeCleanupTimerRef.current);
+        closeCleanupTimerRef.current = null;
+      }
+    };
+  }, [handleClearFile, isOpen]);
 
   if (!pose) return null;
 
@@ -193,24 +253,33 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
             {/* Source schematic section */}
             <div>
               <Label className="text-stone-600 mb-2 block">{t("generate.source_schematic")}</Label>
-              
+
               {/* Hidden file input */}
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
-                onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    handleFileSelect(file);
+                  }
+                  // Ensure selecting the same file again still triggers onChange.
+                  e.currentTarget.value = "";
+                }}
                 className="hidden"
               />
-              
+
               {/* Show uploaded file preview */}
               {previewUrl ? (
                 <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
-                  <img
-                    src={previewUrl}
-                    alt={t("generate.alt_schematic")}
-                    className="max-h-48 mx-auto object-contain"
-                  />
+                  <div className="aspect-square max-w-64 mx-auto">
+                    <img
+                      src={previewUrl}
+                      alt={t("generate.alt_schematic")}
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
                   <button
                     onClick={handleClearFile}
                     className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full p-1.5 shadow-sm hover:bg-white transition-colors"
@@ -218,24 +287,44 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                     <X className="w-4 h-4 text-stone-600" />
                   </button>
                 </div>
-              ) : hasExistingSchema ? (
+              ) : showSchemaPreview ? (
                 /* Show existing schema */
                 <div className="relative rounded-xl overflow-hidden bg-stone-50 p-4">
-                  <img
-                    src={schemaSrc || ""}
-                    alt={t("generate.alt_schematic")}
-                    className="max-h-48 mx-auto object-contain"
-                    onError={() => {
-                      setSchemaLoadError(true);
-                      void refreshSchema(true);
-                    }}
-                  />
+                  <div className="aspect-square max-w-64 mx-auto">
+                    {schemaSrc ? (
+                      <img
+                        src={schemaSrc}
+                        alt={t("generate.alt_schematic")}
+                        className="w-full h-full object-contain"
+                        onLoad={() => setSchemaLoadError(false)}
+                        onError={() => {
+                          // Try refreshing signed URL once; if it still fails, show upload area.
+                          if (!schemaLoadError) {
+                            setSchemaLoadError(true);
+                            void refreshSchema(true);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-stone-400 text-sm">
+                        {isOpen ? t("common.loading") : ""}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openFilePicker}
+                    className="mt-3 w-full text-sm text-stone-600 hover:text-stone-800 transition-colors"
+                  >
+                    {t("generate.upload_schematic_button")}
+                  </button>
                 </div>
               ) : (
                 /* Upload area when no schema exists */
                 <div
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={openFilePicker}
                   className="border-2 border-dashed border-stone-200 rounded-xl p-8 text-center cursor-pointer hover:border-stone-300 hover:bg-stone-50 transition-colors"
+                  data-testid="pose-generate-upload-area"
                 >
                   <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-3">
                     <Upload className="w-5 h-5 text-stone-400" />
@@ -278,20 +367,23 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 value={additionalNotes}
                 onChange={(e) => setAdditionalNotes(e.target.value)}
                 placeholder={t("generate.notes_placeholder")}
+                maxLength={500}
                 className="border-stone-200 resize-none"
+                data-testid="pose-generate-notes"
               />
             </div>
 
-            {(error || localError) && (
+            {(taskError || generationTask?.autoApplyError || localError) && (
               <div className="p-4 bg-red-50 text-red-700 rounded-xl text-sm">
-                {error || localError}
+                {generationTask?.autoApplyError || taskError || localError}
               </div>
             )}
 
             <Button
               onClick={handleGenerate}
               className="w-full bg-stone-800 hover:bg-stone-900 text-white h-12 rounded-xl"
-              disabled={!canGenerate}
+              disabled={!canGenerate || isStarting}
+              data-testid="pose-generate-start"
             >
               <Sparkles className="w-4 h-4 mr-2" />
               {t("generate.start")}
@@ -306,8 +398,8 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 <span>{Math.min(progress, 100)}%</span>
               </div>
               <div className="h-2 bg-stone-200 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-stone-800 rounded-full transition-all duration-700 ease-out"
+                <div
+                  className="h-full bg-stone-800 rounded-full transition-[width] duration-700 ease-out"
                   style={{ width: `${Math.min(progress, 100)}%` }}
                 />
               </div>
@@ -320,7 +412,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                 const isActive = stepState === "active";
                 const isStepComplete = stepState === "complete";
                 const isPending = stepState === "pending";
-                
+
                 // Hide muscles step if not generating muscles
                 if (step.id === "generating_muscles" && !generateMuscles) return null;
 
@@ -328,18 +420,18 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                   <div
                     key={step.id}
                     className={cn(
-                      "flex items-center gap-4 p-4 rounded-xl transition-all duration-300",
+                      "flex items-center gap-4 p-4 rounded-xl transition-colors duration-300",
                       isActive && "bg-stone-100",
                       isStepComplete && "bg-emerald-50",
-                      isPending && "bg-stone-50 opacity-50"
+                      isPending && "bg-stone-50 opacity-50",
                     )}
                   >
                     <div
                       className={cn(
-                        "w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300",
+                        "w-10 h-10 rounded-full flex items-center justify-center transition-colors duration-300",
                         isActive && "bg-stone-800",
                         isStepComplete && "bg-emerald-500",
-                        isPending && "bg-stone-200"
+                        isPending && "bg-stone-200",
                       )}
                     >
                       {isActive ? (
@@ -356,7 +448,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
                           "font-medium transition-colors duration-300",
                           isActive && "text-stone-800",
                           isStepComplete && "text-emerald-700",
-                          isPending && "text-stone-400"
+                          isPending && "text-stone-400",
                         )}
                       >
                         {t(step.labelKey)}

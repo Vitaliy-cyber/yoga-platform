@@ -3,8 +3,8 @@ import { useDropzone } from "react-dropzone";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, X, FileImage, CheckCircle, AlertTriangle } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { useViewTransition } from "../../hooks/useViewTransition";
 import { useI18n } from "../../i18n";
+import { fadeScaleIn } from "../../lib/animation-variants";
 
 interface DropzoneProps {
   onFileSelect: (file: File) => void;
@@ -23,7 +23,6 @@ export const Dropzone: React.FC<DropzoneProps> = ({
 }) => {
   const [preview, setPreview] = useState<string | null>(null);
   const { t } = useI18n();
-  const { startTransition } = useViewTransition();
 
   React.useEffect(() => {
     if (selectedFile) {
@@ -57,15 +56,16 @@ export const Dropzone: React.FC<DropzoneProps> = ({
       <AnimatePresence mode="wait">
         {!selectedFile ? (
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
+            variants={fadeScaleIn}
+            initial="initial"
+            animate="animate"
+            exit="exit"
             key="dropzone"
           >
             <div
               {...getRootProps()}
               className={cn(
-                "relative group cursor-pointer border-2 border-dashed rounded-2xl h-64 flex flex-col items-center justify-center transition-all duration-300 overflow-hidden",
+                "relative group cursor-pointer border-2 border-dashed rounded-2xl h-64 flex flex-col items-center justify-center transition-[border-color,background-color,box-shadow] duration-300 overflow-hidden",
                 isDragActive
                   ? "border-primary bg-primary/5 shadow-[0_0_30px_-10px_var(--primary)]"
                   : "border-muted-foreground/20 hover:border-primary/50 hover:bg-muted/30 bg-muted/10",
@@ -112,9 +112,10 @@ export const Dropzone: React.FC<DropzoneProps> = ({
           </motion.div>
         ) : (
           <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
+            variants={fadeScaleIn}
+            initial="initial"
+            animate="animate"
+            exit="exit"
             key="preview"
             className="flex items-center gap-4 p-4 rounded-xl border bg-card/50 backdrop-blur-sm shadow-lg"
           >
@@ -137,7 +138,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
             </div>
 
             <button
-              onClick={(e) => { e.stopPropagation(); void startTransition(() => onClear()); }}
+              onClick={(e) => { e.stopPropagation(); onClear(); }}
               className="p-2 hover:bg-destructive/10 text-muted-foreground hover:text-destructive rounded-full transition-colors"
             >
               <X size={20} />

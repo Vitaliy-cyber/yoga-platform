@@ -31,7 +31,8 @@ export const MuscleBar: React.FC<MuscleBarProps> = ({ muscle, showLabel = true }
         <motion.div
           initial={{ width: 0 }}
           whileInView={{ width: `${muscle.activation_level}%` }}
-          transition={{ duration: 1, ease: "easeOut" }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
           className={cn(
             'h-full rounded-full relative',
             getActivationColor(muscle.activation_level)

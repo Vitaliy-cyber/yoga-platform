@@ -1,13 +1,15 @@
 import React, { useEffect } from 'react';
 import axios from 'axios';
 import { createBrowserRouter, RouterProvider, Navigate, Outlet } from 'react-router-dom';
+import { MotionConfig } from 'framer-motion';
 import { Layout } from './components/Layout';
 import { Dashboard, PoseGallery, PoseDetail, Upload, Generate, Login, ComparePage, AnalyticsDashboard, SequenceListPage, SequenceNew, SequenceDetail, Settings } from './pages';
 import { authApi, tokenManager } from './services/api';
 import { useAuthStore } from './store/useAuthStore';
-import { Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { I18nProvider } from './i18n';
 import { ToastContainer } from './components/ui/toast';
+import { ErrorBoundary } from './components/ui/error-boundary';
 
 // Protected route wrapper - redirects to login if not authenticated
 const ProtectedRoute: React.FC = () => {
@@ -15,8 +17,9 @@ const ProtectedRoute: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-stone-50">
-        <Loader2 className="w-8 h-8 text-stone-400 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-background" aria-busy="true" role="status">
+        <Loader2 className="w-8 h-8 text-muted-foreground animate-spin" />
+        <span className="sr-only">Authenticating...</span>
       </div>
     );
   }
@@ -34,8 +37,9 @@ const PublicRoute: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-stone-50">
-        <Loader2 className="w-8 h-8 text-stone-400 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-background" aria-busy="true" role="status">
+        <Loader2 className="w-8 h-8 text-muted-foreground animate-spin" />
+        <span className="sr-only">Authenticating...</span>
       </div>
     );
   }
@@ -95,6 +99,27 @@ const router = createBrowserRouter(
     },
   }
 );
+
+const GlobalAppErrorFallback: React.FC = () => {
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-6">
+      <div className="max-w-md w-full rounded-xl border border-red-200 bg-red-50 p-6 text-center">
+        <AlertTriangle className="mx-auto h-10 w-10 text-red-500 mb-3" />
+        <h1 className="text-lg font-semibold text-foreground mb-2">Page failed to render</h1>
+        <p className="text-sm text-muted-foreground mb-4">
+          A runtime error interrupted rendering. Reload the page to recover.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="inline-flex items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 transition-opacity"
+        >
+          Reload page
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const App: React.FC = () => {
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -203,10 +228,14 @@ const App: React.FC = () => {
   }, [_hasHydrated, isAuthenticated]);
 
   return (
-    <I18nProvider>
-      <RouterProvider router={router} future={{ v7_startTransition: true }} />
-      <ToastContainer />
-    </I18nProvider>
+    <ErrorBoundary fallback={<GlobalAppErrorFallback />}>
+      <MotionConfig reducedMotion="always" transition={{ duration: 0, delay: 0 }}>
+        <I18nProvider>
+          <RouterProvider router={router} future={{ v7_startTransition: true }} />
+          <ToastContainer />
+        </I18nProvider>
+      </MotionConfig>
+    </ErrorBoundary>
   );
 };
 

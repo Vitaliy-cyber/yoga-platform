@@ -1,8 +1,16 @@
 import React from "react";
-import { X, CheckCircle2, AlertCircle, Info, AlertTriangle } from "lucide-react";
+import { motion, AnimatePresence, MotionConfig } from "framer-motion";
+import {
+  X,
+  CheckCircle2,
+  AlertCircle,
+  Info,
+  AlertTriangle,
+} from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useAppStore } from "../../store/useAppStore";
 import { useI18n } from "../../i18n";
+import { slideRight, smoothTransition } from "../../lib/animation-variants";
 import type { Toast } from "../../types";
 
 const toastIcons = {
@@ -36,11 +44,16 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast, onDismiss }) => {
   const Icon = toastIcons[toast.type];
 
   return (
-    <div
+    <motion.div
       role="alert"
       aria-live="polite"
+      variants={slideRight}
+      initial="initial"
+      animate="animate"
+      exit="exit"
+      transition={smoothTransition}
       className={cn(
-        "flex items-start gap-3 p-4 rounded-xl border shadow-lg animate-in slide-in-from-right-full duration-300",
+        "flex items-start gap-3 p-4 rounded-xl border shadow-lg",
         toastStyles[toast.type]
       )}
     >
@@ -53,7 +66,7 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast, onDismiss }) => {
       >
         <X className="w-4 h-4" />
       </button>
-    </div>
+    </motion.div>
   );
 };
 
@@ -76,21 +89,21 @@ export const ToastContainer: React.FC = () => {
   const removeToast = useAppStore((state) => state.removeToast);
   const { t } = useI18n();
 
-  if (toasts.length === 0) {
-    return null;
-  }
-
   return (
-    <div
-      className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 max-w-sm w-full pointer-events-none"
-      aria-label={t("aria.notifications")}
-    >
-      {toasts.map((toast) => (
-        <div key={toast.id} className="pointer-events-auto">
-          <ToastItem toast={toast} onDismiss={removeToast} />
-        </div>
-      ))}
-    </div>
+    <MotionConfig reducedMotion="never">
+      <div
+        className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 max-w-sm w-full pointer-events-none"
+        aria-label={t("aria.notifications")}
+      >
+        <AnimatePresence mode="popLayout">
+          {toasts.map((toast) => (
+            <div key={toast.id} className="pointer-events-auto">
+              <ToastItem toast={toast} onDismiss={removeToast} />
+            </div>
+          ))}
+        </AnimatePresence>
+      </div>
+    </MotionConfig>
   );
 };
 

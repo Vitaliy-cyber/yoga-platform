@@ -1,7 +1,9 @@
 """Authentication service for JWT token management with refresh token rotation."""
 
+import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import secrets
@@ -14,7 +16,8 @@ from uuid import uuid4
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from sqlalchemy import and_, delete, select, update
+from sqlalchemy import and_, delete, insert, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
@@ -29,12 +32,19 @@ security = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 
 
-# CSRF token storage
-# WARNING: This in-memory storage will NOT work correctly in multi-process deployments
-# (e.g., gunicorn with multiple workers, kubernetes with multiple pods).
-# Each process will have its own copy of this dict, causing token validation failures.
-# For production multi-process deployments, use Redis or database storage instead.
-_csrf_tokens: dict[str, tuple[int, float]] = {}  # token -> (user_id, expiry_timestamp)
+CSRF_TOKEN_TTL_SECONDS = 3600
+
+def _as_utc_aware(dt: datetime) -> datetime:
+    """
+    Coerce a datetime to timezone-aware UTC.
+
+    SQLite frequently returns naive datetimes even when SQLAlchemy columns are declared
+    with `DateTime(timezone=True)`. Comparing naive to aware raises TypeError, which
+    can break refresh token rotation and lead to spurious 401s.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _constant_time_compare(a: str, b: str) -> bool:
@@ -45,42 +55,58 @@ def _constant_time_compare(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode('utf-8'), b.encode('utf-8'))
 
 
+def _csrf_signature(user_id: int, expires_at: int, nonce: str) -> str:
+    message = f"{user_id}:{expires_at}:{nonce}"
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _decode_csrf_token(token: str) -> tuple[int, int, str, str] | None:
+    try:
+        padded = token + ("=" * (-len(token) % 4))
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        user_id_raw, expires_raw, nonce, signature = decoded.split(":", 3)
+        user_id = int(user_id_raw)
+        expires_at = int(expires_raw)
+        if not nonce or not signature:
+            return None
+        return user_id, expires_at, nonce, signature
+    except Exception:
+        return None
+
+
 def generate_csrf_token(user_id: int) -> str:
-    """Generate a CSRF token for the given user."""
-    token = secrets.token_urlsafe(32)
-    expiry = datetime.now(timezone.utc).timestamp() + 3600  # 1 hour expiry
-    _csrf_tokens[token] = (user_id, expiry)
-
-    # Cleanup expired tokens periodically
-    # NOTE: This cleanup is not fully thread-safe in multi-threaded environments.
-    # We use list() to create a snapshot and pop() with default to avoid RuntimeError
-    # from dictionary size changing during iteration. For full thread safety in
-    # multi-threaded deployments, consider using threading.Lock or Redis storage.
-    current_time = datetime.now(timezone.utc).timestamp()
-    expired_tokens = [t for t, (_, exp) in list(_csrf_tokens.items()) if exp < current_time]
-    for t in expired_tokens:
-        _csrf_tokens.pop(t, None)
-
-    return token
+    """Generate a stateless CSRF token for the given user."""
+    expires_at = int(
+        (datetime.now(timezone.utc) + timedelta(seconds=CSRF_TOKEN_TTL_SECONDS)).timestamp()
+    )
+    nonce = secrets.token_urlsafe(12)
+    signature = _csrf_signature(user_id, expires_at, nonce)
+    payload = f"{user_id}:{expires_at}:{nonce}:{signature}"
+    return base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
 
 
 def verify_csrf_token(token: str, user_id: int) -> bool:
-    """Verify a CSRF token for the given user."""
-    if not token or token not in _csrf_tokens:
+    """Verify a stateless CSRF token for the given user."""
+    if not token:
         return False
 
-    stored_user_id, expiry = _csrf_tokens[token]
-    current_time = datetime.now(timezone.utc).timestamp()
-
-    if expiry < current_time:
-        del _csrf_tokens[token]
+    decoded = _decode_csrf_token(token)
+    if decoded is None:
+        return False
+    token_user_id, expires_at, nonce, signature = decoded
+    if token_user_id != user_id:
         return False
 
-    # Constant-time comparison for user_id
-    if stored_user_id != user_id:
+    current_time = int(datetime.now(timezone.utc).timestamp())
+    if expires_at < current_time:
         return False
 
-    return True
+    expected_signature = _csrf_signature(user_id, expires_at, nonce)
+    return _constant_time_compare(signature, expected_signature)
 
 
 def create_signed_image_url(
@@ -375,15 +401,40 @@ async def blacklist_token(
     reason: str = "logout",
 ) -> None:
     """Add a token to the blacklist."""
-    blacklisted = TokenBlacklist(
-        jti=jti,
-        user_id=user_id,
-        token_type=token_type,
-        expires_at=expires_at,
-        reason=reason,
-    )
-    db.add(blacklisted)
-    await db.flush()
+    if not jti:
+        return
+    # Prefer a conflict-safe insert to keep logout idempotent under concurrency.
+    # This avoids flush-time IntegrityError + PendingRollbackError cascades.
+    bind = db.get_bind()
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+    if dialect_name == "sqlite":
+        stmt = (
+            insert(TokenBlacklist)
+            .values(
+                jti=jti,
+                user_id=user_id,
+                token_type=token_type,
+                expires_at=expires_at,
+                reason=reason,
+            )
+            .prefix_with("OR IGNORE")
+        )
+        await db.execute(stmt)
+        return
+    try:
+        blacklisted = TokenBlacklist(
+            jti=jti,
+            user_id=user_id,
+            token_type=token_type,
+            expires_at=expires_at,
+            reason=reason,
+        )
+        db.add(blacklisted)
+        await db.flush()
+    except IntegrityError:
+        # Idempotent under concurrency: multiple logout calls may try to blacklist
+        # the same access token JTI. Treat duplicates as "already blacklisted".
+        await db.rollback()
 
 
 class TokenService:
@@ -468,26 +519,17 @@ class TokenService:
                 detail="Token has been revoked",
             )
 
-        # Find the stored refresh token
+        # Find the stored refresh token (including revoked) to distinguish reuse vs manual revoke
         token_hash = _hash_token(refresh_token)
         result = await self.db.execute(
-            select(RefreshToken).where(
-                and_(
-                    RefreshToken.token_hash == token_hash,
-                    RefreshToken.is_revoked == False,
-                    RefreshToken.expires_at > datetime.now(timezone.utc),
-                )
-            )
+            select(RefreshToken).where(RefreshToken.token_hash == token_hash)
         )
         stored_token = result.scalar_one_or_none()
 
-        if stored_token is None:
-            # Token not found or already revoked - potential token reuse attack
-            logger.warning(
-                f"Refresh token not found in DB for user {user_id}. "
-                "Possible token reuse attack. Revoking all user tokens."
-            )
-            # Log the security event
+        now = datetime.now(timezone.utc)
+
+        async def _handle_reuse_attack(message: str) -> None:
+            logger.warning(message)
             audit_log = AuthAuditLog(
                 user_id=user_id,
                 action="potential_token_reuse_attack",
@@ -498,11 +540,71 @@ class TokenService:
                 metadata_json=json.dumps({"jti": jti}),
             )
             self.db.add(audit_log)
-            # Revoke all user's refresh tokens as a security measure
             await self.revoke_all_user_tokens(user_id, reason="potential_reuse_attack")
+            try:
+                await self.db.commit()
+            except Exception:
+                await self.db.rollback()
+                logger.exception(
+                    "Failed to commit token reuse revocation (user_id=%s)", user_id
+                )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid refresh token. All sessions have been terminated.",
+            )
+
+        def _is_likely_concurrent_rotation(token: RefreshToken) -> bool:
+            """
+            Detect benign concurrent refresh attempts using the same token.
+
+            In real browsers it's common to have two refresh requests in-flight
+            (e.g., multiple tabs, automatic retries). If one request rotates the token,
+            the others will see a revoked token with reason=rotation.
+
+            We should NOT treat that as a compromise and revoke *all* sessions.
+            """
+            if token.revoke_reason != "rotation" or token.revoked_at is None:
+                return False
+            try:
+                revoked_at = _as_utc_aware(token.revoked_at)
+            except Exception:
+                return False
+            delta_s = (now - revoked_at).total_seconds()
+            if delta_s < 0:
+                return False
+            # Small grace window: only treat very recent rotation as concurrency.
+            if delta_s > 3.0:
+                return False
+            if token.ip_address and ip_address and token.ip_address != ip_address:
+                return False
+            if token.device_info and device_info and token.device_info != device_info:
+                return False
+            return True
+
+        if stored_token is None:
+            await _handle_reuse_attack(
+                f"Refresh token not found in DB for user {user_id}. "
+                "Possible token reuse attack. Revoking all user tokens."
+            )
+
+        if _as_utc_aware(stored_token.expires_at) <= now:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired refresh token",
+            )
+
+        if stored_token.is_revoked:
+            # Only treat rotation reuse as a session-compromise signal.
+            if stored_token.revoke_reason == "rotation":
+                if not _is_likely_concurrent_rotation(stored_token):
+                    await _handle_reuse_attack(
+                        f"Refresh token reused after rotation for user {user_id}. "
+                        "Possible token reuse attack. Revoking all user tokens."
+                    )
+            logger.warning(f"Attempt to use revoked refresh token for user {user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
             )
 
         # Session fixation detection: Log anomaly if device_info or ip_address changed significantly
@@ -542,14 +644,34 @@ class TokenService:
             )
             self.db.add(audit_log)
 
-        # Update last_used_at timestamp (Issue #7)
-        stored_token.last_used_at = datetime.now(timezone.utc)
-
-        # Revoke the old refresh token
-        stored_token.is_revoked = True
-        stored_token.revoked_at = datetime.now(timezone.utc)
-        stored_token.revoke_reason = "rotation"
+        # Rotate the refresh token.
+        # Use a conditional update so only one concurrent request "wins" the rotation.
+        rotated = await self.db.execute(
+            update(RefreshToken)
+            .where(
+                and_(
+                    RefreshToken.id == stored_token.id,
+                    RefreshToken.is_revoked == False,
+                )
+            )
+            .values(
+                last_used_at=now,
+                is_revoked=True,
+                revoked_at=now,
+                revoke_reason="rotation",
+            )
+            .returning(RefreshToken.id)
+        )
+        rotated_id = rotated.scalar_one_or_none()
         await self.db.flush()
+
+        if rotated_id is None:
+            # Another request rotated this token concurrently.
+            # Do NOT revoke all sessions; just reject this refresh attempt.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has been revoked",
+            )
 
         # Create new token pair
         return await self.create_tokens(user_id, device_info, ip_address)
@@ -716,18 +838,45 @@ class AuditService:
 
 def get_client_info(request: Request) -> tuple[str, str]:
     """Extract client IP and User-Agent from request."""
-    # Get IP address
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        ip_address = forwarded_for.split(",")[0].strip()
-    else:
-        real_ip = request.headers.get("X-Real-IP")
-        if real_ip:
-            ip_address = real_ip.strip()
-        elif request.client:
-            ip_address = request.client.host
+    # SECURITY: Never trust proxy headers (X-Forwarded-For / X-Real-IP) unless we
+    # are explicitly configured to do so via TRUSTED_PROXIES.
+    #
+    # Otherwise any client can spoof its IP and poison audit logs / session lists.
+    ip_address = request.client.host if request.client else "unknown"
+
+    trusted = False
+    if settings.TRUSTED_PROXIES and request.client:
+        proxy_strings = [p.strip() for p in settings.TRUSTED_PROXIES.split(",") if p.strip()]
+        networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+        for proxy in proxy_strings:
+            try:
+                networks.append(ipaddress.ip_network(proxy, strict=False))
+            except ValueError:
+                logger.warning("Invalid TRUSTED_PROXIES network: %s", proxy)
+        try:
+            direct_ip = ipaddress.ip_address(request.client.host)
+            trusted = any(direct_ip in net for net in networks)
+        except ValueError:
+            trusted = False
+
+    if trusted:
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            candidate = forwarded_for.split(",")[0].strip()
+            try:
+                ipaddress.ip_address(candidate)
+                ip_address = candidate
+            except ValueError:
+                pass
         else:
-            ip_address = "unknown"
+            real_ip = request.headers.get("X-Real-IP")
+            if real_ip:
+                candidate = real_ip.strip()
+                try:
+                    ipaddress.ip_address(candidate)
+                    ip_address = candidate
+                except ValueError:
+                    pass
 
     # Get User-Agent
     user_agent = request.headers.get("User-Agent", "unknown")
@@ -859,10 +1008,13 @@ async def verify_signed_image_request(
         payload = decode_token(token, expected_type="access")
         if payload:
             user_id = payload.get("sub")
+            jti = payload.get("jti")
             token_value = payload.get("token")
             if user_id:
                 try:
                     user_id = int(user_id)
+                    if jti and await is_token_blacklisted(db, jti):
+                        raise credentials_exception
                     result = await db.execute(select(User).where(User.id == user_id))
                     user = result.scalar_one_or_none()
                     if user:

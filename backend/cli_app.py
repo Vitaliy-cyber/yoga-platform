@@ -6,6 +6,7 @@ No user interaction required - everything installs and starts automatically.
 
 import argparse
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -264,11 +265,13 @@ class YogaPlatform:
 
         info("Creating configuration file...")
 
-        env_content = """# Yoga Platform Configuration (Auto-generated)
+        generated_secret = secrets.token_urlsafe(64)
+        env_content = f"""# Yoga Platform Configuration (Auto-generated)
 APP_MODE=dev
 DATABASE_URL=sqlite+aiosqlite:///./yoga_platform.db
-SECRET_KEY=auto-generated-secret-key-change-in-production
-GOOGLE_API_KEY=AIzaSyDW6KcAYNGLiz1UpzPWDDl9TPsJw4U-2ew
+SECRET_KEY={generated_secret}
+# Add your Gemini API key to enable AI generation
+GOOGLE_API_KEY=
 USE_GOOGLE_AI=true
 """
         env_file.write_text(env_content)

@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { MuscleStats } from '../../types';
 import { useI18n } from '../../i18n';
-import { useViewTransition } from '../../hooks/useViewTransition';
 import { cn } from '../../lib/utils';
 
 interface MuscleHeatmapProps {
@@ -69,7 +68,6 @@ const getHeatColor = (activationLevel: number, maxActivation: number): string =>
 
 export const MuscleHeatmap: React.FC<MuscleHeatmapProps> = ({ muscles, className }) => {
   const { locale } = useI18n();
-  const { startTransition } = useViewTransition();
   const [hoveredMuscle, setHoveredMuscle] = useState<MuscleStats | null>(null);
   const [view, setView] = useState<'front' | 'back'>('front');
 
@@ -101,9 +99,9 @@ export const MuscleHeatmap: React.FC<MuscleHeatmapProps> = ({ muscles, className
       {/* View Toggle */}
       <div className="absolute right-4 top-4 z-10 flex rounded-lg bg-card/80 p-1 shadow-sm backdrop-blur-sm">
         <button
-          onClick={() => void startTransition(() => setView('front'))}
+          onClick={() => setView('front')}
           className={cn(
-            'rounded-md px-3 py-1.5 text-sm font-medium transition-all',
+            'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
             view === 'front'
               ? 'bg-primary text-primary-foreground shadow-sm'
               : 'text-muted-foreground hover:bg-accent'
@@ -112,9 +110,9 @@ export const MuscleHeatmap: React.FC<MuscleHeatmapProps> = ({ muscles, className
           {locale === 'ua' ? 'Спереду' : 'Front'}
         </button>
         <button
-          onClick={() => void startTransition(() => setView('back'))}
+          onClick={() => setView('back')}
           className={cn(
-            'rounded-md px-3 py-1.5 text-sm font-medium transition-all',
+            'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
             view === 'back'
               ? 'bg-primary text-primary-foreground shadow-sm'
               : 'text-muted-foreground hover:bg-accent'

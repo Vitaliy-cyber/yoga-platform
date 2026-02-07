@@ -6,13 +6,70 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from models.category import Category
 from models.pose import Pose
 from models.user import User
-from schemas.category import CategoryCreate, CategoryResponse, CategoryUpdate
+from schemas.category import CategoryCreate, CategoryResponse, CategoryUpdate, _strip_invisible_edges
 from services.auth import get_current_user
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 logger = logging.getLogger(__name__)
+
+
+def _safe_category_name(value: object) -> str:
+    if not isinstance(value, str):
+        return "<invalid>"
+    normalized = _strip_invisible_edges(value)
+    if not normalized:
+        return "<invalid>"
+    try:
+        normalized.encode("utf-8")
+    except UnicodeEncodeError:
+        return "<invalid>"
+    return normalized[:100]
+
+
+def _safe_category_description(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = str(value)
+    normalized = _strip_invisible_edges(value)
+    if not normalized:
+        return None
+    try:
+        normalized.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return normalized[:2000]
+
+
+async def _category_name_exists_casefold(
+    *,
+    db: AsyncSession,
+    user_id: int,
+    name: str,
+    exclude_category_id: int | None = None,
+) -> bool:
+    """
+    Case-insensitive (Unicode-aware) uniqueness check for category names.
+
+    SQLite's LOWER() is ASCII-only in many builds, so use Python casefold to
+    correctly handle Cyrillic/Unicode names.
+    """
+    stmt = select(Category.name).where(Category.user_id == user_id)
+    if exclude_category_id is not None:
+        stmt = stmt.where(Category.id != exclude_category_id)
+
+    result = await db.execute(stmt)
+    target = name.casefold()
+    for existing in result.scalars():
+        if not isinstance(existing, str):
+            continue
+        normalized = _strip_invisible_edges(existing)
+        if normalized and normalized.casefold() == target:
+            return True
+    return False
 
 
 @router.get("", response_model=List[CategoryResponse])
@@ -46,8 +103,8 @@ async def get_categories(
         categories.append(
             CategoryResponse(
                 id=category.id,
-                name=category.name,
-                description=category.description,
+                name=_safe_category_name(category.name),
+                description=_safe_category_description(category.description),
                 created_at=category.created_at,
                 pose_count=pose_count,
             )
@@ -83,8 +140,8 @@ async def get_category(
 
     return CategoryResponse(
         id=category.id,
-        name=category.name,
-        description=category.description,
+        name=_safe_category_name(category.name),
+        description=_safe_category_description(category.description),
         created_at=category.created_at,
         pose_count=pose_count,
     )
@@ -98,15 +155,9 @@ async def create_category(
 ):
     """Створити нову категорію"""
     # Перевірка на унікальність назви для цього користувача (case-insensitive)
-    existing = await db.execute(
-        select(Category).where(
-            and_(
-                func.lower(Category.name) == func.lower(category_data.name),
-                Category.user_id == current_user.id,
-            )
-        )
-    )
-    if existing.scalar_one_or_none():
+    if await _category_name_exists_casefold(
+        db=db, user_id=current_user.id, name=category_data.name
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Category with this name already exists",
@@ -114,14 +165,28 @@ async def create_category(
 
     category = Category(user_id=current_user.id, **category_data.model_dump())
     db.add(category)
-    await db.flush()
-    await db.refresh(category)
-    await db.commit()
+    try:
+        await db.flush()
+        await db.refresh(category)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        # Handle race conditions where another request created the category
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Category with this name already exists",
+        )
+    except OperationalError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while creating category. Please retry.",
+        )
 
     return CategoryResponse(
         id=category.id,
-        name=category.name,
-        description=category.description,
+        name=_safe_category_name(category.name),
+        description=_safe_category_description(category.description),
         created_at=category.created_at,
         pose_count=0,
     )
@@ -155,16 +220,12 @@ async def update_category(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Category name cannot be empty",
             )
-        existing = await db.execute(
-            select(Category).where(
-                and_(
-                    func.lower(Category.name) == func.lower(update_data["name"]),
-                    Category.user_id == current_user.id,
-                    Category.id != category_id,
-                )
-            )
-        )
-        if existing.scalar_one_or_none():
+        if await _category_name_exists_casefold(
+            db=db,
+            user_id=current_user.id,
+            name=update_data["name"],
+            exclude_category_id=category_id,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Category with this name already exists",
@@ -173,9 +234,22 @@ async def update_category(
     for field, value in update_data.items():
         setattr(category, field, value)
 
-    await db.flush()
-    await db.refresh(category)
-    await db.commit()
+    try:
+        await db.flush()
+        await db.refresh(category)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Category with this name already exists",
+        )
+    except OperationalError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while updating category. Please retry.",
+        )
 
     # Підрахунок поз користувача
     pose_count_query = select(func.count(Pose.id)).where(
@@ -186,8 +260,8 @@ async def update_category(
 
     return CategoryResponse(
         id=category.id,
-        name=category.name,
-        description=category.description,
+        name=_safe_category_name(category.name),
+        description=_safe_category_description(category.description),
         created_at=category.created_at,
         pose_count=pose_count,
     )
@@ -212,4 +286,11 @@ async def delete_category(
         )
 
     await db.delete(category)
-    await db.commit()
+    try:
+        await db.commit()
+    except OperationalError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while deleting category. Please retry.",
+        )

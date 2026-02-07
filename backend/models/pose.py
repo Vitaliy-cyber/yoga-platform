@@ -49,9 +49,15 @@ class Pose(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    __table_args__ = (
-        UniqueConstraint("user_id", "code", name="uq_pose_user_code"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "code", name="uq_pose_user_code"),)
+
+    # SQLAlchemy optimistic concurrency control:
+    # - Includes `version` in UPDATE statements and increments it automatically.
+    # - Concurrent updates with the same base version raise StaleDataError.
+    __mapper_args__ = {
+        "version_id_col": version,
+        "version_id_generator": lambda v: (v or 0) + 1,
+    }
 
     # Зв'язки
     user = relationship("User", back_populates="poses")
@@ -76,10 +82,16 @@ class PoseMuscle(Base):
     # - Fetching all poses that use a muscle (muscle_id index)
     # - DELETE operations when removing pose_muscles by pose_id
     pose_id = Column(
-        Integer, ForeignKey("poses.id", ondelete="CASCADE"), primary_key=True, index=True
+        Integer,
+        ForeignKey("poses.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
     )
     muscle_id = Column(
-        Integer, ForeignKey("muscles.id", ondelete="CASCADE"), primary_key=True, index=True
+        Integer,
+        ForeignKey("muscles.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
     )
     activation_level = Column(Integer, nullable=False, default=50)
 

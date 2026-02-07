@@ -86,7 +86,7 @@ export const ExportProgress: React.FC<ExportProgressProps> = ({
               <div className="overflow-hidden h-2 text-xs flex rounded-full bg-muted">
                 <div
                   style={{ width: `${progress}%` }}
-                  className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-primary transition-all duration-300"
+                  className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-primary transition-[width] duration-300"
                 />
               </div>
               {progress > 0 && (

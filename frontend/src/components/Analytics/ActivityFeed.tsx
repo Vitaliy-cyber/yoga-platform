@@ -66,10 +66,10 @@ const ActivityItem: React.FC<ActivityItemProps> = ({ activity, index }) => {
     >
       <Link
         to={`/poses/${activity.id}`}
-        className="group flex items-start gap-4 rounded-xl p-3 transition-all hover:bg-accent"
+        className="group flex items-start gap-4 rounded-xl p-3 transition-colors hover:bg-accent"
       >
         {/* Icon */}
-        <div className={cn('rounded-lg p-2 transition-all group-hover:scale-110', config.bgColor)}>
+        <div className={cn('rounded-lg p-2 transition-transform group-hover:scale-110', config.bgColor)}>
           <Icon className={cn('h-4 w-4', config.color)} />
         </div>
 
@@ -104,7 +104,7 @@ const ActivityItem: React.FC<ActivityItemProps> = ({ activity, index }) => {
             <Clock className="h-3 w-3" />
             <span>{formatActivityTime(activity.timestamp, locale, formatRelativeTime)}</span>
           </div>
-          <ArrowRight className="h-4 w-4 opacity-0 transition-all group-hover:opacity-100 group-hover:translate-x-1" />
+          <ArrowRight className="h-4 w-4 opacity-0 transition-[opacity,transform] duration-200 group-hover:opacity-100 group-hover:translate-x-1" />
         </div>
       </Link>
     </motion.div>
@@ -144,7 +144,7 @@ export const ActivityFeed: React.FC<ActivityFeedProps> = ({
       {/* View all link */}
       <Link
         to="/poses"
-        className="flex items-center justify-center gap-2 rounded-lg p-3 text-sm font-medium text-primary transition-all hover:bg-primary/5"
+        className="flex items-center justify-center gap-2 rounded-lg p-3 text-sm font-medium text-primary transition-colors hover:bg-primary/5"
       >
         {t("analytics.view_all_poses")}
         <ArrowRight className="h-4 w-4" />

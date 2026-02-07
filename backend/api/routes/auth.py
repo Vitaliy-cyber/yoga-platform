@@ -2,15 +2,17 @@
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, and_
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import services.auth as auth_service
 from config import get_settings
 from db.database import get_db
 from models.auth_audit import AuthAuditLog
@@ -19,10 +21,13 @@ from schemas.user import TokenResponse, UserLogin, UserResponse, UserUpdate
 from services.auth import (
     AuditService,
     TokenService,
+    blacklist_token,
     create_access_token,
     generate_csrf_token,
     get_client_info,
     get_current_user,
+    get_optional_user,
+    is_token_blacklisted,
     verify_csrf_token,
 )
 
@@ -42,8 +47,8 @@ async def _periodic_token_cleanup():
         try:
             await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
             # Import here to avoid circular imports
-            from db.database import async_session_maker
-            async with async_session_maker() as db:
+            from db.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as db:
                 token_service = TokenService(db)
                 refresh_count, blacklist_count = await token_service.cleanup_expired_tokens()
                 await db.commit()
@@ -74,6 +79,34 @@ def stop_cleanup_task():
     if _cleanup_task and not _cleanup_task.done():
         _cleanup_task.cancel()
         logger.info("Stopped periodic token cleanup task")
+
+
+def _extract_bearer_token(request: Request) -> Optional[str]:
+    auth_header = request.headers.get("Authorization") or ""
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:].strip()
+    return None
+
+
+async def _get_valid_bearer_user_id(request: Request, db: AsyncSession) -> Optional[int]:
+    token = _extract_bearer_token(request)
+    if not token:
+        return None
+    payload = auth_service.decode_token(token, expected_type="access")
+    if payload is None:
+        return None
+    jti = payload.get("jti")
+    if jti and await is_token_blacklisted(db, jti, log_attempt=False):
+        return None
+    user_id = payload.get("sub")
+    if user_id is None:
+        return None
+    try:
+        user_id_int = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    result = await db.execute(select(User.id).where(User.id == user_id_int))
+    return user_id_int if result.scalar_one_or_none() is not None else None
 
 
 
@@ -171,81 +204,102 @@ async def login(
     Returns JWT access token and refresh token.
     The refresh token is also set as an httpOnly cookie.
     """
+    import random
+
     ip_address, user_agent = get_client_info(request)
     audit = AuditService(db)
     token_service = TokenService(db)
 
-    # Check if user exists by hashed token
-    token_hash = hash_user_token(login_data.token)
-    result = await db.execute(select(User).where(User.token_hash == token_hash))
-    user = result.scalar_one_or_none()
+    # SQLite can surface transient OperationalError (busy/locked) under heavy atomic stress.
+    # Retry the whole login flow a few times so E2E can keep pushing without random 5xx.
+    max_attempts = 6
+    last_error: Exception | None = None
 
-    is_new_user = user is None
-    if is_new_user:
-        # Create new user with hashed token
-        user = User.create_with_token(login_data.token)
-        db.add(user)
-        await db.flush()
-        await db.refresh(user)
+    for attempt in range(max_attempts):
+        try:
+            # Check if user exists by hashed token
+            token_hash = hash_user_token(login_data.token)
+            result = await db.execute(select(User).where(User.token_hash == token_hash))
+            user = result.scalar_one_or_none()
 
-    # Update last login
-    user.last_login = datetime.now(timezone.utc)
-    await db.flush()
+            is_new_user = user is None
+            if is_new_user:
+                # Create new user with hashed token
+                user = User.create_with_token(login_data.token)
+                db.add(user)
+                await db.flush()
+                await db.refresh(user)
 
-    # Create token pair
-    tokens = await token_service.create_tokens(
-        user_id=user.id,
-        device_info=user_agent,
-        ip_address=ip_address,
-        user_token=login_data.token,
-    )
+            # Update last login
+            user.last_login = datetime.now(timezone.utc)
+            await db.flush()
 
-    # Log the login
-    await audit.log(
-        action=AuthAuditLog.ACTION_LOGIN,
-        user_id=user.id,
-        ip_address=ip_address,
-        user_agent=user_agent,
-        metadata={"is_new_user": is_new_user},
-    )
+            # Create token pair
+            tokens = await token_service.create_tokens(
+                user_id=user.id,
+                device_info=user_agent,
+                ip_address=ip_address,
+                user_token=login_data.token,
+            )
 
-    # Clear legacy cookie path to avoid duplicate refresh_token cookies (path=/api vs path=/)
-    response.delete_cookie(key="refresh_token", path="/api")
+            # Log the login
+            await audit.log(
+                action=AuthAuditLog.ACTION_LOGIN,
+                user_id=user.id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                metadata={"is_new_user": is_new_user},
+            )
 
-    # Set refresh token as httpOnly cookie
-    response.set_cookie(
-        key="refresh_token",
-        value=tokens.refresh_token,
-        httponly=True,
-        secure=settings.APP_MODE.value == "prod",  # HTTPS only in production
-        samesite="lax",
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        path="/",
-    )
+            # Commit all changes (user, refresh token, audit log)
+            await db.commit()
 
-    # Generate and set CSRF token for Double-Submit Cookie pattern
-    csrf_token = generate_csrf_token(user.id)
-    response.set_cookie(
-        key="csrf_token",
-        value=csrf_token,
-        httponly=False,  # JavaScript needs to read this
-        secure=settings.APP_MODE.value == "prod",
-        samesite="strict",  # Strict for CSRF token
-        max_age=3600,  # 1 hour
-        path="/",
-    )
+            # Only mutate cookies after successful commit so we never hand out a refresh token
+            # that was rolled back.
+            response.delete_cookie(key="refresh_token", path="/api")
+            response.set_cookie(
+                key="refresh_token",
+                value=tokens.refresh_token,
+                httponly=True,
+                secure=settings.APP_MODE.value == "prod",  # HTTPS only in production
+                samesite="lax",
+                max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+                path="/",
+            )
 
-    # Commit all changes (user, refresh token, audit log)
-    await db.commit()
+            csrf_token = generate_csrf_token(user.id)
+            response.set_cookie(
+                key="csrf_token",
+                value=csrf_token,
+                httponly=False,  # JavaScript needs to read this
+                secure=settings.APP_MODE.value == "prod",
+                samesite="strict",  # Strict for CSRF token
+                max_age=3600,  # 1 hour
+                path="/",
+            )
 
-    setattr(user, "token", login_data.token)
+            setattr(user, "token", login_data.token)
 
-    return TokenPairResponse(
-        access_token=tokens.access_token,
-        refresh_token=tokens.refresh_token,
-        expires_in=settings.effective_access_token_expire_minutes * 60,
-        user=UserResponse.model_validate(user),
-    )
+            return TokenPairResponse(
+                access_token=tokens.access_token,
+                refresh_token=tokens.refresh_token,
+                expires_in=settings.effective_access_token_expire_minutes * 60,
+                user=UserResponse.model_validate(user),
+            )
+        except (IntegrityError, OperationalError) as e:
+            last_error = e
+            await db.rollback()
+            if attempt < max_attempts - 1:
+                base = min(0.05 * (2**attempt), 0.5)
+                await asyncio.sleep(base + random.uniform(0, 0.05))
+                continue
+            break
+
+    # Never leak raw DB error text.
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Conflict while logging in. Please retry.",
+    ) from last_error
 
 
 @router.post("/refresh", response_model=TokenPairResponse)
@@ -266,24 +320,109 @@ async def refresh_tokens(
     Implements token rotation: the old refresh token is invalidated
     and a new one is issued.
     """
-    # Get refresh token from body or cookie
-    refresh_token = None
-    if body and body.refresh_token:
-        refresh_token = body.refresh_token
-    elif refresh_token_cookie:
-        refresh_token = refresh_token_cookie
-
-    if not refresh_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Refresh token is required",
-        )
-
     ip_address, user_agent = get_client_info(request)
     audit = AuditService(db)
     token_service = TokenService(db)
 
     try:
+        body_refresh_token = body.refresh_token if body and body.refresh_token else None
+
+        bearer_user_id = await _get_valid_bearer_user_id(request, db)
+        csrf_header = request.headers.get("X-CSRF-Token")
+        refresh_user_id: Optional[int] = None
+        cookie_invalid = False
+        if refresh_token_cookie:
+            payload = auth_service.decode_token(refresh_token_cookie, expected_type="refresh")
+            if payload is None:
+                cookie_invalid = True
+            elif payload.get("sub") is not None:
+                try:
+                    refresh_user_id = int(payload["sub"])
+                except (TypeError, ValueError):
+                    refresh_user_id = None
+        bearer_matches_refresh = (
+            bearer_user_id is not None
+            and refresh_user_id is not None
+            and bearer_user_id == refresh_user_id
+        )
+        csrf_ok = False
+        if csrf_header and refresh_user_id is not None:
+            csrf_ok = verify_csrf_token(csrf_header, refresh_user_id)
+
+        # If a body refresh token is present, ignore a revoked/expired cookie so API clients
+        # are not blocked by stale cookies.
+        if refresh_token_cookie and body_refresh_token and not cookie_invalid:
+            import hashlib
+            from models.refresh_token import RefreshToken
+
+            token_hash = hashlib.sha256(refresh_token_cookie.encode()).hexdigest()
+            result = await db.execute(
+                select(RefreshToken.id).where(
+                    and_(
+                        RefreshToken.token_hash == token_hash,
+                        RefreshToken.is_revoked == False,
+                        RefreshToken.expires_at > datetime.now(timezone.utc),
+                    )
+                )
+            )
+            if result.scalar_one_or_none() is None:
+                cookie_invalid = True
+
+        # Token source selection:
+        # - Cookie-based refresh is the browser flow and requires CSRF
+        #   (unless a valid Bearer for the SAME user is present).
+        # - Body-based refresh is the API-client flow and does not require CSRF.
+        #
+        # SECURITY/UX: If a refresh cookie exists but the request does NOT include X-CSRF-Token,
+        # and a body refresh token is provided, treat it as body-based to avoid forcing CSRF for
+        # non-browser API clients that happen to carry cookies (e.g., Playwright APIRequestContext).
+        using_cookie = (
+            refresh_token_cookie is not None
+            and not cookie_invalid
+            and (bearer_matches_refresh or csrf_ok or body_refresh_token is None)
+        )
+
+        refresh_token = refresh_token_cookie if using_cookie else body_refresh_token
+
+        if not refresh_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Refresh token is required",
+            )
+
+        # SECURITY: cookie-based refresh is a browser flow and always requires
+        # CSRF unless a valid bearer for the *same* user is present.
+        requires_csrf = (
+            using_cookie
+            and refresh_token_cookie is not None
+            and not bearer_matches_refresh
+        )
+        if requires_csrf:
+            if not csrf_header:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="CSRF token missing. Include X-CSRF-Token header.",
+                )
+            payload = auth_service.decode_token(refresh_token, expected_type="refresh")
+            if payload is None or payload.get("sub") is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired refresh token",
+                )
+            try:
+                refresh_user_id = int(payload["sub"])
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid or expired refresh token",
+                )
+            if not verify_csrf_token(csrf_header, refresh_user_id):
+                logger.warning(f"CSRF token verification failed for user {refresh_user_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Invalid CSRF token",
+                )
+
         # Refresh tokens (with rotation)
         tokens = await token_service.refresh_tokens(
             refresh_token=refresh_token,
@@ -292,8 +431,7 @@ async def refresh_tokens(
         )
 
         # Get user for response
-        from services.auth import decode_token
-        payload = decode_token(tokens.access_token, expected_type="access")
+        payload = auth_service.decode_token(tokens.access_token, expected_type="access")
         user_id = int(payload["sub"])
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
@@ -311,6 +449,17 @@ async def refresh_tokens(
             ip_address=ip_address,
             user_agent=user_agent,
         )
+
+        # Commit all changes (old token revocation, new token, audit log)
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception("Failed to commit refresh token rotation")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to refresh token",
+            )
 
         # Clear legacy cookie path to avoid duplicate refresh_token cookies (path=/api vs path=/)
         response.delete_cookie(key="refresh_token", path="/api")
@@ -338,9 +487,6 @@ async def refresh_tokens(
             path="/",
         )
 
-        # Commit all changes (old token revocation, new token, audit log)
-        await db.commit()
-
         return TokenPairResponse(
             access_token=tokens.access_token,
             refresh_token=tokens.refresh_token,
@@ -348,21 +494,39 @@ async def refresh_tokens(
             user=UserResponse.model_validate(user),
         )
 
-    except HTTPException:
+    except HTTPException as exc:
+        if exc.status_code in {status.HTTP_400_BAD_REQUEST, status.HTTP_401_UNAUTHORIZED}:
+            error_response = JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+            )
+            error_response.delete_cookie(key="refresh_token", path="/")
+            error_response.delete_cookie(key="refresh_token", path="/api")
+            error_response.delete_cookie(key="csrf_token", path="/")
+            return error_response
         raise
     except Exception as e:
-        # Log failed refresh attempt
-        await audit.log(
-            action=AuthAuditLog.ACTION_TOKEN_REFRESH,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            success=False,
-            error_message=str(e),
-        )
-        raise HTTPException(
+        # Log failed refresh attempt in a clean transaction
+        await db.rollback()
+        try:
+            await audit.log(
+                action=AuthAuditLog.ACTION_TOKEN_REFRESH,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                success=False,
+                error_message=str(e),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+        error_response = JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Failed to refresh token",
+            content={"detail": "Failed to refresh token"},
         )
+        error_response.delete_cookie(key="refresh_token", path="/")
+        error_response.delete_cookie(key="refresh_token", path="/api")
+        error_response.delete_cookie(key="csrf_token", path="/")
+        return error_response
 
 
 @router.post("/logout")
@@ -371,33 +535,175 @@ async def logout(
     response: Response,
     body: Optional[LogoutRequest] = None,
     refresh_token_cookie: Optional[str] = Cookie(None, alias="refresh_token"),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Logout current session.
 
-    Revokes the current refresh token and clears the cookie.
+    Revokes the current refresh token (if present) and clears cookies.
+    Access token is optional to allow logout even when access token is expired.
     """
     ip_address, user_agent = get_client_info(request)
     audit = AuditService(db)
     token_service = TokenService(db)
 
-    # Get refresh token from body or cookie
-    refresh_token = None
-    if body and body.refresh_token:
-        refresh_token = body.refresh_token
-    elif refresh_token_cookie:
-        refresh_token = refresh_token_cookie
+    # Get refresh token from cookie or body (prefer cookie when both present)
+    body_refresh_token = body.refresh_token if body else None
+    refresh_token = refresh_token_cookie or body_refresh_token
 
+    user_id: Optional[int] = current_user.id if current_user else None
+
+    refresh_token_user_id: Optional[int] = None
+    cookie_ignored = False
+    if refresh_token:
+        payload = auth_service.decode_token(refresh_token, expected_type="refresh")
+        if payload and payload.get("sub") is not None:
+            try:
+                refresh_token_user_id = int(payload["sub"])
+            except (TypeError, ValueError):
+                refresh_token_user_id = None
+        elif refresh_token_cookie and body_refresh_token:
+            # Cookie refresh token is invalid; allow body token path for authenticated users.
+            cookie_ignored = True
+            refresh_token = None
+    body_token_user_id: Optional[int] = None
+    if body_refresh_token:
+        payload = auth_service.decode_token(body_refresh_token, expected_type="refresh")
+        if payload and payload.get("sub") is not None:
+            try:
+                body_token_user_id = int(payload["sub"])
+            except (TypeError, ValueError):
+                body_token_user_id = None
+
+    # If cookie is present but CSRF is missing, allow body-token logout for API clients.
+    csrf_header = request.headers.get("X-CSRF-Token")
+    if current_user is None and refresh_token_cookie and body_refresh_token and not csrf_header:
+        cookie_ignored = True
+        refresh_token = body_refresh_token
+        refresh_token_user_id = body_token_user_id
+
+    # If cookie is present but already revoked/expired, allow body fallback.
+    if refresh_token_cookie and body_refresh_token and not cookie_ignored:
+        import hashlib
+        from models.refresh_token import RefreshToken
+
+        token_hash = hashlib.sha256(refresh_token_cookie.encode()).hexdigest()
+        result = await db.execute(
+            select(RefreshToken.id).where(
+                and_(
+                    RefreshToken.token_hash == token_hash,
+                    RefreshToken.is_revoked == False,
+                    RefreshToken.expires_at > datetime.now(timezone.utc),
+                )
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            cookie_ignored = True
+            refresh_token = None
+
+    requires_csrf = refresh_token_cookie is not None and current_user is None and not cookie_ignored
+
+    if requires_csrf and refresh_token_user_id is not None:
+        if not csrf_header:
+            if body_refresh_token:
+                cookie_ignored = True
+                refresh_token = body_refresh_token
+                refresh_token_user_id = body_token_user_id
+                requires_csrf = False
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="CSRF token missing. Include X-CSRF-Token header.",
+                )
+        else:
+            if not verify_csrf_token(csrf_header, refresh_token_user_id):
+                if body_refresh_token:
+                    cookie_ignored = True
+                    refresh_token = body_refresh_token
+                    refresh_token_user_id = body_token_user_id
+                    requires_csrf = False
+                else:
+                    logger.warning(
+                        f"CSRF token verification failed for user {refresh_token_user_id}"
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Invalid CSRF token",
+                    )
+
+    # If we don't have a user yet, try to derive from refresh token (if provided)
+    if user_id is None:
+        if not cookie_ignored and refresh_token_user_id is not None:
+            user_id = refresh_token_user_id
+        elif body_token_user_id is not None:
+            user_id = body_token_user_id
+
+    # If we DO have a user, ensure the provided refresh token (if any) belongs to the same user.
+    # Never allow a logout call to revoke another user's refresh token (even if passed in body).
+    if (
+        not cookie_ignored
+        and user_id is not None
+        and refresh_token_user_id is not None
+        and refresh_token_user_id != user_id
+    ):
+        logger.warning(
+            "Logout refresh token user mismatch",
+            extra={"access_user_id": user_id, "refresh_user_id": refresh_token_user_id},
+        )
+        cookie_ignored = True
+        refresh_token = None
+    if user_id is not None and body_token_user_id is not None and body_token_user_id != user_id:
+        logger.warning(
+            "Logout body refresh token user mismatch",
+            extra={"access_user_id": user_id, "refresh_user_id": body_token_user_id},
+        )
+        body_refresh_token = None
+
+    # Blacklist the current access token so logout is immediate server-side.
+    # This prevents "logged out but token still works" behavior.
+    try:
+        raw_access_token = _extract_bearer_token(request)
+        if raw_access_token:
+            payload = auth_service.decode_token(raw_access_token, expected_type="access")
+            if payload:
+                jti = payload.get("jti")
+                exp = payload.get("exp")
+                if user_id is None and payload.get("sub") is not None:
+                    try:
+                        user_id = int(payload["sub"])
+                    except (TypeError, ValueError):
+                        user_id = None
+                if jti and exp:
+                    expires_at = datetime.fromtimestamp(int(exp), tz=timezone.utc)
+                    await blacklist_token(
+                        db,
+                        jti=jti,
+                        user_id=user_id,
+                        token_type="access",
+                        expires_at=expires_at,
+                        reason="logout",
+                    )
+    except Exception:
+        logger.exception("Failed to blacklist access token during logout")
+
+    revoked = False
     if refresh_token:
         # Revoke the refresh token
-        await token_service.revoke_token(refresh_token, reason="logout")
+        revoked = await token_service.revoke_token(refresh_token, reason="logout")
+    # SECURITY: Do not revoke additional refresh tokens from the body when a cookie is present,
+    # and never revoke a token that was determined to belong to another user.
+    if not revoked and body_refresh_token and (refresh_token_cookie is None or cookie_ignored):
+        # When there is no authenticated user, and no cookie was provided, allow best-effort
+        # logout based on the body token (if it decoded to a user id).
+        revoked = await token_service.revoke_token(body_refresh_token, reason="logout")
+        if body_token_user_id is not None:
+            user_id = body_token_user_id
 
     # Log the logout
     await audit.log(
         action=AuthAuditLog.ACTION_LOGOUT,
-        user_id=current_user.id,
+        user_id=user_id,
         ip_address=ip_address,
         user_agent=user_agent,
     )
@@ -424,7 +730,9 @@ async def logout(
 async def logout_all(
     request: Request,
     response: Response,
-    current_user: User = Depends(get_current_user),
+    body: Optional[LogoutRequest] = None,
+    refresh_token_cookie: Optional[str] = Cookie(None, alias="refresh_token"),
+    current_user: Optional[User] = Depends(get_optional_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -436,13 +744,156 @@ async def logout_all(
     audit = AuditService(db)
     token_service = TokenService(db)
 
-    # Revoke all user's refresh tokens
-    count = await token_service.revoke_all_user_tokens(current_user.id, reason="logout_all")
+    # Prefer refresh token cookie over body (if provided)
+    refresh_token = None
+    body_refresh_token = body.refresh_token if body else None
+    cookie_invalid = False
+
+    user_id: Optional[int] = current_user.id if current_user else None
+
+    refresh_token_user_id: Optional[int] = None
+    if refresh_token_cookie:
+        refresh_token = refresh_token_cookie
+    elif body_refresh_token:
+        refresh_token = body_refresh_token
+
+    # If cookie is present but CSRF is missing, allow body-token logout-all for API clients.
+    csrf_header = request.headers.get("X-CSRF-Token")
+    if current_user is None and refresh_token_cookie and body_refresh_token and not csrf_header:
+        cookie_invalid = True
+        refresh_token = body_refresh_token
+
+    def _decode_refresh_user_id(token: Optional[str]) -> Optional[int]:
+        if not token:
+            return None
+        payload = auth_service.decode_token(token, expected_type="refresh")
+        if payload and payload.get("sub") is not None:
+            try:
+                return int(payload["sub"])
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    async def _lookup_valid_refresh_user_id(token: str) -> Optional[int]:
+        import hashlib
+        from models.refresh_token import RefreshToken
+
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        result = await db.execute(
+            select(RefreshToken.user_id).where(
+                and_(
+                    RefreshToken.token_hash == token_hash,
+                    RefreshToken.is_revoked == False,
+                    RefreshToken.expires_at > datetime.now(timezone.utc),
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
+    # If we don't have a user yet, only accept a refresh token that is still valid in DB.
+    if user_id is None and refresh_token:
+        refresh_token_user_id = _decode_refresh_user_id(refresh_token)
+        stored_user_id = await _lookup_valid_refresh_user_id(refresh_token)
+        if stored_user_id is None and refresh_token_cookie and body_refresh_token:
+            # Cookie is invalid/revoked; fall back to body token if present.
+            cookie_invalid = True
+            refresh_token = body_refresh_token
+            refresh_token_user_id = _decode_refresh_user_id(body_refresh_token)
+            stored_user_id = await _lookup_valid_refresh_user_id(body_refresh_token)
+        if stored_user_id is None:
+            error_response = JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "Not authenticated"},
+            )
+            error_response.delete_cookie(key="refresh_token", path="/")
+            error_response.delete_cookie(key="refresh_token", path="/api")
+            error_response.delete_cookie(key="csrf_token", path="/")
+            return error_response
+        if refresh_token_user_id is not None and refresh_token_user_id != stored_user_id:
+            logger.warning(
+                "Logout-all refresh token user mismatch",
+                extra={"refresh_user_id": refresh_token_user_id, "stored_user_id": stored_user_id},
+            )
+        user_id = stored_user_id
+
+    requires_csrf = refresh_token_cookie is not None and current_user is None and not cookie_invalid
+
+    if user_id is None:
+        error_response = JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "Not authenticated"},
+        )
+        error_response.delete_cookie(key="refresh_token", path="/")
+        error_response.delete_cookie(key="refresh_token", path="/api")
+        error_response.delete_cookie(key="csrf_token", path="/")
+        return error_response
+
+    if requires_csrf:
+        csrf_header = request.headers.get("X-CSRF-Token")
+        if not csrf_header:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF token missing. Include X-CSRF-Token header.",
+            )
+        if not verify_csrf_token(csrf_header, user_id):
+            if body_refresh_token:
+                cookie_invalid = True
+                refresh_token = body_refresh_token
+                refresh_token_user_id = _decode_refresh_user_id(body_refresh_token)
+                stored_user_id = await _lookup_valid_refresh_user_id(body_refresh_token)
+                if stored_user_id is None:
+                    error_response = JSONResponse(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        content={"detail": "Not authenticated"},
+                    )
+                    error_response.delete_cookie(key="refresh_token", path="/")
+                    error_response.delete_cookie(key="refresh_token", path="/api")
+                    error_response.delete_cookie(key="csrf_token", path="/")
+                    return error_response
+                user_id = stored_user_id
+                requires_csrf = False
+            else:
+                logger.warning(f"CSRF token verification failed for user {user_id}")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Invalid CSRF token",
+                )
+
+    # Blacklist the current access token so logout-all is immediate server-side.
+    try:
+        raw_access_token = _extract_bearer_token(request)
+        if raw_access_token:
+            payload = auth_service.decode_token(raw_access_token, expected_type="access")
+            if payload:
+                jti = payload.get("jti")
+                exp = payload.get("exp")
+                if user_id is None and payload.get("sub") is not None:
+                    try:
+                        user_id = int(payload["sub"])
+                    except (TypeError, ValueError):
+                        user_id = None
+                if jti and exp:
+                    expires_at = datetime.fromtimestamp(int(exp), tz=timezone.utc)
+                    await blacklist_token(
+                        db,
+                        jti=jti,
+                        user_id=user_id,
+                        token_type="access",
+                        expires_at=expires_at,
+                        reason="logout_all",
+                    )
+    except Exception:
+        logger.exception("Failed to blacklist access token during logout-all")
+
+    # Revoke all user's refresh tokens (if we know the user)
+    count = 0
+    if user_id is not None:
+        count = await token_service.revoke_all_user_tokens(user_id, reason="logout_all")
 
     # Log the logout
     await audit.log(
         action=AuthAuditLog.ACTION_LOGOUT_ALL,
-        user_id=current_user.id,
+        user_id=user_id,
         ip_address=ip_address,
         user_agent=user_agent,
         metadata={"sessions_revoked": count},
@@ -480,7 +931,7 @@ async def get_sessions(
     token_service = TokenService(db)
     sessions = await token_service.get_user_sessions(current_user.id)
 
-    # Determine current session by comparing token hashes
+    # Determine current session by comparing token hashes (if refresh cookie is present)
     current_token_hash = None
     if refresh_token_cookie:
         import hashlib
@@ -510,6 +961,7 @@ async def revoke_session(
     session_id: int,
     request: Request,
     current_user: User = Depends(get_current_user),
+    refresh_token_cookie: Optional[str] = Cookie(None, alias="refresh_token"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -520,6 +972,61 @@ async def revoke_session(
     ip_address, user_agent = get_client_info(request)
     audit = AuditService(db)
     token_service = TokenService(db)
+
+    # Prevent revoking the current session (use /logout instead).
+    if not refresh_token_cookie:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refresh token cookie required to revoke sessions",
+        )
+
+    current_token_hash = None
+    if refresh_token_cookie:
+        import hashlib
+        current_token_hash = hashlib.sha256(refresh_token_cookie.encode()).hexdigest()
+
+    from models.refresh_token import RefreshToken
+    current_session = None
+    if current_token_hash:
+        result = await db.execute(
+            select(RefreshToken).where(
+                and_(
+                    RefreshToken.user_id == current_user.id,
+                    RefreshToken.token_hash == current_token_hash,
+                    RefreshToken.is_revoked == False,
+                    RefreshToken.expires_at > datetime.now(timezone.utc),
+                )
+            )
+        )
+        current_session = result.scalar_one_or_none()
+    if current_session is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refresh token cookie required to revoke sessions",
+        )
+
+    result = await db.execute(
+        select(RefreshToken).where(
+            and_(
+                RefreshToken.id == session_id,
+                RefreshToken.user_id == current_user.id,
+                RefreshToken.is_revoked == False,
+            )
+        )
+    )
+    session = result.scalar_one_or_none()
+
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found or already revoked",
+        )
+
+    if current_session and session.id == current_session.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot revoke current session. Use /logout instead.",
+        )
 
     success = await token_service.revoke_session(
         user_id=current_user.id,

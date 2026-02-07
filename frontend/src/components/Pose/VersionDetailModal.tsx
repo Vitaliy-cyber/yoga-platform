@@ -12,6 +12,7 @@ import {
 import { Loader2, X, User, Calendar, FileText, Image as ImageIcon } from 'lucide-react';
 import type { PoseVersionDetail } from '../../types';
 import { useI18n } from '../../i18n';
+import { fadeIn, fadeSlideUpSmall, normalTransition } from '../../lib/animation-variants';
 
 interface VersionDetailModalProps {
   poseId: number;
@@ -86,9 +87,10 @@ export const VersionDetailModal: React.FC<VersionDetailModalProps> = ({
             {isLoading ? (
               <motion.div
                 key="loading"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                variants={fadeIn}
+                initial="initial"
+                animate="animate"
+                exit="exit"
                 className="flex items-center justify-center py-12"
               >
                 <Loader2 className="w-8 h-8 text-muted-foreground animate-spin" />
@@ -96,9 +98,10 @@ export const VersionDetailModal: React.FC<VersionDetailModalProps> = ({
             ) : error ? (
               <motion.div
                 key="error"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
+                variants={fadeSlideUpSmall}
+                initial="initial"
+                animate="animate"
+                exit="exit"
                 className="text-center py-12"
               >
                 <p className="text-red-600 mb-4">{error}</p>
@@ -109,10 +112,11 @@ export const VersionDetailModal: React.FC<VersionDetailModalProps> = ({
             ) : version ? (
               <motion.div
                 key="content"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
+                variants={fadeSlideUpSmall}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={normalTransition}
                 className="space-y-6 pb-4"
               >
               {/* Version header */}

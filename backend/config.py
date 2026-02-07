@@ -5,6 +5,7 @@ from enum import Enum
 from functools import lru_cache
 from typing import List, Optional
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -13,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 # Default insecure secret key - MUST be changed in production
 _DEFAULT_INSECURE_SECRET_KEY = "your-secret-key-here-change-in-production"
+_INSECURE_PRODUCTION_SECRETS = {
+    _DEFAULT_INSECURE_SECRET_KEY,
+    "change-me-in-production",
+    "dev-secret-key-change-in-production",
+    "dev-secret-key",
+    "changeme",
+    "secret",
+    "password",
+}
 
 
 class AppMode(str, Enum):
@@ -29,12 +39,37 @@ class Settings(BaseSettings):
     # SECURITY: Debug mode exposes sensitive information in error responses
     DEBUG: bool = False
 
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def _coerce_debug(cls, value):
+        """
+        Be tolerant of non-boolean DEBUG values.
+
+        In dev/test environments other tooling (e.g. Playwright/Node) commonly uses the
+        `DEBUG` env var for namespaced debug selectors like "pw:webserver". That should
+        not crash the backend at import-time.
+        """
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "t", "yes", "y", "on"}:
+                return True
+            if normalized in {"0", "false", "f", "no", "n", "off", ""}:
+                return False
+            # Unknown/non-boolean values are treated as False rather than raising.
+            return False
+        return False
+
     # Database (SQLite default for dev, use PostgreSQL in production)
     DATABASE_URL: str = "sqlite+aiosqlite:///./yoga_platform.db"
 
     # Server configuration
     HOST: str = "0.0.0.0"
     PORT: int = 8000
+    LOG_LEVEL: str = "INFO"
 
     # JWT Configuration
     # SECURITY: SECRET_KEY has no secure default - MUST be set via environment variable
@@ -73,6 +108,16 @@ class Settings(BaseSettings):
     # Redis URL for rate limiting persistence (optional, in-memory used if not set)
     # IMPORTANT: For production with multiple instances, set this to enable persistent rate limiting
     REDIS_URL: Optional[str] = None
+
+    # Runtime DB bootstrap (create_all + ad-hoc ALTERs).
+    # None means: enabled in dev, disabled in prod.
+    ENABLE_RUNTIME_SCHEMA_BOOTSTRAP: Optional[bool] = None
+
+    @property
+    def runtime_schema_bootstrap_enabled(self) -> bool:
+        if self.ENABLE_RUNTIME_SCHEMA_BOOTSTRAP is None:
+            return self.APP_MODE == AppMode.DEV
+        return bool(self.ENABLE_RUNTIME_SCHEMA_BOOTSTRAP)
 
     # Trusted proxy networks (comma-separated CIDR notation)
     # Example: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
@@ -143,7 +188,11 @@ class Settings(BaseSettings):
 
         if not origins:
             if self.APP_MODE == AppMode.PROD:
-                return ["*"]
+                logger.critical(
+                    "CORS_ALLOWED_ORIGINS is empty in production. "
+                    "Cross-origin requests are now denied by default."
+                )
+                return []
             return [
                 "http://localhost:3000",
                 "http://localhost:5173",
@@ -152,10 +201,6 @@ class Settings(BaseSettings):
             ]
 
         return origins
-
-    @property
-    def LOG_LEVEL(self) -> str:
-        return "INFO"
 
     class Config:
         env_file = None if "pytest" in sys.modules else ".env"
@@ -173,9 +218,13 @@ def _validate_settings(settings: Settings) -> Settings:
     # Check SECRET_KEY in production
     if settings.APP_MODE == AppMode.PROD:
         # CRITICAL: Fail fast if using default secret key in production
-        if settings.SECRET_KEY == _DEFAULT_INSECURE_SECRET_KEY:
+        normalized_secret = (settings.SECRET_KEY or "").strip()
+        if (
+            normalized_secret in _INSECURE_PRODUCTION_SECRETS
+            or normalized_secret.lower() in _INSECURE_PRODUCTION_SECRETS
+        ):
             error_msg = (
-                "CRITICAL SECURITY ERROR: Default SECRET_KEY is being used in production! "
+                "CRITICAL SECURITY ERROR: Insecure SECRET_KEY is being used in production! "
                 "This is a serious security vulnerability. "
                 "Set a strong, unique SECRET_KEY environment variable. "
                 "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
@@ -193,14 +242,14 @@ def _validate_settings(settings: Settings) -> Settings:
             logger.critical(error_msg)
             raise ValueError(error_msg)
 
-        # Warn if SECRET_KEY appears to be weak (less than 32 characters)
-        if len(settings.SECRET_KEY) < 32:
-            warnings.warn(
-                "SECRET_KEY appears to be weak (less than 32 characters). "
-                "Consider using a longer, more random key for production.",
-                SecurityWarning,
-                stacklevel=2,
+        # Fail fast on weak SECRET_KEY length in production.
+        if len(normalized_secret) < 32:
+            error_msg = (
+                "CRITICAL SECURITY ERROR: SECRET_KEY is too short for production "
+                "(must be at least 32 characters)."
             )
+            logger.critical(error_msg)
+            raise ValueError(error_msg)
 
         # Warn if TRUSTED_PROXIES is not configured but likely behind a proxy
         if not settings.TRUSTED_PROXIES:
@@ -216,6 +265,11 @@ def _validate_settings(settings: Settings) -> Settings:
                 "REDIS_URL not configured in production. "
                 "In-memory rate limiting is NOT process-safe with multiple workers. "
                 "Set REDIS_URL for reliable rate limiting across workers."
+            )
+        if settings.runtime_schema_bootstrap_enabled:
+            logger.warning(
+                "ENABLE_RUNTIME_SCHEMA_BOOTSTRAP is enabled in production. "
+                "Prefer Alembic migrations to avoid schema drift."
             )
 
     return settings

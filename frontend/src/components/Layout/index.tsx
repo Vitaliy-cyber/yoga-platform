@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Outlet, useLocation } from "react-router-dom";
+import { AnimatePresence } from "framer-motion";
 import { Sidebar } from "./Sidebar";
 import { MobileNav } from "./MobileNav";
 import { CompareBar } from "../Compare/CompareBar";
+import { GenerationFloatingWidget } from "../Generation/GenerationFloatingWidget";
 import { useSelectedPoseCount } from "../../store/useCompareStore";
 import { useCategories } from "../../hooks/useCategories";
 import { useI18n } from "../../i18n";
@@ -14,11 +16,20 @@ export const Layout: React.FC = () => {
 
   // Fetch categories once at the Layout level to prevent duplicate API calls
   // The categories are stored in useAppStore and shared by Sidebar and MobileNav
-  const { isLoading: categoriesLoading, error: categoriesError } = useCategories();
+  const {
+    isLoading: categoriesLoading,
+    error: categoriesError,
+    refetch: refetchCategories,
+  } = useCategories();
 
   // Don't show compare bar on the compare page itself
   const isComparePage = location.pathname === "/compare";
   const showCompareBar = selectedCount > 0 && !isComparePage;
+
+  // Scroll to top on route change
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [location.pathname]);
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -31,10 +42,18 @@ export const Layout: React.FC = () => {
       </a>
 
       {/* Desktop Sidebar - hidden on mobile via CSS */}
-      <Sidebar isLoading={categoriesLoading} error={categoriesError} />
+      <Sidebar
+        isLoading={categoriesLoading}
+        error={categoriesError}
+        onRetry={refetchCategories}
+      />
 
       {/* Mobile Navigation - hidden on desktop via CSS */}
-      <MobileNav isLoading={categoriesLoading} error={categoriesError} />
+      <MobileNav
+        isLoading={categoriesLoading}
+        error={categoriesError}
+        onRetry={refetchCategories}
+      />
 
       {/* Main Content Area */}
       <main id="main-content" className="flex-1 min-w-0" tabIndex={-1}>
@@ -46,7 +65,10 @@ export const Layout: React.FC = () => {
       </main>
 
       {/* Compare Bar - fixed at bottom when poses are selected */}
-      {showCompareBar && <CompareBar />}
+      <AnimatePresence initial={false}>
+        {showCompareBar && <CompareBar />}
+      </AnimatePresence>
+      <GenerationFloatingWidget />
     </div>
   );
 };

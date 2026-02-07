@@ -1,5 +1,6 @@
 from typing import List, Optional
 
+from config import AppMode, get_settings
 from db.database import get_db
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.muscle import Muscle
@@ -10,6 +11,18 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/muscles", tags=["muscles"])
+settings = get_settings()
+
+
+def _require_muscles_write_allowed() -> None:
+    """
+    Protect global muscles dictionary from accidental/unauthorized mutation in production.
+    """
+    if settings.APP_MODE == AppMode.PROD:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Muscle dictionary mutations are disabled in production",
+        )
 
 
 @router.get("", response_model=List[MuscleResponse])
@@ -59,6 +72,8 @@ async def create_muscle(
     db: AsyncSession = Depends(get_db),
 ):
     """Створити новий м'яз"""
+    _require_muscles_write_allowed()
+
     # Перевірка на унікальність назви (case-insensitive)
     existing = await db.execute(
         select(Muscle).where(func.lower(Muscle.name) == func.lower(muscle_data.name))
@@ -85,6 +100,8 @@ async def delete_muscle(
     db: AsyncSession = Depends(get_db),
 ):
     """Видалити м'яз"""
+    _require_muscles_write_allowed()
+
     query = select(Muscle).where(Muscle.id == muscle_id)
     result = await db.execute(query)
     muscle = result.scalar_one_or_none()
@@ -104,6 +121,8 @@ async def seed_muscles(
     db: AsyncSession = Depends(get_db),
 ):
     """Заповнити базу даних стандартними м'язами"""
+    _require_muscles_write_allowed()
+
     default_muscles = [
         {"name": "erector_spinae", "name_ua": "Прямий м'яз спини", "body_part": "back"},
         {

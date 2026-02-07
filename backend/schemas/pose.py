@@ -4,6 +4,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from .muscle import PoseMuscleResponse
+from .validators import ensure_utf8_encodable
 
 
 class PoseMuscleCreate(BaseModel):
@@ -33,7 +34,7 @@ class PoseBase(BaseModel):
             normalized = value.strip()
             if not normalized:
                 raise ValueError("Code cannot be blank")
-            return normalized
+            return ensure_utf8_encodable(normalized)
         return value
 
     @field_validator("name", mode="before")
@@ -43,7 +44,7 @@ class PoseBase(BaseModel):
             normalized = value.strip()
             if not normalized:
                 raise ValueError("Name cannot be blank")
-            return normalized
+            return ensure_utf8_encodable(normalized)
         return value
 
     @field_validator("name_en", "description", "effect", "breathing", mode="before")
@@ -53,7 +54,9 @@ class PoseBase(BaseModel):
             return None
         if isinstance(value, str):
             normalized = value.strip()
-            return normalized or None
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
         return value
 
 
@@ -89,7 +92,7 @@ class PoseUpdate(BaseModel):
             normalized = value.strip()
             if not normalized:
                 raise ValueError("Field cannot be blank")
-            return normalized
+            return ensure_utf8_encodable(normalized)
         return value
 
     @field_validator("name_en", "description", "effect", "breathing", mode="before")
@@ -99,7 +102,21 @@ class PoseUpdate(BaseModel):
             return None
         if isinstance(value, str):
             normalized = value.strip()
-            return normalized or None
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
+        return value
+
+    @field_validator("change_note", mode="before")
+    @classmethod
+    def normalize_change_note(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
         return value
 
 

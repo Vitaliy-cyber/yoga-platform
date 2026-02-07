@@ -30,25 +30,39 @@ export const CategoryEditModal: React.FC<CategoryEditModalProps> = ({
   onOpenChange,
   onSuccess,
 }) => {
+  const DIALOG_EXIT_DURATION_MS = 220;
   const { t } = useI18n();
   const { addToast, invalidateCategories } = useAppStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cachedCategory, setCachedCategory] = useState<Category | null>(category);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const activeCategory = category ?? cachedCategory;
 
-  // Reset form when category changes
+  // Keep last category mounted while dialog closing so exit animation can finish.
   useEffect(() => {
     if (category) {
+      setCachedCategory(category);
       setName(category.name);
       setDescription(category.description || "");
     }
   }, [category]);
 
+  useEffect(() => {
+    if (open || category) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setCachedCategory(null);
+    }, DIALOG_EXIT_DURATION_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [open, category, DIALOG_EXIT_DURATION_MS]);
+
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!category) return;
+    if (!activeCategory) return;
 
     if (!name.trim()) {
       setError(t("category.error_name_required"));
@@ -59,7 +73,7 @@ export const CategoryEditModal: React.FC<CategoryEditModalProps> = ({
     setError(null);
 
     try {
-      await categoriesApi.update(category.id, {
+      await categoriesApi.update(activeCategory.id, {
         name: name.trim(),
         description: description.trim() || undefined,
       });
@@ -82,7 +96,7 @@ export const CategoryEditModal: React.FC<CategoryEditModalProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [category, name, description, t, addToast, invalidateCategories, onOpenChange, onSuccess]);
+  }, [activeCategory, name, description, t, addToast, invalidateCategories, onOpenChange, onSuccess]);
 
   const handleClose = useCallback(() => {
     if (!isSubmitting) {
@@ -91,10 +105,10 @@ export const CategoryEditModal: React.FC<CategoryEditModalProps> = ({
     }
   }, [isSubmitting, onOpenChange]);
 
-  if (!category) return null;
+  if (!activeCategory) return null;
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && handleClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

@@ -4,6 +4,7 @@ import { Download, FileJson, FileSpreadsheet, FileText, Archive, ChevronDown, Lo
 import { Button } from '../ui/button';
 import { exportApi, downloadBlob } from '../../services/api';
 import { useI18n } from '../../i18n';
+import { dropdownVariants, fastTransition } from '../../lib/animation-variants';
 
 interface ExportMenuProps {
   /** Optional category ID to filter export */
@@ -134,6 +135,7 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
         onClick={() => setIsOpen(!isOpen)}
         disabled={isExporting}
         className="gap-2"
+        data-testid="export-menu-toggle"
       >
         {isExporting ? (
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -157,10 +159,11 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
 
             {/* Dropdown menu */}
             <motion.div
-              initial={{ opacity: 0, y: -8, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.95 }}
-              transition={{ duration: 0.15 }}
+              variants={dropdownVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={fastTransition}
               className="absolute right-0 top-full mt-2 z-50 w-72 rounded-xl border bg-card shadow-lg"
             >
               <div className="p-2">
@@ -177,6 +180,7 @@ export const ExportMenu: React.FC<ExportMenuProps> = ({
                       key={option.type}
                       onClick={() => handleExport(option.type)}
                       disabled={isExporting}
+                      data-testid={`export-option-${option.type}`}
                       className="w-full flex items-start gap-3 px-3 py-2 rounded-lg hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed text-left transition-colors"
                     >
                       <div className="flex-shrink-0 mt-0.5">

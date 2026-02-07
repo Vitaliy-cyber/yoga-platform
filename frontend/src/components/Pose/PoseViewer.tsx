@@ -13,6 +13,7 @@ import { cn } from "../../lib/utils";
 import { logger } from "../../lib/logger";
 import { DEFAULT_OVERLAY_OPACITY } from "../../lib/constants";
 import { usePoseImageSrc } from "../../hooks/usePoseImageSrc";
+import { fadeScale, smoothTransition } from "../../lib/animation-variants";
 
 interface PoseViewerProps {
   pose: Pose;
@@ -37,13 +38,13 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
     pose.photo_path,
     pose.id,
     "photo",
-    { enabled: Boolean(pose.photo_path) }
+    { enabled: Boolean(pose.photo_path), version: pose.version }
   );
   const { src: muscleSrc, refresh: refreshMuscle } = usePoseImageSrc(
     pose.muscle_layer_path,
     pose.id,
     "muscle_layer",
-    { enabled: activeOverlay === "muscles" && Boolean(pose.muscle_layer_path) }
+    { enabled: activeOverlay === "muscles" && Boolean(pose.muscle_layer_path), version: pose.version }
   );
 
   const hasOverlay = (type: string) => {
@@ -150,17 +151,18 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
           <div className="flex-1 flex flex-col sm:flex-row overflow-hidden min-h-0">
             {/* Image viewer */}
             <div className="flex-1 relative flex items-center justify-center p-4 sm:p-8 bg-stone-900 min-h-[40vh] sm:min-h-0 overflow-hidden">
-              <div className="relative max-w-full max-h-full">
+              <div className="relative max-w-full max-h-full overflow-hidden rounded-lg isolate">
                 <AnimatePresence mode="wait">
                   <motion.img
                     key={activeOverlay === "photo" ? "photo" : "base"}
                     src={photoSrc || undefined}
                     alt={pose.name}
-                    className="max-w-full max-h-full object-contain rounded-lg view-transition-image"
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 1.02 }}
-                    transition={{ duration: 0.3 }}
+                    className="block max-w-full max-h-full object-contain"
+                    variants={fadeScale}
+                    initial="initial"
+                    animate="animate"
+                    exit="exit"
+                    transition={smoothTransition}
                     onError={() => void refreshPhoto(true)}
                   />
                 </AnimatePresence>
@@ -171,11 +173,8 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                       key={activeOverlay}
                       src={muscleSrc || undefined}
                       alt={`${pose.name} - ${overlayLabel}`}
-                      className="absolute inset-0 w-full h-full object-contain rounded-lg"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: overlayOpacity }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.3 }}
+                      className="absolute inset-0 m-auto max-w-full max-h-full object-contain pointer-events-none transition-opacity duration-200 ease-out will-change-[opacity]"
+                      style={{ opacity: overlayOpacity, transform: "translateZ(0)" }}
                       onError={() => void refreshMuscle(true)}
                     />
                   )}
@@ -201,7 +200,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                         onClick={() => available && setActiveOverlay(overlay.id as "photo" | "muscles")}
                         disabled={!available}
                         className={cn(
-                          "flex-1 sm:flex-initial w-full flex items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 sm:px-4 py-3 rounded-xl transition-all min-h-[48px] touch-manipulation active:scale-[0.98]",
+                          "flex-1 sm:flex-initial w-full flex items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 sm:px-4 py-3 rounded-xl transition-colors min-h-[48px] touch-manipulation active:scale-[0.98]",
                           activeOverlay === overlay.id
                             ? "bg-white text-stone-900"
                             : available
@@ -222,7 +221,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                 </div>
               </div>
 
-              {activeOverlay !== "photo" && hasOverlay(activeOverlay) && (
+              {activeOverlay === "muscles" && hasOverlay("muscles") && (
                 <div className="mb-6 sm:mb-8">
                   <label className="text-sm font-medium text-stone-300 block mb-3">
                     {t("pose.viewer.opacity", { value: Math.round(overlayOpacity * 100) })}

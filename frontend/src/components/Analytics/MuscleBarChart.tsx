@@ -170,7 +170,7 @@ const ChartSection: React.FC<ChartSectionProps> = ({
                   fill={entry.color}
                   opacity={hoveredIndex === null || hoveredIndex === index ? 1 : 0.5}
                   style={{
-                    transition: 'all 0.2s ease',
+                    transition: 'opacity 0.2s ease',
                     cursor: 'pointer',
                   }}
                 />
@@ -189,7 +189,7 @@ const ChartSection: React.FC<ChartSectionProps> = ({
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: index * 0.05 }}
             className={cn(
-              'flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-all',
+              'flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors',
               hoveredIndex === index ? 'bg-muted' : 'hover:bg-accent'
             )}
             onMouseEnter={() => setHoveredIndex(index)}

@@ -105,6 +105,28 @@ def compute_muscle_comparison(
     return muscle_comparison, sorted(common_muscle_names), unique_muscles
 
 
+def _dedupe_pose_ids(ids: List[int], *, user_id: int, log_label: str) -> List[int]:
+    """Remove duplicate pose IDs while preserving order (avoids redundant work)."""
+    seen: set[int] = set()
+    unique_ids: List[int] = []
+    duplicate_ids: List[int] = []
+    for pid in ids:
+        if pid not in seen:
+            seen.add(pid)
+            unique_ids.append(pid)
+        else:
+            duplicate_ids.append(pid)
+
+    if duplicate_ids:
+        logger.warning(
+            "Duplicate pose IDs removed from %s request: %s (user_id=%s)",
+            log_label,
+            duplicate_ids,
+            user_id,
+        )
+    return unique_ids
+
+
 @router.get("/poses", response_model=ComparisonResult)
 async def compare_poses(
     ids: str = Query(
@@ -133,25 +155,7 @@ async def compare_poses(
             detail="Invalid pose IDs. Please provide comma-separated integers.",
         )
 
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_ids = []
-    duplicate_ids = []
-    for pid in pose_ids:
-        if pid not in seen:
-            seen.add(pid)
-            unique_ids.append(pid)
-        else:
-            duplicate_ids.append(pid)
-
-    if duplicate_ids:
-        logger.warning(
-            "Duplicate pose IDs removed from comparison request: %s (user_id=%s)",
-            duplicate_ids,
-            current_user.id,
-        )
-
-    pose_ids = unique_ids
+    pose_ids = _dedupe_pose_ids(pose_ids, user_id=current_user.id, log_label="comparison")
 
     if len(pose_ids) < MIN_POSES_FOR_COMPARISON:
         raise HTTPException(
@@ -165,42 +169,25 @@ async def compare_poses(
             detail=f"Maximum {MAX_POSES_FOR_COMPARISON} poses can be compared at once.",
         )
 
-    # First, check which poses exist (without user filter) to detect authorization issues
-    existence_query = select(Pose.id, Pose.user_id).where(Pose.id.in_(pose_ids))
-    existence_result = await db.execute(existence_query)
-    existing_poses = {row.id: row.user_id for row in existence_result}
-
-    # Check for missing and forbidden poses
-    missing_ids = set(pose_ids) - set(existing_poses.keys())
-    forbidden_ids = [
-        pid for pid, uid in existing_poses.items() if uid != current_user.id
-    ]
-
-    if forbidden_ids:
-        # Pose exists but belongs to another user - return 403 to prevent enumeration
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access one or more of the requested poses.",
-        )
-
-    if missing_ids:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Poses not found: {', '.join(map(str, missing_ids))}",
-        )
-
-    # Now fetch poses with all related data (we know they all belong to current user)
+    # SECURITY: Avoid differentiating between "missing" and "belongs to another user".
+    # Treat both as 404 to prevent ID enumeration.
     query = (
         select(Pose)
         .options(
             selectinload(Pose.category),
             selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
         )
-        .where(Pose.id.in_(pose_ids))
+        .where(and_(Pose.user_id == current_user.id, Pose.id.in_(pose_ids)))
     )
 
     result = await db.execute(query)
     poses = result.scalars().all()
+
+    if len(poses) != len(pose_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more poses not found",
+        )
 
     # Build comparison items (preserve requested order)
     pose_map = {p.id: p for p in poses}
@@ -244,25 +231,7 @@ async def compare_muscles(
             detail="Invalid pose IDs. Please provide comma-separated integers.",
         )
 
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_ids = []
-    duplicate_ids = []
-    for pid in ids:
-        if pid not in seen:
-            seen.add(pid)
-            unique_ids.append(pid)
-        else:
-            duplicate_ids.append(pid)
-
-    if duplicate_ids:
-        logger.warning(
-            "Duplicate pose IDs removed from muscle comparison request: %s (user_id=%s)",
-            duplicate_ids,
-            current_user.id,
-        )
-
-    ids = unique_ids
+    ids = _dedupe_pose_ids(ids, user_id=current_user.id, log_label="muscle comparison")
 
     if len(ids) < MIN_POSES_FOR_COMPARISON:
         raise HTTPException(
@@ -276,39 +245,28 @@ async def compare_muscles(
             detail=f"Maximum {MAX_POSES_FOR_COMPARISON} poses can be compared at once.",
         )
 
-    # First, check which poses exist (without user filter) to detect authorization issues
-    existence_query = select(Pose.id, Pose.user_id).where(Pose.id.in_(ids))
-    existence_result = await db.execute(existence_query)
-    existing_poses = {row.id: row.user_id for row in existence_result}
-
-    # Check for missing and forbidden poses
-    missing_ids = set(ids) - set(existing_poses.keys())
-    forbidden_ids = [
-        pid for pid, uid in existing_poses.items() if uid != current_user.id
-    ]
-
-    if forbidden_ids:
-        # Pose exists but belongs to another user - return 403 to prevent enumeration
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access one or more of the requested poses.",
-        )
-
-    if missing_ids:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Poses not found: {', '.join(map(str, missing_ids))}",
-        )
-
-    # Now fetch poses with muscle data (we know they all belong to current user)
+    # SECURITY: Avoid differentiating between "missing" and "belongs to another user".
+    # Treat both as 404 to prevent ID enumeration.
     query = (
         select(Pose)
-        .options(selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle))
-        .where(Pose.id.in_(ids))
+        # IMPORTANT: build_pose_comparison_item() reads `pose.category` as well.
+        # Without eager loading, async SQLAlchemy may attempt a lazy load and crash
+        # with MissingGreenlet under concurrency.
+        .options(
+            selectinload(Pose.category),
+            selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
+        )
+        .where(and_(Pose.user_id == current_user.id, Pose.id.in_(ids)))
     )
 
     result = await db.execute(query)
     poses = result.scalars().all()
+
+    if len(poses) != len(ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more poses not found",
+        )
 
     # Build comparison items
     pose_items = [build_pose_comparison_item(p) for p in poses]

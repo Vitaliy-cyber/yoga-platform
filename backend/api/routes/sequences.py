@@ -1,10 +1,11 @@
 """API routes for yoga pose sequences/complexes."""
 
-from typing import List
+from datetime import datetime
+from typing import List, Literal
 
 from db.database import get_db
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from models.pose import Pose
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from models.pose import Pose, PoseMuscle
 from models.sequence import Sequence, SequencePose
 from models.user import User
 from schemas.sequence import (
@@ -18,10 +19,13 @@ from schemas.sequence import (
     SequenceResponse,
     SequenceUpdate,
 )
+from services.pdf_generator import PosePDFGenerator
 from services.auth import get_current_user
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import IntegrityError, InvalidRequestError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 
 router = APIRouter(prefix="/sequences", tags=["sequences"])
 
@@ -43,16 +47,23 @@ def build_sequence_pose_response(sp: SequencePose) -> SequencePoseResponse:
 
 def build_sequence_response(sequence: Sequence) -> SequenceResponse:
     """Build full response for a sequence with all poses."""
-    poses = [build_sequence_pose_response(sp) for sp in sequence.sequence_poses]
+    # Always return poses in deterministic order by order_index.
+    # SQLAlchemy relationship collections can keep stale in-memory ordering
+    # across flush/commit cycles, so we sort explicitly at response time.
+    ordered_sequence_poses = sorted(
+        sequence.sequence_poses,
+        key=lambda sp: (sp.order_index if sp.order_index is not None else 0, sp.id),
+    )
+    poses = [build_sequence_pose_response(sp) for sp in ordered_sequence_poses]
 
     # Calculate total duration - always return a number (0 for empty sequences)
     # Handle None values in duration_seconds to prevent TypeError when summing
-    total_duration = sum(
-        (sp.duration_seconds or 0) for sp in sequence.sequence_poses
-    )
+    total_duration = sum((sp.duration_seconds or 0) for sp in ordered_sequence_poses)
 
     # Use calculated total if we have poses, otherwise use stored duration or default to 0
-    final_duration = total_duration if total_duration > 0 else (sequence.duration_seconds or 0)
+    final_duration = (
+        total_duration if total_duration > 0 else (sequence.duration_seconds or 0)
+    )
 
     return SequenceResponse(
         id=sequence.id,
@@ -67,7 +78,9 @@ def build_sequence_response(sequence: Sequence) -> SequenceResponse:
     )
 
 
-def build_sequence_list_response(sequence: Sequence, pose_count: int, total_duration: int) -> SequenceListResponse:
+def build_sequence_list_response(
+    sequence: Sequence, pose_count: int, total_duration: int
+) -> SequenceListResponse:
     """Build list response for a sequence."""
     return SequenceListResponse(
         id=sequence.id,
@@ -79,6 +92,16 @@ def build_sequence_list_response(sequence: Sequence, pose_count: int, total_dura
         created_at=sequence.created_at,
         updated_at=sequence.updated_at,
     )
+
+
+def _sanitize_pdf_filename(name: str) -> str:
+    """Sanitize a string for use in PDF filenames."""
+    safe_chars = set(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_ "
+    )
+    sanitized = "".join(c if c in safe_chars else "_" for c in (name or "sequence"))
+    sanitized = sanitized.strip("_ ") or "sequence"
+    return sanitized[:100]
 
 
 @router.get("", response_model=PaginatedSequenceResponse)
@@ -101,7 +124,9 @@ async def get_sequences(
         select(
             Sequence,
             func.count(SequencePose.id).label("pose_count"),
-            func.coalesce(func.sum(SequencePose.duration_seconds), 0).label("total_duration")
+            func.coalesce(func.sum(SequencePose.duration_seconds), 0).label(
+                "total_duration"
+            ),
         )
         .outerjoin(SequencePose, Sequence.id == SequencePose.sequence_id)
         .where(Sequence.user_id == current_user.id)
@@ -114,10 +139,7 @@ async def get_sequences(
     result = await db.execute(query)
     rows = result.all()
 
-    items = [
-        build_sequence_list_response(row[0], row[1], row[2])
-        for row in rows
-    ]
+    items = [build_sequence_list_response(row[0], row[1], row[2]) for row in rows]
 
     return PaginatedSequenceResponse(
         items=items,
@@ -146,31 +168,35 @@ async def create_sequence(
 
     # Add poses if provided
     if sequence_data.poses:
-        for pose_data in sequence_data.poses:
-            # Verify pose belongs to user
-            pose_result = await db.execute(
-                select(Pose).where(
-                    and_(
-                        Pose.id == pose_data.pose_id,
-                        Pose.user_id == current_user.id,
-                    )
+        requested_pose_ids = {pose_data.pose_id for pose_data in sequence_data.poses}
+        pose_result = await db.execute(
+            select(Pose.id).where(
+                and_(
+                    Pose.user_id == current_user.id,
+                    Pose.id.in_(requested_pose_ids),
                 )
             )
-            pose = pose_result.scalar_one_or_none()
-            if not pose:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Pose with id {pose_data.pose_id} not found",
-                )
+        )
+        found_pose_ids = set(pose_result.scalars().all())
+        missing_pose_ids = sorted(requested_pose_ids - found_pose_ids)
+        if missing_pose_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Pose with id {missing_pose_ids[0]} not found",
+            )
 
-            sequence_pose = SequencePose(
-                sequence_id=sequence.id,
-                pose_id=pose_data.pose_id,
-                order_index=pose_data.order_index,
-                duration_seconds=pose_data.duration_seconds,
-                transition_note=pose_data.transition_note,
-            )
-            db.add(sequence_pose)
+        db.add_all(
+            [
+                SequencePose(
+                    sequence_id=sequence.id,
+                    pose_id=pose_data.pose_id,
+                    order_index=pose_data.order_index,
+                    duration_seconds=pose_data.duration_seconds,
+                    transition_note=pose_data.transition_note,
+                )
+                for pose_data in sequence_data.poses
+            ]
+        )
 
     await db.flush()
     await db.commit()
@@ -178,9 +204,7 @@ async def create_sequence(
     # Reload with relationships
     query = (
         select(Sequence)
-        .options(
-            selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose)
-        )
+        .options(selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose))
         .where(Sequence.id == sequence.id)
     )
     result = await db.execute(query)
@@ -198,9 +222,7 @@ async def get_sequence(
     """Get a sequence by ID with all poses."""
     query = (
         select(Sequence)
-        .options(
-            selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose)
-        )
+        .options(selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose))
         .where(
             and_(
                 Sequence.id == sequence_id,
@@ -219,6 +241,93 @@ async def get_sequence(
         )
 
     return build_sequence_response(sequence)
+
+
+@router.get("/{sequence_id}/pdf")
+async def export_sequence_pdf(
+    sequence_id: int,
+    page_size: Literal["A4", "Letter"] = Query(
+        "A4", description="Page size (A4 or Letter)"
+    ),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export all poses from a sequence as a single PDF (ordered by sequence)."""
+    query = (
+        select(Sequence)
+        .options(
+            selectinload(Sequence.sequence_poses)
+            .selectinload(SequencePose.pose)
+            .selectinload(Pose.category),
+            selectinload(Sequence.sequence_poses)
+            .selectinload(SequencePose.pose)
+            .selectinload(Pose.pose_muscles)
+            .selectinload(PoseMuscle.muscle),
+        )
+        .where(
+            and_(
+                Sequence.id == sequence_id,
+                Sequence.user_id == current_user.id,
+            )
+        )
+    )
+    result = await db.execute(query)
+    sequence = result.scalar_one_or_none()
+    if not sequence:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sequence not found",
+        )
+
+    ordered_poses = sorted(sequence.sequence_poses, key=lambda sp: sp.order_index)
+    if not ordered_poses:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No poses found in sequence to export",
+        )
+
+    poses_data = []
+    for sp in ordered_poses:
+        pose = sp.pose
+        poses_data.append(
+            {
+                "code": pose.code,
+                "name": pose.name,
+                "name_en": pose.name_en,
+                "category_name": pose.category.name if pose.category else None,
+                "description": pose.description,
+                "duration_seconds": sp.duration_seconds,
+                "photo_path": pose.photo_path,
+                "schema_path": pose.schema_path,
+                "muscle_layer_path": pose.muscle_layer_path,
+                "muscles": [
+                    {
+                        "muscle_name": pm.muscle.name,
+                        "activation_level": pm.activation_level,
+                    }
+                    for pm in pose.pose_muscles
+                ],
+            }
+        )
+
+    generator = PosePDFGenerator(page_size=page_size)
+    pdf_bytes = await generator.generate_multiple_poses_pdf(
+        poses_data,
+        title=f"Послідовність: {sequence.name}",
+    )
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = _sanitize_pdf_filename(sequence.name)
+    filename = f"sequence_{safe_name}_{timestamp}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Total-Items": str(len(ordered_poses)),
+        },
+    )
 
 
 @router.put("/{sequence_id}", response_model=SequenceResponse)
@@ -256,9 +365,7 @@ async def update_sequence(
     # Reload with relationships
     query = (
         select(Sequence)
-        .options(
-            selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose)
-        )
+        .options(selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose))
         .where(Sequence.id == sequence_id)
     )
     result = await db.execute(query)
@@ -336,8 +443,9 @@ async def add_pose_to_sequence(
 
     # Get max order_index to validate and potentially auto-assign
     max_order_result = await db.execute(
-        select(func.max(SequencePose.order_index))
-        .where(SequencePose.sequence_id == sequence_id)
+        select(func.max(SequencePose.order_index)).where(
+            SequencePose.sequence_id == sequence_id
+        )
     )
     max_order = max_order_result.scalar()
     max_order = max_order if max_order is not None else -1
@@ -384,10 +492,19 @@ async def add_pose_to_sequence(
             )
             db.add(sequence_pose)
             await db.flush()
-    except Exception as e:
+    except (IntegrityError, OperationalError, StaleDataError, ObjectDeletedError):
+        await db.rollback()
+        # Likely a concurrent insert/reorder caused a constraint violation or stale write
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while adding pose to sequence. Please retry.",
+        )
+    except Exception:
+        await db.rollback()
+        # Avoid leaking internal details to clients
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add pose to sequence: {str(e)}",
+            detail="Failed to add pose to sequence",
         )
 
     await db.commit()
@@ -395,9 +512,7 @@ async def add_pose_to_sequence(
     # Reload with relationships
     query = (
         select(Sequence)
-        .options(
-            selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose)
-        )
+        .options(selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose))
         .where(Sequence.id == sequence_id)
     )
     result = await db.execute(query)
@@ -472,17 +587,47 @@ async def reorder_sequence_poses(
     # This ensures all order index updates succeed together or fail together
     try:
         async with db.begin_nested():
-            # Update order indices atomically
+            # Avoid UNIQUE(sequence_id, order_index) collisions during swaps.
+            # Two-phase update:
+            # 1) Move all rows to a unique temporary index range above current max.
+            # 2) Move all rows to their final indices.
+            current_max = max(
+                (
+                    sp.order_index if sp.order_index is not None else -1
+                    for sp in sequence.sequence_poses
+                ),
+                default=-1,
+            )
+            temp_base = current_max + 1
+
+            for new_index, sp_id in enumerate(reorder_data.pose_ids):
+                sp_map[sp_id].order_index = temp_base + new_index
+
+            await db.flush()
+
             for new_index, sp_id in enumerate(reorder_data.pose_ids):
                 sp_map[sp_id].order_index = new_index
 
             await db.flush()
-    except Exception as e:
+    except (
+        IntegrityError,
+        OperationalError,
+        StaleDataError,
+        ObjectDeletedError,
+        InvalidRequestError,
+    ):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while reordering sequence poses. Please retry.",
+        )
+    except Exception:
+        await db.rollback()
         # Nested transaction automatically rolls back on exception
         # Re-raise with user-friendly message
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reorder poses: {str(e)}",
+            detail="Failed to reorder poses",
         )
 
     await db.commit()
@@ -490,9 +635,7 @@ async def reorder_sequence_poses(
     # Reload with relationships
     query = (
         select(Sequence)
-        .options(
-            selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose)
-        )
+        .options(selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose))
         .where(Sequence.id == sequence_id)
     )
     result = await db.execute(query)
@@ -501,7 +644,9 @@ async def reorder_sequence_poses(
     return build_sequence_response(sequence)
 
 
-@router.delete("/{sequence_id}/poses/{sequence_pose_id}", response_model=SequenceResponse)
+@router.delete(
+    "/{sequence_id}/poses/{sequence_pose_id}", response_model=SequenceResponse
+)
 async def remove_pose_from_sequence(
     sequence_id: int,
     sequence_pose_id: int,
@@ -562,10 +707,23 @@ async def remove_pose_from_sequence(
                 sp.order_index = new_index
 
             await db.flush()
-    except Exception as e:
+    except (
+        IntegrityError,
+        OperationalError,
+        StaleDataError,
+        ObjectDeletedError,
+        InvalidRequestError,
+    ):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while removing pose from sequence. Please retry.",
+        )
+    except Exception:
+        await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove pose from sequence: {str(e)}",
+            detail="Failed to remove pose from sequence",
         )
 
     await db.commit()
@@ -573,9 +731,7 @@ async def remove_pose_from_sequence(
     # Reload with relationships
     query = (
         select(Sequence)
-        .options(
-            selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose)
-        )
+        .options(selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose))
         .where(Sequence.id == sequence_id)
     )
     result = await db.execute(query)
@@ -632,15 +788,26 @@ async def update_sequence_pose(
     if pose_update.transition_note is not None:
         sequence_pose.transition_note = pose_update.transition_note
 
-    await db.flush()
-    await db.commit()
+    try:
+        await db.flush()
+        await db.commit()
+    except (StaleDataError, ObjectDeletedError):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pose not found in this sequence",
+        )
+    except (IntegrityError, OperationalError, InvalidRequestError):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while updating sequence pose. Please retry.",
+        )
 
     # Reload with relationships
     query = (
         select(Sequence)
-        .options(
-            selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose)
-        )
+        .options(selectinload(Sequence.sequence_poses).selectinload(SequencePose.pose))
         .where(Sequence.id == sequence_id)
     )
     result = await db.execute(query)

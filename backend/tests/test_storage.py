@@ -3,7 +3,7 @@ Tests for S3 Storage Service.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from io import BytesIO
 
 
@@ -236,38 +236,37 @@ class TestS3StorageUpload:
         """Test upload with different content types."""
         with patch("services.storage.get_settings") as mock_settings:
             with patch("services.storage.boto3") as mock_boto3:
-                with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
-                    settings = MagicMock()
-                    settings.STORAGE_BACKEND = "s3"
-                    settings.S3_BUCKET = "test-bucket"
-                    settings.S3_REGION = "us-east-1"
-                    settings.S3_PREFIX = ""
-                    settings.S3_ACCESS_KEY_ID = "key"
-                    settings.S3_SECRET_ACCESS_KEY = "secret"
-                    mock_settings.return_value = settings
+                settings = MagicMock()
+                settings.STORAGE_BACKEND = "s3"
+                settings.S3_BUCKET = "test-bucket"
+                settings.S3_REGION = "us-east-1"
+                settings.S3_PREFIX = ""
+                settings.S3_ACCESS_KEY_ID = "key"
+                settings.S3_SECRET_ACCESS_KEY = "secret"
+                mock_settings.return_value = settings
 
-                    mock_client = MagicMock()
-                    mock_boto3.client.return_value = mock_client
+                mock_client = MagicMock()
+                mock_boto3.client.return_value = mock_client
 
-                    from services.storage import S3Storage
+                from services.storage import S3Storage
 
-                    S3Storage._instance = None
+                S3Storage._instance = None
 
-                    storage = S3Storage()
+                storage = S3Storage()
 
-                    # Test PNG
-                    await storage.upload_bytes(b"png", "test.png", "image/png")
+                # Test PNG
+                await storage.upload_bytes(b"png", "test.png", "image/png")
 
-                    # Test JPEG
-                    await storage.upload_bytes(b"jpeg", "test.jpg", "image/jpeg")
+                # Test JPEG
+                await storage.upload_bytes(b"jpeg", "test.jpg", "image/jpeg")
 
-                    # Test WebP
-                    await storage.upload_bytes(b"webp", "test.webp", "image/webp")
+                # Test WebP
+                await storage.upload_bytes(b"webp", "test.webp", "image/webp")
 
-                    # Verify all calls were made
-                    assert mock_thread.call_count == 3
+                # Verify all upload calls reached S3 client
+                assert mock_client.put_object.call_count == 3
 
-                    S3Storage._instance = None
+                S3Storage._instance = None
 
 
 class TestS3StorageEdgeCases:

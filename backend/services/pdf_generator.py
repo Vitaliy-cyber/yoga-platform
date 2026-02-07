@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional, Set, Tuple
 from datetime import datetime
 from urllib.parse import urlparse
+from xml.sax.saxutils import escape as _xml_escape
 
 import httpx
 import aiofiles
@@ -31,8 +32,29 @@ from reportlab.platypus import (
     HRFlowable,
 )
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 logger = logging.getLogger(__name__)
+
+# Unicode-capable fonts (bundled for predictable Cyrillic support)
+FONT_REGULAR = "DejaVuSans"
+FONT_BOLD = "DejaVuSans-Bold"
+
+
+def _register_unicode_fonts() -> None:
+    """Register bundled Unicode fonts if available."""
+    try:
+        fonts_dir = Path(__file__).parent.parent / "assets" / "fonts"
+        regular_path = fonts_dir / "DejaVuSans.ttf"
+        bold_path = fonts_dir / "DejaVuSans-Bold.ttf"
+
+        if regular_path.exists() and FONT_REGULAR not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont(FONT_REGULAR, str(regular_path)))
+        if bold_path.exists() and FONT_BOLD not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont(FONT_BOLD, str(bold_path)))
+    except Exception as e:
+        logger.warning(f"Failed to register Unicode fonts: {e}")
 
 # Page sizes mapping
 PAGE_SIZES = {
@@ -141,6 +163,17 @@ class PosePDFGenerator:
     """Generator for creating PDF documents from yoga poses."""
 
     def __init__(self, page_size: str = "A4"):
+        _register_unicode_fonts()
+        self.font_regular = (
+            FONT_REGULAR
+            if FONT_REGULAR in pdfmetrics.getRegisteredFontNames()
+            else "Helvetica"
+        )
+        self.font_bold = (
+            FONT_BOLD
+            if FONT_BOLD in pdfmetrics.getRegisteredFontNames()
+            else "Helvetica-Bold"
+        )
         self.page_size = PAGE_SIZES.get(page_size, A4)
         self.width, self.height = self.page_size
         self.styles = self._create_styles()
@@ -157,7 +190,7 @@ class PosePDFGenerator:
                 textColor=TEXT_COLOR,
                 spaceAfter=6*mm,
                 alignment=TA_CENTER,
-                fontName="Helvetica-Bold",
+                fontName=self.font_bold,
             ),
             "subtitle": ParagraphStyle(
                 "CustomSubtitle",
@@ -166,7 +199,7 @@ class PosePDFGenerator:
                 textColor=MUTED_COLOR,
                 spaceAfter=4*mm,
                 alignment=TA_CENTER,
-                fontName="Helvetica",
+                fontName=self.font_regular,
             ),
             "section_title": ParagraphStyle(
                 "SectionTitle",
@@ -175,7 +208,7 @@ class PosePDFGenerator:
                 textColor=PRIMARY_COLOR,
                 spaceBefore=8*mm,
                 spaceAfter=4*mm,
-                fontName="Helvetica-Bold",
+                fontName=self.font_bold,
             ),
             "body": ParagraphStyle(
                 "CustomBody",
@@ -184,28 +217,28 @@ class PosePDFGenerator:
                 textColor=TEXT_COLOR,
                 spaceAfter=3*mm,
                 leading=16,
-                fontName="Helvetica",
+                fontName=self.font_regular,
             ),
             "label": ParagraphStyle(
                 "Label",
                 parent=base_styles["Normal"],
                 fontSize=10,
                 textColor=MUTED_COLOR,
-                fontName="Helvetica-Bold",
+                fontName=self.font_bold,
             ),
             "value": ParagraphStyle(
                 "Value",
                 parent=base_styles["Normal"],
                 fontSize=11,
                 textColor=TEXT_COLOR,
-                fontName="Helvetica",
+                fontName=self.font_regular,
             ),
             "muscle_name": ParagraphStyle(
                 "MuscleName",
                 parent=base_styles["Normal"],
                 fontSize=10,
                 textColor=TEXT_COLOR,
-                fontName="Helvetica",
+                fontName=self.font_regular,
             ),
             "footer": ParagraphStyle(
                 "Footer",
@@ -213,10 +246,38 @@ class PosePDFGenerator:
                 fontSize=8,
                 textColor=MUTED_COLOR,
                 alignment=TA_CENTER,
+                fontName=self.font_regular,
             ),
         }
 
         return custom_styles
+
+    def _safe_paragraph_text(self, value: Optional[str]) -> str:
+        """
+        Sanitize user-provided text before feeding it into reportlab Paragraph.
+
+        ReportLab's Paragraph uses an HTML-like parser. Untrusted user content may:
+        - contain invalid/unbalanced markup, crashing PDF generation (500)
+        - include characters that are not UTF-8 encodable (e.g. unpaired surrogates)
+        """
+        if value is None:
+            return ""
+
+        # Normalize to a UTF-8 encodable string (replaces invalid sequences)
+        text = str(value).encode("utf-8", errors="replace").decode(
+            "utf-8", errors="replace"
+        )
+
+        # Replace ASCII control characters (except \n and \t) to avoid parser weirdness
+        text = "".join(
+            (ch if (ch >= " " or ch in ("\n", "\t")) else " ") for ch in text
+        )
+
+        # Escape markup-sensitive characters so text is treated as plain text
+        text = _xml_escape(text, entities={'"': "&quot;", "'": "&#39;"})
+
+        # Preserve newlines in a safe way
+        return text.replace("\n", "<br/>")
 
     async def _fetch_image(
         self,
@@ -371,22 +432,48 @@ class PosePDFGenerator:
         max_width: float,
         max_height: float
     ) -> Optional[RLImage]:
-        """Prepare image for PDF with proper sizing."""
+        """Prepare image for PDF with proper sizing.
+
+        Defensive hardening:
+        - Some stored images can be corrupted/truncated (e.g. prior placeholder bugs).
+          ReportLab may crash during `doc.build()` even if PIL can parse headers.
+        - To avoid 500s, we fully decode the image via PIL and re-encode a clean PNG
+          before passing bytes to ReportLab.
+        """
         try:
-            # Open image with PIL to get dimensions
-            pil_image = Image.open(io.BytesIO(image_bytes))
-            img_width, img_height = pil_image.size
+            # Fully decode with PIL (forces validation of the entire stream)
+            with Image.open(io.BytesIO(image_bytes)) as pil_image:
+                pil_image.load()
+                img_width, img_height = pil_image.size
 
-            # Calculate scaling factor
-            width_ratio = max_width / img_width
-            height_ratio = max_height / img_height
-            scale = min(width_ratio, height_ratio, 1.0)  # Don't upscale
+                # Calculate scaling factor (in PDF points; roughly proportional to pixels)
+                width_ratio = max_width / max(img_width, 1)
+                height_ratio = max_height / max(img_height, 1)
+                scale = min(width_ratio, height_ratio, 1.0)  # Don't upscale
 
-            final_width = img_width * scale
-            final_height = img_height * scale
+                final_width = img_width * scale
+                final_height = img_height * scale
+
+                # Re-encode to a clean PNG to prevent ReportLab parsing issues.
+                # Performance optimization:
+                # - downscale to the rendered PDF size (+ small retina buffer)
+                # - avoid expensive PNG optimize pass
+                safe_image = pil_image.convert("RGB")
+                target_w = max(1, int(final_width * 2))
+                target_h = max(1, int(final_height * 2))
+                if safe_image.width > target_w or safe_image.height > target_h:
+                    resampling = getattr(
+                        getattr(Image, "Resampling", Image),
+                        "LANCZOS",
+                        Image.BICUBIC,
+                    )
+                    safe_image.thumbnail((target_w, target_h), resampling)
+                out = io.BytesIO()
+                safe_image.save(out, format="PNG", optimize=False, compress_level=1)
+                safe_bytes = out.getvalue()
 
             # Create ReportLab image
-            img_io = io.BytesIO(image_bytes)
+            img_io = io.BytesIO(safe_bytes)
             return RLImage(img_io, width=final_width, height=final_height)
 
         except Exception as e:
@@ -402,10 +489,10 @@ class PosePDFGenerator:
         sorted_muscles = sorted(muscles, key=lambda m: m.get("activation_level", 0), reverse=True)
 
         # Table header
-        data = [["Muscle", "Activation Level"]]
+        data = [["М'яз", "Рівень активації"]]
 
         for muscle in sorted_muscles:
-            name = muscle.get("muscle_name", muscle.get("name", "Unknown"))
+            name = muscle.get("muscle_name", muscle.get("name", "Невідомо"))
             level = muscle.get("activation_level", 0)
 
             # Create activation bar representation
@@ -421,13 +508,13 @@ class PosePDFGenerator:
             # Header
             ("BACKGROUND", (0, 0), (-1, 0), PRIMARY_COLOR),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 0), (-1, 0), self.font_bold),
             ("FONTSIZE", (0, 0), (-1, 0), 10),
             ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
             ("TOPPADDING", (0, 0), (-1, 0), 8),
 
             # Body
-            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTNAME", (0, 1), (-1, -1), self.font_regular),
             ("FONTSIZE", (0, 1), (-1, -1), 9),
             ("TOPPADDING", (0, 1), (-1, -1), 6),
             ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
@@ -482,18 +569,26 @@ class PosePDFGenerator:
         story = []
 
         # === Header ===
-        story.append(Paragraph(pose.get("name", "Yoga Pose"), self.styles["title"]))
+        story.append(
+            Paragraph(
+                self._safe_paragraph_text(pose.get("name", "Поза йоги")),
+                self.styles["title"],
+            )
+        )
 
         # Subtitle with code and English name
         subtitle_parts = []
-        if pose.get("code"):
-            subtitle_parts.append(f"Code: {pose['code']}")
         if pose.get("name_en"):
             subtitle_parts.append(pose["name_en"])
         if pose.get("category_name"):
-            subtitle_parts.append(f"Category: {pose['category_name']}")
+            subtitle_parts.append(f"Категорія: {pose['category_name']}")
         if subtitle_parts:
-            story.append(Paragraph(" | ".join(subtitle_parts), self.styles["subtitle"]))
+            story.append(
+                Paragraph(
+                    self._safe_paragraph_text(" | ".join(subtitle_parts)),
+                    self.styles["subtitle"],
+                )
+            )
 
         story.append(Spacer(1, 6*mm))
         story.append(HRFlowable(
@@ -513,7 +608,7 @@ class PosePDFGenerator:
         if include_photo and pose.get("photo_path"):
             img_bytes = await self._fetch_image(pose["photo_path"])
             if img_bytes:
-                story.append(Paragraph("Generated Photo", self.styles["section_title"]))
+                story.append(Paragraph("Згенероване фото", self.styles["section_title"]))
                 img = self._prepare_image(img_bytes, max_img_width, max_img_height)
                 if img:
                     story.append(img)
@@ -524,7 +619,7 @@ class PosePDFGenerator:
         if include_schema and pose.get("schema_path"):
             img_bytes = await self._fetch_image(pose["schema_path"])
             if img_bytes:
-                story.append(Paragraph("Source Schematic", self.styles["section_title"]))
+                story.append(Paragraph("Вихідна схема", self.styles["section_title"]))
                 img = self._prepare_image(img_bytes, max_img_width, max_img_height)
                 if img:
                     story.append(img)
@@ -535,7 +630,7 @@ class PosePDFGenerator:
         if include_muscle_layer and pose.get("muscle_layer_path"):
             img_bytes = await self._fetch_image(pose["muscle_layer_path"])
             if img_bytes:
-                story.append(Paragraph("Muscle Visualization", self.styles["section_title"]))
+                story.append(Paragraph("Візуалізація м'язів", self.styles["section_title"]))
                 img = self._prepare_image(img_bytes, max_img_width, max_img_height)
                 if img:
                     story.append(img)
@@ -548,21 +643,36 @@ class PosePDFGenerator:
         # === Description Section ===
         if include_description:
             if pose.get("description"):
-                story.append(Paragraph("Description", self.styles["section_title"]))
-                story.append(Paragraph(pose["description"], self.styles["body"]))
+                story.append(Paragraph("Опис", self.styles["section_title"]))
+                story.append(
+                    Paragraph(
+                        self._safe_paragraph_text(pose["description"]),
+                        self.styles["body"],
+                    )
+                )
 
             if pose.get("effect"):
-                story.append(Paragraph("Effects & Benefits", self.styles["section_title"]))
-                story.append(Paragraph(pose["effect"], self.styles["body"]))
+                story.append(Paragraph("Ефекти та користь", self.styles["section_title"]))
+                story.append(
+                    Paragraph(
+                        self._safe_paragraph_text(pose["effect"]),
+                        self.styles["body"],
+                    )
+                )
 
             if pose.get("breathing"):
-                story.append(Paragraph("Breathing Instructions", self.styles["section_title"]))
-                story.append(Paragraph(pose["breathing"], self.styles["body"]))
+                story.append(Paragraph("Інструкції з дихання", self.styles["section_title"]))
+                story.append(
+                    Paragraph(
+                        self._safe_paragraph_text(pose["breathing"]),
+                        self.styles["body"],
+                    )
+                )
 
         # === Muscle Activation Section ===
         muscles = pose.get("muscles", [])
         if include_muscles_list and muscles:
-            story.append(Paragraph("Active Muscles", self.styles["section_title"]))
+            story.append(Paragraph("Активні м'язи", self.styles["section_title"]))
             muscle_table = self._build_muscle_table(muscles)
             story.append(muscle_table)
 
@@ -578,19 +688,105 @@ class PosePDFGenerator:
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         story.append(Paragraph(
-            f"Generated by Yoga Pose Platform | {timestamp}",
+            self._safe_paragraph_text(f"Згенеровано в YogaFlow | {timestamp}"),
             self.styles["footer"]
         ))
 
         # Build PDF
-        doc.build(story)
+        try:
+            doc.build(story)
+        except Exception as e:
+            # Never 5xx on export because of a single broken image or malformed text.
+            logger.warning(f"PDF build failed; retrying without images: {e}")
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(
+                buffer,
+                pagesize=self.page_size,
+                rightMargin=2*cm,
+                leftMargin=2*cm,
+                topMargin=2*cm,
+                bottomMargin=2*cm,
+            )
+            story_no_images = []
+            story_no_images.append(
+                Paragraph(
+                    self._safe_paragraph_text(pose.get("name", "Поза йоги")),
+                    self.styles["title"],
+                )
+            )
+            subtitle_parts = []
+            if pose.get("name_en"):
+                subtitle_parts.append(pose["name_en"])
+            if pose.get("category_name"):
+                subtitle_parts.append(f"Категорія: {pose['category_name']}")
+            if subtitle_parts:
+                story_no_images.append(
+                    Paragraph(
+                        self._safe_paragraph_text(" | ".join(subtitle_parts)),
+                        self.styles["subtitle"],
+                    )
+                )
+            story_no_images.append(Spacer(1, 6*mm))
+            story_no_images.append(HRFlowable(
+                width="100%",
+                thickness=1,
+                color=colors.HexColor("#E5E7EB"),
+                spaceBefore=2*mm,
+                spaceAfter=6*mm
+            ))
+
+            # Text sections only
+            if include_description:
+                if pose.get("description"):
+                    story_no_images.append(Paragraph("Опис", self.styles["section_title"]))
+                    story_no_images.append(
+                        Paragraph(
+                            self._safe_paragraph_text(pose["description"]),
+                            self.styles["body"],
+                        )
+                    )
+                if pose.get("effect"):
+                    story_no_images.append(Paragraph("Ефекти та користь", self.styles["section_title"]))
+                    story_no_images.append(
+                        Paragraph(
+                            self._safe_paragraph_text(pose["effect"]),
+                            self.styles["body"],
+                        )
+                    )
+                if pose.get("breathing"):
+                    story_no_images.append(Paragraph("Інструкції з дихання", self.styles["section_title"]))
+                    story_no_images.append(
+                        Paragraph(
+                            self._safe_paragraph_text(pose["breathing"]),
+                            self.styles["body"],
+                        )
+                    )
+
+            muscles = pose.get("muscles", [])
+            if include_muscles_list and muscles:
+                story_no_images.append(Paragraph("Активні м'язи", self.styles["section_title"]))
+                story_no_images.append(self._build_muscle_table(muscles))
+
+            story_no_images.append(Spacer(1, 10*mm))
+            story_no_images.append(HRFlowable(
+                width="100%",
+                thickness=0.5,
+                color=colors.HexColor("#E5E7EB"),
+                spaceBefore=4*mm,
+                spaceAfter=4*mm
+            ))
+            story_no_images.append(Paragraph(
+                self._safe_paragraph_text(f"Згенеровано в YogaFlow | {timestamp}"),
+                self.styles["footer"]
+            ))
+            doc.build(story_no_images)
 
         return buffer.getvalue()
 
     async def generate_multiple_poses_pdf(
         self,
         poses: List[dict],
-        title: str = "Yoga Poses Collection",
+        title: str = "Колекція йога-поз",
     ) -> bytes:
         """
         Generate a PDF with multiple poses (one per page).
@@ -614,58 +810,252 @@ class PosePDFGenerator:
         )
 
         story = []
+        exported_at = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-        # Title page
-        story.append(Spacer(1, 4*cm))
-        story.append(Paragraph(title, self.styles["title"]))
-        story.append(Spacer(1, 1*cm))
-        story.append(Paragraph(
-            f"{len(poses)} poses",
-            self.styles["subtitle"]
-        ))
-        story.append(Spacer(1, 1*cm))
-        story.append(Paragraph(
-            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            self.styles["footer"]
-        ))
+        # Cover page
+        story.append(Spacer(1, 2.6 * cm))
+        story.append(Paragraph(self._safe_paragraph_text(title), self.styles["title"]))
+        story.append(Spacer(1, 3 * mm))
+        story.append(
+            Paragraph(self._safe_paragraph_text("Експорт послідовності"), self.styles["subtitle"])
+        )
+        story.append(Spacer(1, 8 * mm))
+
+        summary_data = [
+            [
+                Paragraph(self._safe_paragraph_text("Кількість поз"), self.styles["label"]),
+                Paragraph(self._safe_paragraph_text(str(len(poses))), self.styles["value"]),
+            ],
+            [
+                Paragraph(self._safe_paragraph_text("Згенеровано"), self.styles["label"]),
+                Paragraph(self._safe_paragraph_text(exported_at), self.styles["value"]),
+            ],
+        ]
+        summary_table = Table(summary_data, colWidths=[5.2 * cm, 8.8 * cm], hAlign="CENTER")
+        summary_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F3F4F6")),
+                    ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#D1D5DB")),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                    ("TOPPADDING", (0, 0), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ]
+            )
+        )
+        story.append(summary_table)
+        story.append(Spacer(1, 10 * mm))
+
+        preview_rows = []
+        for idx, pose in enumerate(poses[:12], start=1):
+            pose_name = self._safe_paragraph_text(pose.get("name", "Поза йоги"))
+            duration = pose.get("duration_seconds")
+            duration_text = f"{int(duration)} с" if isinstance(duration, (int, float)) else "-"
+            preview_rows.append(
+                [
+                    Paragraph(self._safe_paragraph_text(str(idx)), self.styles["label"]),
+                    Paragraph(pose_name, self.styles["body"]),
+                    Paragraph(self._safe_paragraph_text(duration_text), self.styles["value"]),
+                ]
+            )
+
+        if preview_rows:
+            preview_data = [[
+                Paragraph(self._safe_paragraph_text("#"), self.styles["label"]),
+                Paragraph(self._safe_paragraph_text("Поза"), self.styles["label"]),
+                Paragraph(self._safe_paragraph_text("Тривалість"), self.styles["label"]),
+            ]] + preview_rows
+            preview_table = Table(
+                preview_data,
+                colWidths=[1.2 * cm, 9.6 * cm, 3.2 * cm],
+                hAlign="CENTER",
+            )
+            preview_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E5E7EB")),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#1F2937")),
+                        ("FONTNAME", (0, 0), (-1, 0), self.font_bold),
+                        ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#E5E7EB")),
+                        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#E5E7EB")),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                        ("TOPPADDING", (0, 0), (-1, -1), 6),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+                        *[
+                            ("BACKGROUND", (0, row), (-1, row), BG_COLOR)
+                            for row in range(2, len(preview_data), 2)
+                        ],
+                    ]
+                )
+            )
+            story.append(preview_table)
 
         # Each pose on a new page
-        for pose in poses:
+        for idx, pose in enumerate(poses, start=1):
             story.append(PageBreak())
 
-            # Pose title
-            story.append(Paragraph(pose.get("name", "Yoga Pose"), self.styles["title"]))
+            pose_title = self._safe_paragraph_text(pose.get("name", "Поза йоги"))
+            story.append(Paragraph(self._safe_paragraph_text(f"{idx}. {pose_title}"), self.styles["title"]))
 
-            subtitle_parts = []
+            meta_parts = []
             if pose.get("code"):
-                subtitle_parts.append(f"Code: {pose['code']}")
-            if pose.get("name_en"):
-                subtitle_parts.append(pose["name_en"])
-            if subtitle_parts:
-                story.append(Paragraph(" | ".join(subtitle_parts), self.styles["subtitle"]))
+                meta_parts.append(f"Код: {pose['code']}")
+            if pose.get("category_name"):
+                meta_parts.append(f"Категорія: {pose['category_name']}")
+            duration = pose.get("duration_seconds")
+            if isinstance(duration, (int, float)):
+                meta_parts.append(f"Тривалість: {int(duration)} с")
+            if meta_parts:
+                story.append(
+                    Paragraph(
+                        self._safe_paragraph_text(" | ".join(meta_parts)),
+                        self.styles["subtitle"],
+                    )
+                )
 
-            story.append(Spacer(1, 4*mm))
+            story.append(Spacer(1, 2 * mm))
+            story.append(
+                HRFlowable(
+                    width="100%",
+                    thickness=0.8,
+                    color=colors.HexColor("#E5E7EB"),
+                    spaceBefore=2 * mm,
+                    spaceAfter=4 * mm,
+                )
+            )
 
-            # Photo (if available)
+            image_specs = []
             if pose.get("photo_path"):
-                img_bytes = await self._fetch_image(pose["photo_path"])
-                if img_bytes:
-                    img = self._prepare_image(img_bytes, self.width - 4*cm, 6*cm)
-                    if img:
-                        story.append(img)
-                        story.append(Spacer(1, 4*mm))
+                image_specs.append(("Фото студії", pose["photo_path"]))
+            if pose.get("muscle_layer_path"):
+                image_specs.append(("Шар м'язів", pose["muscle_layer_path"]))
+            elif pose.get("schema_path"):
+                image_specs.append(("Вихідна схема", pose["schema_path"]))
 
-            # Description
+            if image_specs:
+                max_img_width = self.width - 4 * cm
+                if len(image_specs) >= 2:
+                    col_w = (max_img_width - 10) / 2
+                    cells = []
+                    for label, path in image_specs[:2]:
+                        flowables = [Paragraph(self._safe_paragraph_text(label), self.styles["label"]), Spacer(1, 2 * mm)]
+                        img_bytes = await self._fetch_image(path)
+                        if img_bytes:
+                            img = self._prepare_image(img_bytes, col_w, 6.8 * cm)
+                            if img:
+                                flowables.append(img)
+                        cells.append(flowables)
+
+                    images_table = Table([cells], colWidths=[col_w, col_w], hAlign="CENTER")
+                    images_table.setStyle(
+                        TableStyle(
+                            [
+                                ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+                                ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#E5E7EB")),
+                                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ]
+                        )
+                    )
+                    story.append(images_table)
+                else:
+                    label, path = image_specs[0]
+                    story.append(Paragraph(self._safe_paragraph_text(label), self.styles["section_title"]))
+                    img_bytes = await self._fetch_image(path)
+                    if img_bytes:
+                        img = self._prepare_image(img_bytes, max_img_width, 8 * cm)
+                        if img:
+                            story.append(img)
+
+                story.append(Spacer(1, 4 * mm))
+
             if pose.get("description"):
-                story.append(Paragraph("Description", self.styles["section_title"]))
-                story.append(Paragraph(pose["description"], self.styles["body"]))
+                story.append(Paragraph("Опис пози", self.styles["section_title"]))
+                story.append(
+                    Paragraph(
+                        self._safe_paragraph_text(pose["description"]),
+                        self.styles["body"],
+                    )
+                )
 
-            # Muscles
             muscles = pose.get("muscles", [])
             if muscles:
-                story.append(Paragraph("Active Muscles", self.styles["section_title"]))
+                story.append(Paragraph("Активні м'язи", self.styles["section_title"]))
                 muscle_table = self._build_muscle_table(muscles)
                 story.append(muscle_table)
 
-        doc.build(story)
+        try:
+            doc.build(story)
+        except Exception as e:
+            logger.warning(f"Multi-pose PDF build failed; retrying without images: {e}")
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(
+                buffer,
+                pagesize=self.page_size,
+                rightMargin=2*cm,
+                leftMargin=2*cm,
+                topMargin=2*cm,
+                bottomMargin=2*cm,
+            )
+            story_no_images = []
+            story_no_images.append(Spacer(1, 2.6 * cm))
+            story_no_images.append(Paragraph(self._safe_paragraph_text(title), self.styles["title"]))
+            story_no_images.append(Spacer(1, 3 * mm))
+            story_no_images.append(Paragraph(
+                self._safe_paragraph_text("Експорт послідовності"),
+                self.styles["subtitle"]
+            ))
+            story_no_images.append(Spacer(1, 1 * cm))
+            story_no_images.append(Paragraph(
+                self._safe_paragraph_text(f"{len(poses)} поз | Згенеровано: {exported_at}"),
+                self.styles["body"]
+            ))
+            for idx, pose in enumerate(poses, start=1):
+                story_no_images.append(PageBreak())
+                story_no_images.append(
+                    Paragraph(
+                        self._safe_paragraph_text(f"{idx}. {pose.get('name', 'Поза йоги')}"),
+                        self.styles["title"],
+                    )
+                )
+                meta_parts = []
+                if pose.get("code"):
+                    meta_parts.append(f"Код: {pose['code']}")
+                if pose.get("category_name"):
+                    meta_parts.append(f"Категорія: {pose['category_name']}")
+                duration = pose.get("duration_seconds")
+                if isinstance(duration, (int, float)):
+                    meta_parts.append(f"Тривалість: {int(duration)} с")
+                if meta_parts:
+                    story_no_images.append(
+                        Paragraph(
+                            self._safe_paragraph_text(" | ".join(meta_parts)),
+                            self.styles["subtitle"],
+                        )
+                    )
+                story_no_images.append(Spacer(1, 4*mm))
+                if pose.get("description"):
+                    story_no_images.append(Paragraph("Опис", self.styles["section_title"]))
+                    story_no_images.append(
+                        Paragraph(
+                            self._safe_paragraph_text(pose["description"]),
+                            self.styles["body"],
+                        )
+                    )
+                muscles = pose.get("muscles", [])
+                if muscles:
+                    story_no_images.append(Paragraph("Активні м'язи", self.styles["section_title"]))
+                    story_no_images.append(self._build_muscle_table(muscles))
+            doc.build(story_no_images)
         return buffer.getvalue()

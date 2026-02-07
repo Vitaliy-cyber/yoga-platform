@@ -11,7 +11,6 @@ import {
 } from '../ui/dialog';
 import { Loader2, ArrowRight, Plus, Minus, RefreshCw, X, Image as ImageIcon } from 'lucide-react';
 import type { VersionComparisonResult, VersionDiff } from '../../types';
-import { useViewTransition } from '../../hooks/useViewTransition';
 import { useI18n } from '../../i18n';
 
 interface VersionDiffViewerProps {
@@ -30,13 +29,12 @@ export const VersionDiffViewer: React.FC<VersionDiffViewerProps> = ({
   onClose,
 }) => {
   const { t } = useI18n();
-  const { startTransition } = useViewTransition();
   const [comparison, setComparison] = useState<VersionComparisonResult | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadComparison = useCallback(async () => {
-    void startTransition(() => setIsLoading(true));
+    setIsLoading(true);
     setError(null);
     try {
       const data = await versionsApi.diff(poseId, versionId1, versionId2);

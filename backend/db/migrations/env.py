@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from config import get_settings
 from db.database import Base
-from models import category, muscle, pose, pose_version, user
+import models  # noqa: F401  # Ensure all SQLAlchemy models are registered in Base.metadata.
 
 config = context.config
 settings = get_settings()

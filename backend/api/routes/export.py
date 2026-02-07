@@ -7,14 +7,18 @@ import csv
 import io
 import json
 import logging
+import asyncio
+import random
 import time
+import unicodedata
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import and_, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -30,6 +34,7 @@ from schemas.export import (
     MuscleExport,
     PoseExport,
 )
+from schemas.category import _strip_invisible_edges
 from services.auth import get_current_user
 from services.pdf_generator import PosePDFGenerator
 
@@ -65,6 +70,41 @@ def sanitize_filename(name: str) -> str:
     # Limit length to prevent issues
     return sanitized[:100]
 
+
+def _utf8_safe_text(text: str) -> str:
+    """
+    Ensure response text is UTF-8 encodable.
+
+    Defensive hardening: unpaired surrogates can exist in legacy DB rows (e.g.,
+    via JSON escape sequences). Starlette encodes Response bodies as UTF-8; if
+    the body contains surrogates it can crash and return 500.
+    """
+    if not isinstance(text, str):
+        return text
+    try:
+        text.encode("utf-8")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def _safe_export_text(
+    value: object,
+    *,
+    max_len: int,
+    default: str,
+    empty_to_none: bool = False,
+) -> str | None:
+    if value is None:
+        return None if empty_to_none else default
+    if not isinstance(value, str):
+        value = str(value)
+    normalized = _strip_invisible_edges(value)
+    if not normalized:
+        return None if empty_to_none else default
+    normalized = _utf8_safe_text(normalized)
+    return normalized[:max_len]
+
 # Rate limiting configuration for backup endpoint
 # More restrictive than general endpoints due to resource intensity
 BACKUP_RATE_LIMIT_REQUESTS = 5  # Max requests
@@ -99,8 +139,8 @@ def _check_backup_rate_limit(user_id: int) -> bool:
     return True
 
 
-# CSV Injection protection characters
-CSV_INJECTION_CHARS = ("=", "+", "-", "@", "\t", "\r", "\n")
+# CSV Injection protection characters (formula triggers)
+CSV_INJECTION_CHARS = ("=", "+", "-", "@")
 
 
 def sanitize_csv_field(value: Optional[str]) -> str:
@@ -120,18 +160,62 @@ def sanitize_csv_field(value: Optional[str]) -> str:
     # Convert to string
     str_value = str(value)
 
-    # Check if value starts with injection characters
-    if str_value and str_value[0] in CSV_INJECTION_CHARS:
-        # Prefix with single quote to escape
-        return "'" + str_value
+    # Normalize control characters so CSV rows stay single-line and parseable.
+    # Replace all ASCII control chars (Cc) with spaces to avoid embedded
+    # nulls and other invisible bytes that can break CSV consumers.
+    normalized = "".join(
+        " "
+        if unicodedata.category(ch) in ("Cc", "Zl", "Zp")
+        else ch
+        for ch in str_value
+    )
 
-    # Also check for embedded dangerous characters that could be exploited
-    # in certain contexts (though less common)
-    if any(char in str_value for char in ("\t", "\r", "\n")):
-        # Replace with spaces to prevent manipulation
-        str_value = str_value.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+    # Check if value starts with (or effectively starts with) injection characters.
+    # Some spreadsheet apps treat leading whitespace or format chars (e.g. BOM,
+    # zero-width spaces) as ignorable, so "\ufeff=1+1" can still be a formula.
+    idx = 0
+    while idx < len(normalized):
+        ch = normalized[idx]
+        if ch.isspace() or unicodedata.category(ch) == "Cf":
+            idx += 1
+            continue
+        break
+    if idx < len(normalized):
+        first = normalized[idx]
+        if first in CSV_INJECTION_CHARS:
+            return "'" + normalized
+        # Preserve leading apostrophes that precede formula triggers so imports
+        # can round-trip without losing the original apostrophe.
+        if first == "'":
+            j = idx + 1
+            while j < len(normalized):
+                ch = normalized[j]
+                if ch.isspace() or unicodedata.category(ch) == "Cf":
+                    j += 1
+                    continue
+                break
+            if j < len(normalized) and normalized[j] in CSV_INJECTION_CHARS:
+                return "'" + normalized
 
-    return str_value
+    return normalized
+
+
+def escape_muscle_name_for_csv(value: Optional[str]) -> str:
+    """
+    Escape muscle names for the compact CSV muscles field.
+
+    The muscles field uses a custom format: "name:level,name:level".
+    To preserve commas/colons/backslashes inside names, escape them with
+    a backslash. This keeps the export backward-compatible while allowing
+    lossless round-trips.
+    """
+    sanitized = sanitize_csv_field(value)
+    # Escape backslash first to avoid double-escaping
+    return (
+        sanitized.replace("\\", "\\\\")
+        .replace(",", "\\,")
+        .replace(":", "\\:")
+    )
 
 
 def build_pose_export(pose: Pose) -> PoseExport:
@@ -149,7 +233,12 @@ def build_pose_export(pose: Pose) -> PoseExport:
         code=pose.code,
         name=pose.name,
         name_en=pose.name_en,
-        category_name=pose.category.name if pose.category else None,
+        category_name=_safe_export_text(
+            pose.category.name if pose.category else None,
+            max_len=100,
+            default="",
+            empty_to_none=True,
+        ),
         description=pose.description,
         effect=pose.effect,
         breathing=pose.breathing,
@@ -166,8 +255,13 @@ def build_pose_export(pose: Pose) -> PoseExport:
 def build_category_export(category: Category) -> CategoryExport:
     """Convert Category model to CategoryExport schema."""
     return CategoryExport(
-        name=category.name,
-        description=category.description,
+        name=(_safe_export_text(category.name, max_len=100, default="unnamed") or "unnamed"),
+        description=_safe_export_text(
+            category.description,
+            max_len=2000,
+            default="",
+            empty_to_none=True,
+        ),
     )
 
 
@@ -177,36 +271,69 @@ async def get_user_poses(
     category_id: Optional[int] = None,
 ) -> List[Pose]:
     """Get all poses for a user, optionally filtered by category."""
-    query = (
-        select(Pose)
-        .options(
-            selectinload(Pose.category),
-            selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
+    async def _run() -> List[Pose]:
+        query = (
+            select(Pose)
+            .options(
+                selectinload(Pose.category),
+                selectinload(Pose.pose_muscles).selectinload(PoseMuscle.muscle),
+            )
+            .where(Pose.user_id == user_id)
+            .order_by(Pose.code)
         )
-        .where(Pose.user_id == user_id)
-        .order_by(Pose.code)
+
+        if category_id:
+            query = query.where(Pose.category_id == category_id)
+
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
+    max_attempts = 8
+    for attempt in range(max_attempts):
+        try:
+            return await _run()
+        except OperationalError:
+            await db.rollback()
+            if attempt >= max_attempts - 1:
+                break
+            backoff = min(0.05 * (2**attempt), 0.8) + random.random() * 0.05
+            await asyncio.sleep(backoff)
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Conflict while exporting poses. Please retry.",
     )
-
-    if category_id:
-        query = query.where(Pose.category_id == category_id)
-
-    result = await db.execute(query)
-    return list(result.scalars().all())
 
 
 async def get_user_categories(db: AsyncSession, user_id: int) -> List[Category]:
     """Get all categories for a user."""
-    result = await db.execute(
-        select(Category)
-        .where(Category.user_id == user_id)
-        .order_by(Category.name)
+    max_attempts = 8
+    for attempt in range(max_attempts):
+        try:
+            result = await db.execute(
+                select(Category)
+                .where(Category.user_id == user_id)
+                .order_by(Category.name)
+            )
+            return list(result.scalars().all())
+        except OperationalError:
+            await db.rollback()
+            if attempt >= max_attempts - 1:
+                break
+            backoff = min(0.05 * (2**attempt), 0.8) + random.random() * 0.05
+            await asyncio.sleep(backoff)
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Conflict while exporting categories. Please retry.",
     )
-    return list(result.scalars().all())
 
 
 @router.get("/poses/json")
 async def export_poses_json(
-    category_id: Optional[int] = Query(None, description="Filter by category ID"),
+    category_id: Optional[int] = Query(
+        None, ge=1, description="Filter by category ID"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -226,7 +353,7 @@ async def export_poses_json(
     export_data = [build_pose_export(pose).model_dump(mode="json") for pose in poses]
 
     # Create JSON content
-    json_content = json.dumps(export_data, ensure_ascii=False, indent=2)
+    json_content = _utf8_safe_text(json.dumps(export_data, ensure_ascii=False, indent=2))
 
     # Generate filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -244,7 +371,9 @@ async def export_poses_json(
 
 @router.get("/poses/csv")
 async def export_poses_csv(
-    category_id: Optional[int] = Query(None, description="Filter by category ID"),
+    category_id: Optional[int] = Query(
+        None, ge=1, description="Filter by category ID"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -285,7 +414,7 @@ async def export_poses_csv(
         # Format muscles as "name:level,name:level"
         # Sanitize muscle names as well
         muscles_str = ",".join(
-            f"{sanitize_csv_field(m.name)}:{m.activation_level}"
+            f"{escape_muscle_name_for_csv(m.name)}:{m.activation_level}"
             for m in pose_export.muscles
         )
 
@@ -322,7 +451,9 @@ async def export_pose_pdf(
     include_muscle_layer: bool = Query(True, description="Include muscle visualization"),
     include_muscles_list: bool = Query(True, description="Include muscle activation table"),
     include_description: bool = Query(True, description="Include text descriptions"),
-    page_size: str = Query("A4", description="Page size (A4 or Letter)"),
+    page_size: Literal["A4", "Letter"] = Query(
+        "A4", description="Page size (A4 or Letter)"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -400,8 +531,12 @@ async def export_pose_pdf(
 
 @router.get("/poses/pdf")
 async def export_all_poses_pdf(
-    category_id: Optional[int] = Query(None, description="Filter by category ID"),
-    page_size: str = Query("A4", description="Page size (A4 or Letter)"),
+    category_id: Optional[int] = Query(
+        None, ge=1, description="Filter by category ID"
+    ),
+    page_size: Literal["A4", "Letter"] = Query(
+        "A4", description="Page size (A4 or Letter)"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -441,7 +576,7 @@ async def export_all_poses_pdf(
     generator = PosePDFGenerator(page_size=page_size)
     pdf_bytes = await generator.generate_multiple_poses_pdf(
         poses_data,
-        title="My Yoga Poses Collection",
+        title="Моя колекція йога-поз",
     )
 
     # Generate filename
@@ -500,7 +635,7 @@ async def export_backup(
     )
 
     # Serialize to JSON
-    json_content = backup.model_dump_json(indent=2)
+    json_content = _utf8_safe_text(backup.model_dump_json(indent=2))
 
     # Generate filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -536,7 +671,7 @@ async def export_categories_json(
     export_data = [build_category_export(cat).model_dump(mode="json") for cat in categories]
 
     # Create JSON content
-    json_content = json.dumps(export_data, ensure_ascii=False, indent=2)
+    json_content = _utf8_safe_text(json.dumps(export_data, ensure_ascii=False, indent=2))
 
     # Generate filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

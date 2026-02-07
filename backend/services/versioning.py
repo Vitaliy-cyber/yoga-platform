@@ -55,22 +55,14 @@ class VersioningService:
     ]
 
     @staticmethod
-    def _serialize_muscles(pose: Pose) -> str:
-        """Serialize pose muscles to JSON string."""
-        muscles_data = []
-        for pm in pose.pose_muscles:
-            muscle_entry = {
-                "muscle_id": pm.muscle_id,
-                "muscle_name": pm.muscle.name if pm.muscle else None,
-                "muscle_name_ua": pm.muscle.name_ua if pm.muscle else None,
-                "body_part": pm.muscle.body_part if pm.muscle else None,
-                "activation_level": pm.activation_level,
-            }
-            muscles_data.append(muscle_entry)
-        return json.dumps(muscles_data, ensure_ascii=False)
+    def _serialize_muscles_rows(muscles_rows: List[Dict[str, Any]]) -> str:
+        """Serialize pose muscles snapshot rows to JSON string."""
+        return json.dumps(muscles_rows, ensure_ascii=False)
 
     @staticmethod
-    def _deserialize_muscles(muscles_json: Optional[str]) -> Tuple[List[Dict[str, Any]], bool]:
+    def _deserialize_muscles(
+        muscles_json: Optional[str],
+    ) -> Tuple[List[Dict[str, Any]], bool]:
         """
         Deserialize muscles from JSON string.
 
@@ -84,36 +76,43 @@ class VersioningService:
             if not isinstance(data, list):
                 logger.error(f"muscles_json is not a list: {type(data)}")
                 return [], False
+            # Defensive: ensure every entry is a dict, otherwise treat as corrupted.
+            # Restore operations must be strict to avoid partial restores/data loss.
+            for item in data:
+                if not isinstance(item, dict):
+                    logger.error(
+                        "muscles_json contains non-dict entry: %s", type(item)
+                    )
+                    return [], False
             return data, True
         except json.JSONDecodeError as e:
             logger.error(f"Failed to deserialize muscles_json: {e}")
             return [], False
 
     @staticmethod
-    def _poses_are_equal(pose: Pose, version: PoseVersion) -> bool:
+    def _fields_are_equal(pose: Pose, version: PoseVersion) -> bool:
         """
-        Compare pose current state with a version to detect changes.
-        Returns True if no meaningful changes occurred.
-
-        Uses semantic comparison for muscles (by muscle_id and activation_level)
-        to avoid false positives from JSON serialization order differences.
+        Compare pose scalar fields with a version to detect changes.
+        Returns True if no meaningful scalar changes occurred.
         """
         for field_name in VersioningService.VERSIONED_FIELDS:
             pose_value = getattr(pose, field_name, None)
             version_value = getattr(version, field_name, None)
             if pose_value != version_value:
                 return False
+        return True
 
-        # Compare muscles semantically (not string comparison)
-        # This fixes the empty muscles serialization bug where [] != "[]"
-        current_muscles_map = {
-            pm.muscle_id: pm.activation_level
-            for pm in pose.pose_muscles
-        }
-
+    @staticmethod
+    def _muscles_are_equal(
+        current_muscles_map: Dict[int, Any],
+        version: PoseVersion,
+    ) -> bool:
+        """
+        Compare muscles semantically (by muscle_id and activation_level) to avoid
+        false positives from JSON serialization order differences.
+        """
         version_muscles, is_valid = VersioningService._deserialize_muscles(version.muscles_json)
         if not is_valid:
-            # If version muscles are corrupted, consider them different
             return False
 
         version_muscles_map = {
@@ -123,6 +122,41 @@ class VersioningService:
         }
 
         return current_muscles_map == version_muscles_map
+
+    async def _fetch_pose_muscle_snapshot(
+        self,
+        db: AsyncSession,
+        pose_id: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch pose muscles snapshot from DB without touching ORM lazy relationships.
+
+        This avoids sqlalchemy.exc.MissingGreenlet errors in async contexts when
+        relationships are not eagerly loaded.
+        """
+        from models.muscle import Muscle
+
+        result = await db.execute(
+            select(PoseMuscle, Muscle)
+            .join(Muscle, PoseMuscle.muscle_id == Muscle.id, isouter=True)
+            .where(PoseMuscle.pose_id == pose_id)
+        )
+
+        rows: List[Dict[str, Any]] = []
+        for pm, muscle in result.all():
+            rows.append(
+                {
+                    "muscle_id": pm.muscle_id,
+                    "muscle_name": muscle.name if muscle else None,
+                    "muscle_name_ua": muscle.name_ua if muscle else None,
+                    "body_part": muscle.body_part if muscle else None,
+                    "activation_level": pm.activation_level,
+                }
+            )
+
+        # Stabilize ordering to reduce noisy diffs
+        rows.sort(key=lambda r: (r.get("muscle_id") or 0, r.get("activation_level") or 0))
+        return rows
 
     @staticmethod
     def _pose_has_changes(
@@ -179,25 +213,28 @@ class VersioningService:
         Returns:
             Created PoseVersion or None if skipped
         """
-        # Ensure pose muscles are loaded
-        if not pose.pose_muscles:
-            await db.refresh(pose, ["pose_muscles"])
-            # Also load the muscle relationships
-            for pm in pose.pose_muscles:
-                if pm.muscle is None:
-                    await db.refresh(pm, ["muscle"])
+        muscles_rows = await self._fetch_pose_muscle_snapshot(db, pose.id)
+        current_muscles_map = {
+            int(m["muscle_id"]): m.get("activation_level")
+            for m in muscles_rows
+            if m.get("muscle_id") is not None
+        }
 
         # Get the latest version to compare
         if check_for_changes:
             latest_version = await self.get_latest_version(db, pose.id)
-            if latest_version and self._poses_are_equal(pose, latest_version):
+            if (
+                latest_version
+                and self._fields_are_equal(pose, latest_version)
+                and self._muscles_are_equal(current_muscles_map, latest_version)
+            ):
                 logger.debug(f"Skipping version creation for pose {pose.id}: no changes")
                 return None
 
         version_number = await self.get_next_version_number(db, pose.id)
 
-        # Serialize muscles
-        muscles_json = self._serialize_muscles(pose)
+        # Serialize muscles snapshot
+        muscles_json = self._serialize_muscles_rows(muscles_rows)
 
         # Create version snapshot
         version = PoseVersion(
@@ -558,8 +595,10 @@ class VersioningService:
                 })
 
         # Compare muscles
-        old_muscles, _ = self._deserialize_muscles(version1.muscles_json)
-        new_muscles, _ = self._deserialize_muscles(version2.muscles_json)
+        old_muscles, old_valid = self._deserialize_muscles(version1.muscles_json)
+        new_muscles, new_valid = self._deserialize_muscles(version2.muscles_json)
+        if not old_valid or not new_valid:
+            raise ValueError("Invalid version data")
 
         # Create muscle lookup maps (filter out entries without muscle_id)
         old_muscles_map = {

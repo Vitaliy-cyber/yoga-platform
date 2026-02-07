@@ -1,4 +1,4 @@
-.PHONY: help dev prod stop logs clean install test
+.PHONY: help dev prod stop logs clean install test test-backend test-frontend-unit test-frontend-e2e-core test-frontend-e2e-atomic test-frontend-e2e-legacy test-full test-full-strict
 
 # Default target
 help:
@@ -11,6 +11,8 @@ help:
 	@echo "  make clean       - Remove containers and volumes"
 	@echo "  make install     - Install dependencies locally"
 	@echo "  make test        - Run tests"
+	@echo "  make test-full   - Run full backend + E2E flow suites (core + atomic + legacy)"
+	@echo "  make test-full-strict - test-full + frontend unit tests"
 	@echo "  make db-seed     - Seed database with initial data"
 	@echo "  make download-models - Download AI models"
 	@echo ""
@@ -63,10 +65,35 @@ run-frontend:
 
 # Tests
 test:
-	cd backend && pytest
+	$(MAKE) test-backend
 
 test-cov:
 	cd backend && pytest --cov=. --cov-report=html
+
+test-backend:
+	UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest backend/tests
+
+test-frontend-unit:
+	cd frontend && npm run test:run
+
+test-frontend-e2e-core:
+	cd frontend && npm run test:e2e
+
+test-frontend-e2e-atomic:
+	cd frontend && npm run test:e2e:atomic
+
+test-frontend-e2e-legacy:
+	cd frontend && npm run test:e2e:legacy
+
+test-full:
+	$(MAKE) test-backend
+	$(MAKE) test-frontend-e2e-core
+	$(MAKE) test-frontend-e2e-atomic
+	$(MAKE) test-frontend-e2e-legacy
+
+test-full-strict:
+	$(MAKE) test-full
+	$(MAKE) test-frontend-unit
 
 # Database
 db-seed:

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { useAuthStore } from "../store/useAuthStore";
-import { categoriesApi } from "../services/api";
+import { categoriesApi, isAbortRequestError } from "../services/api";
 
 export interface UseCategoriesReturn {
   isLoading: boolean;
@@ -13,44 +13,55 @@ export interface UseCategoriesReturn {
  * Hook for fetching and managing categories data.
  * Stores categories in the global app store.
  *
- * Handles React Strict Mode double-mount by using a ref to track
- * if a fetch is already in progress.
+ * Handles React Strict Mode and visibility refetches by canceling stale requests.
  */
 export function useCategories(): UseCategoriesReturn {
-  const { categories, setCategories, categoriesFetchedAt } = useAppStore();
+  const { setCategories, categoriesFetchedAt } = useAppStore();
   const { isAuthenticated } = useAuthStore();
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Track if fetch is in progress to prevent double-fetches in Strict Mode
-  const isFetchingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const fetchCategories = useCallback(async () => {
-    // Prevent concurrent fetches
-    if (isFetchingRef.current) {
-      return;
+    // Cancel any in-flight request before starting a new one.
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
     }
 
-    isFetchingRef.current = true;
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     setIsLoading(true);
     setError(null);
 
     try {
-      const data = await categoriesApi.getAll();
-      setCategories(data);
+      const data = await categoriesApi.getAll(abortController.signal);
+      if (!abortController.signal.aborted) {
+        setCategories(data);
+      }
     } catch (err) {
       // Ignore abort errors
-      if (err instanceof Error && err.name === "AbortError") {
+      if (isAbortRequestError(err)) {
         return;
       }
+
       const errorMessage =
-        err instanceof Error ? err.message : "Failed to fetch categories";
-      setError(errorMessage);
-      console.error("Failed to fetch categories:", err);
+        err instanceof Error
+          ? err.message === "Network Error"
+            ? "Network error. Please check your connection and try again."
+            : err.message
+          : "Failed to fetch categories";
+      if (!abortController.signal.aborted) {
+        setError(errorMessage);
+        console.error("Failed to fetch categories:", err);
+      }
     } finally {
-      setIsLoading(false);
-      isFetchingRef.current = false;
+      // Ignore stale completion from older aborted request.
+      if (abortControllerRef.current === abortController) {
+        setIsLoading(false);
+      }
     }
   }, [setCategories]);
 
@@ -61,14 +72,15 @@ export function useCategories(): UseCategoriesReturn {
       return;
     }
 
-    // Check if we need to fetch
+    // Check if we need to fetch. Note: an empty categories list can be a valid,
+    // stable state (e.g. brand-new user). Do not refetch just because length===0.
     const isStale = !categoriesFetchedAt || Date.now() - categoriesFetchedAt > 30000;
-    const needsFetch = categories.length === 0 || isStale;
+    const needsFetch = !categoriesFetchedAt || isStale;
 
     if (needsFetch) {
-      fetchCategories();
+      void fetchCategories();
     }
-  }, [categories.length, categoriesFetchedAt, fetchCategories, isAuthenticated]);
+  }, [categoriesFetchedAt, fetchCategories, isAuthenticated]);
 
   // Refetch when tab becomes visible and data is stale
   useEffect(() => {
@@ -77,13 +89,24 @@ export function useCategories(): UseCategoriesReturn {
 
       const isStale = !categoriesFetchedAt || Date.now() - categoriesFetchedAt > 30000;
       if (document.visibilityState === "visible" && isStale) {
-        fetchCategories();
+        void fetchCategories();
       }
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const handleOnline = () => {
+      if (!isAuthenticated) return;
+      void fetchCategories();
+    };
+    window.addEventListener("online", handleOnline);
+
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleOnline);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
   }, [categoriesFetchedAt, fetchCategories, isAuthenticated]);
 

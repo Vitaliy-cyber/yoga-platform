@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 import sys
 import uuid
+from typing import Optional
 
 import config
 from db.database import AsyncSessionLocal, get_db
@@ -16,15 +18,20 @@ from fastapi import (
     UploadFile,
     status,
 )
-from typing import Optional
 from models.generation_task import GenerationTask
 from models.user import User
 from schemas.generate import AnalyzedMuscleResponse, GenerateResponse, GenerateStatus
+from schemas.validators import ensure_utf8_encodable
 from services.auth import get_current_user
+from services.error_sanitizer import sanitize_public_error_message
+from services.image_validation import (
+    normalize_image_mime_type,
+    validate_uploaded_image_payload,
+)
 from services.storage import S3Storage, get_storage
 from services.websocket_manager import ProgressUpdate, get_connection_manager
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -32,73 +39,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/generate", tags=["generate"])
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
-
-# Image magic bytes for content validation
-# These are the first bytes that identify the actual file type
-IMAGE_MAGIC_BYTES = {
-    "image/jpeg": [
-        b"\xff\xd8\xff",  # JPEG/JFIF/EXIF
-    ],
-    "image/png": [
-        b"\x89PNG\r\n\x1a\n",  # PNG
-    ],
-    "image/webp": [
-        b"RIFF",  # WebP (RIFF container, need additional check)
-    ],
-}
-
-
-def validate_image_magic_bytes(content: bytes, claimed_mime_type: str) -> bool:
-    """
-    Validate that file content matches the claimed MIME type by checking magic bytes.
-
-    This prevents attacks where malicious files are uploaded with fake extensions.
-    Returns True if validation passes, raises HTTPException if it fails.
-    """
-    if len(content) < 12:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File too small to be a valid image",
-        )
-
-    # Normalize MIME type
-    mime_type = claimed_mime_type.lower()
-    if mime_type == "image/jpg":
-        mime_type = "image/jpeg"
-
-    # JPEG check
-    if mime_type == "image/jpeg":
-        if not content.startswith(b"\xff\xd8\xff"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File content does not match JPEG format. Upload a real JPEG image.",
-            )
-        return True
-
-    # PNG check
-    if mime_type == "image/png":
-        if not content.startswith(b"\x89PNG\r\n\x1a\n"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File content does not match PNG format. Upload a real PNG image.",
-            )
-        return True
-
-    # WebP check - RIFF container with WEBP identifier
-    if mime_type == "image/webp":
-        if not (content[:4] == b"RIFF" and content[8:12] == b"WEBP"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File content does not match WebP format. Upload a real WebP image.",
-            )
-        return True
-
-    # Unknown type - reject
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Unsupported image type: {claimed_mime_type}",
-    )
-
 
 def create_task_id() -> str:
     """Create unique task ID using UUID4."""
@@ -190,18 +130,26 @@ async def update_task_progress(task_id: str, progress: int, message: str) -> boo
 
             # Broadcast progress via WebSocket
             manager = get_connection_manager()
-            await manager.broadcast_progress(ProgressUpdate(
-                task_id=task_id,
-                status=task.status,
-                progress=progress,
-                status_message=message,
-            ))
+            await manager.broadcast_progress(
+                ProgressUpdate(
+                    task_id=task_id,
+                    status=task.status,
+                    progress=progress,
+                    status_message=message,
+                )
+            )
 
             return True
         return False
 
 
-async def run_generation(task_id: str, image_bytes: bytes, mime_type: str, additional_notes: Optional[str] = None):
+async def run_generation(
+    task_id: str,
+    image_bytes: bytes,
+    mime_type: str,
+    additional_notes: Optional[str] = None,
+    pose_description: Optional[str] = None,
+):
     """
     Run generation using Google Gemini API.
 
@@ -226,12 +174,14 @@ async def run_generation(task_id: str, image_bytes: bytes, mime_type: str, addit
 
             # Broadcast initial processing status via WebSocket
             manager = get_connection_manager()
-            await manager.broadcast_progress(ProgressUpdate(
-                task_id=task_id,
-                status=GenerateStatus.PROCESSING.value,
-                progress=0,
-                status_message="Initializing...",
-            ))
+            await manager.broadcast_progress(
+                ProgressUpdate(
+                    task_id=task_id,
+                    status=GenerateStatus.PROCESSING.value,
+                    progress=0,
+                    status_message="Initializing...",
+                )
+            )
 
             storage = get_storage()
 
@@ -242,44 +192,132 @@ async def run_generation(task_id: str, image_bytes: bytes, mime_type: str, addit
                 await db.commit()
 
                 # Broadcast progress via WebSocket
-                await manager.broadcast_progress(ProgressUpdate(
+                await manager.broadcast_progress(
+                    ProgressUpdate(
+                        task_id=task_id,
+                        status=GenerateStatus.PROCESSING.value,
+                        progress=progress,
+                        status_message=status_message,
+                    )
+                )
+
+            async def fast_placeholder_generation():
+                import binascii
+                import json
+                import struct
+                import zlib
+
+                async def progress(p: int, msg: str):
+                    await progress_callback(p, msg)
+
+                def _png_1x1_rgb(r: int, g: int, b: int) -> bytes:
+                    """
+                    Create a minimal valid 1x1 RGB PNG.
+
+                    Must be *structurally valid* so downstream consumers (ReportLab/PIL)
+                    never crash on corrupted placeholders.
+                    """
+                    signature = b"\x89PNG\r\n\x1a\n"
+                    ihdr_data = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)  # RGB
+                    ihdr = (
+                        struct.pack(">I", len(ihdr_data))
+                        + b"IHDR"
+                        + ihdr_data
+                        + struct.pack(
+                            ">I", binascii.crc32(b"IHDR" + ihdr_data) & 0xFFFFFFFF
+                        )
+                    )
+                    raw = bytes([0, r & 0xFF, g & 0xFF, b & 0xFF])  # filter 0 + RGB
+                    compressed = zlib.compress(raw)
+                    idat = (
+                        struct.pack(">I", len(compressed))
+                        + b"IDAT"
+                        + compressed
+                        + struct.pack(
+                            ">I", binascii.crc32(b"IDAT" + compressed) & 0xFFFFFFFF
+                        )
+                    )
+                    iend = (
+                        struct.pack(">I", 0)
+                        + b"IEND"
+                        + struct.pack(">I", binascii.crc32(b"IEND") & 0xFFFFFFFF)
+                    )
+                    return signature + ihdr + idat + iend
+
+                await progress(5, "Analyzing pose...")
+                # Create small deterministic placeholder images without heavy dependencies.
+                # Large in-memory images under high concurrency can OOM-kill the dev server,
+                # which breaks atomic suites with connection refusals.
+                photo_png = _png_1x1_rgb(255, 255, 255)
+                muscles_png = _png_1x1_rgb(255, 80, 80)
+
+                # Keep names aligned with seeded muscles
+                analyzed = [
+                    {"name": "quadriceps", "activation_level": 85},
+                    {"name": "gluteus_maximus", "activation_level": 70},
+                    {"name": "hamstrings", "activation_level": 45},
+                ]
+
+                await progress(25, "Generating studio photo...")
+                await progress(55, "Generating muscle visualization...")
+                await progress(85, "Analyzing active muscles...")
+                await progress(100, "Completed!")
+
+                return photo_png, muscles_png, True, json.dumps(analyzed)
+
+            if os.getenv("E2E_FAST_AI") == "1":
+                (
+                    photo_bytes,
+                    muscles_bytes,
+                    used_placeholders,
+                    analyzed_json,
+                ) = await fast_placeholder_generation()
+                result_gen = None
+            else:
+                from services.google_generator import GoogleGeminiGenerator
+
+                generator = GoogleGeminiGenerator.get_instance()
+
+                result_gen = await generator.generate_all_from_image(
+                    image_bytes=image_bytes,
+                    mime_type=mime_type,
                     task_id=task_id,
-                    status=GenerateStatus.PROCESSING.value,
-                    progress=progress,
-                    status_message=status_message,
-                ))
+                    progress_callback=progress_callback,
+                    additional_notes=additional_notes,
+                    pose_description=pose_description,
+                )
+                photo_bytes = result_gen.photo_bytes
+                muscles_bytes = result_gen.muscles_bytes
+                used_placeholders = result_gen.used_placeholders
+                if used_placeholders:
+                    raise RuntimeError(
+                        "Generation returned placeholders instead of real AI output."
+                    )
+                analyzed_json = None
+                if result_gen.analyzed_muscles:
+                    import json
 
-            from services.google_generator import GoogleGeminiGenerator
-
-            generator = GoogleGeminiGenerator.get_instance()
-
-            result_gen = await generator.generate_all_from_image(
-                image_bytes=image_bytes,
-                mime_type=mime_type,
-                task_id=task_id,
-                progress_callback=progress_callback,
-                additional_notes=additional_notes,
-            )
+                    analyzed_json = json.dumps(
+                        [
+                            {"name": m.name, "activation_level": m.activation_level}
+                            for m in result_gen.analyzed_muscles
+                        ]
+                    )
 
             photo_key = f"generated/{task_id}_photo.png"
             muscles_key = f"generated/{task_id}_muscles.png"
 
             task.photo_url = await storage.upload_bytes(
-                result_gen.photo_bytes, photo_key, "image/png"
+                photo_bytes, photo_key, "image/png"
             )
             task.muscles_url = await storage.upload_bytes(
-                result_gen.muscles_bytes, muscles_key, "image/png"
+                muscles_bytes, muscles_key, "image/png"
             )
-            task.quota_warning = result_gen.used_placeholders
+            task.quota_warning = used_placeholders
 
-            # Save analyzed muscles as JSON
-            if result_gen.analyzed_muscles:
-                import json
-                muscles_data = [
-                    {"name": m.name, "activation_level": m.activation_level}
-                    for m in result_gen.analyzed_muscles
-                ]
-                task.analyzed_muscles_json = json.dumps(muscles_data)
+            # Save analyzed muscles as JSON (if available)
+            if analyzed_json:
+                task.analyzed_muscles_json = analyzed_json
 
             task.status = GenerateStatus.COMPLETED.value
             task.progress = 100
@@ -288,28 +326,35 @@ async def run_generation(task_id: str, image_bytes: bytes, mime_type: str, addit
 
             # Parse analyzed muscles for WebSocket broadcast
             analyzed_muscles_for_ws = None
-            if result_gen.analyzed_muscles:
-                analyzed_muscles_for_ws = [
-                    {"name": m.name, "activation_level": m.activation_level}
-                    for m in result_gen.analyzed_muscles
-                ]
+            if analyzed_json:
+                import json
+
+                try:
+                    analyzed_muscles_for_ws = json.loads(analyzed_json)
+                except Exception:
+                    analyzed_muscles_for_ws = None
 
             # Broadcast completion via WebSocket
-            await manager.broadcast_progress(ProgressUpdate(
-                task_id=task_id,
-                status=GenerateStatus.COMPLETED.value,
-                progress=100,
-                status_message="Completed!",
-                photo_url=task.photo_url,
-                muscles_url=task.muscles_url,
-                quota_warning=task.quota_warning or False,
-                analyzed_muscles=analyzed_muscles_for_ws,
-            ))
+            await manager.broadcast_progress(
+                ProgressUpdate(
+                    task_id=task_id,
+                    status=GenerateStatus.COMPLETED.value,
+                    progress=100,
+                    status_message="Completed!",
+                    photo_url=task.photo_url,
+                    muscles_url=task.muscles_url,
+                    quota_warning=task.quota_warning or False,
+                    analyzed_muscles=analyzed_muscles_for_ws,
+                )
+            )
 
         except Exception as e:
-            import traceback
-
-            traceback.print_exc()
+            logger.exception("Generation failed (task_id=%s)", task_id)
+            public_error = (
+                sanitize_public_error_message(str(e), fallback="Generation failed")
+                or "Generation failed"
+            )
+            failure_status_message = "Generation failed"
 
             # Re-fetch task in case session was invalidated
             result = await db.execute(
@@ -318,19 +363,21 @@ async def run_generation(task_id: str, image_bytes: bytes, mime_type: str, addit
             task = result.scalar_one_or_none()
             if task:
                 task.status = GenerateStatus.FAILED.value
-                task.error_message = str(e)
-                task.status_message = "Generation failed"
+                task.error_message = public_error
+                task.status_message = failure_status_message
                 await db.commit()
 
                 # Broadcast failure via WebSocket
                 manager = get_connection_manager()
-                await manager.broadcast_progress(ProgressUpdate(
-                    task_id=task_id,
-                    status=GenerateStatus.FAILED.value,
-                    progress=task.progress,
-                    status_message="Generation failed",
-                    error_message=str(e),
-                ))
+                await manager.broadcast_progress(
+                    ProgressUpdate(
+                        task_id=task_id,
+                        status=GenerateStatus.FAILED.value,
+                        progress=task.progress,
+                        status_message=failure_status_message,
+                        error_message=public_error,
+                    )
+                )
 
 
 @router.post("", response_model=GenerateResponse)
@@ -339,7 +386,9 @@ async def generate(
     schema_file: UploadFile = File(
         ..., description="Schema image file (PNG, JPG, WEBP)"
     ),
-    additional_notes: Optional[str] = Form(None, description="Additional instructions for AI generation"),
+    additional_notes: Optional[str] = Form(
+        None, description="Additional instructions for AI generation"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -350,9 +399,12 @@ async def generate(
 
     Accepts: PNG, JPG, WEBP images up to 10MB
     """
-    # Validate file type
-    allowed_types = ["image/png", "image/jpeg", "image/webp", "image/jpg"]
-    if schema_file.content_type not in allowed_types:
+    claimed_mime_type = normalize_image_mime_type(schema_file.content_type or "")
+    if (
+        claimed_mime_type
+        and claimed_mime_type != "application/octet-stream"
+        and not claimed_mime_type.startswith("image/")
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid file type. Allowed: PNG, JPG, WEBP",
@@ -369,10 +421,11 @@ async def generate(
     # Read uploaded file into memory
     try:
         content = await schema_file.read()
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to read uploaded schema file")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to read file: {str(e)}",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to read uploaded file",
         )
 
     # Check for empty file upload
@@ -388,11 +441,33 @@ async def generate(
             detail="File too large. Max size is 10MB",
         )
 
-    mime_type = schema_file.content_type or "image/png"
+    image_info = validate_uploaded_image_payload(
+        content,
+        claimed_mime_type=claimed_mime_type or None,
+    )
+    mime_type = image_info.mime_type
 
-    # Validate magic bytes match claimed MIME type (skip in tests)
-    if "pytest" not in sys.modules:
-        validate_image_magic_bytes(content, mime_type)
+    # Normalize user-provided additional notes:
+    # - Trim whitespace
+    # - Convert empty -> None
+    # - Reject invalid Unicode (e.g., unpaired surrogates) to avoid 500s on DB/JSON encoding
+    if additional_notes is not None and isinstance(additional_notes, str):
+        normalized = additional_notes.strip()
+        if normalized:
+            if len(normalized) > 500:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Additional notes too long (max 500 characters)",
+                )
+            try:
+                additional_notes = ensure_utf8_encodable(normalized)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=str(e),
+                )
+        else:
+            additional_notes = None
 
     # Create task in database with retry on UUID collision
     task = await create_generation_task_with_retry(
@@ -404,8 +479,9 @@ async def generate(
 
     # Start background generation (skip during tests to avoid background DB access)
     if "pytest" not in sys.modules:
-        if "pytest" not in sys.modules:
-            background_tasks.add_task(run_generation, task.task_id, content, mime_type, additional_notes)
+        background_tasks.add_task(
+            run_generation, task.task_id, content, mime_type, additional_notes
+        )
 
     return GenerateResponse(
         task_id=task.task_id,
@@ -415,34 +491,81 @@ async def generate(
     )
 
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
 
 class GenerateFromPoseRequest(BaseModel):
-    additional_notes: Optional[str] = None
+    additional_notes: Optional[str] = Field(
+        None, max_length=500, description="Additional instructions for AI generation"
+    )
+
+    @field_validator("additional_notes", mode="before")
+    @classmethod
+    def normalize_additional_notes(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
+        return value
 
 
 class GenerateFromTextRequest(BaseModel):
-    description: str = Field(..., min_length=10, max_length=2000, description="Detailed pose description")
-    additional_notes: Optional[str] = Field(None, max_length=500, description="Additional instructions for AI generation")
+    description: str = Field(
+        ..., min_length=10, max_length=2000, description="Detailed pose description"
+    )
+    additional_notes: Optional[str] = Field(
+        None, max_length=500, description="Additional instructions for AI generation"
+    )
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_description(cls, value: str) -> str:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return ensure_utf8_encodable(normalized)
+        return value
+
+    @field_validator("additional_notes", mode="before")
+    @classmethod
+    def normalize_additional_notes(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
+        return value
 
 
 class SaveToGalleryRequest(BaseModel):
     """Request to save generation results as a new pose in gallery."""
+
     task_id: str = Field(..., description="Generation task ID")
     name: str = Field(..., min_length=1, max_length=200, description="Pose name")
-    code: str = Field(..., min_length=1, max_length=20, description="Pose code (unique)")
+    code: str = Field(
+        ..., min_length=1, max_length=20, description="Pose code (unique)"
+    )
     name_en: Optional[str] = Field(None, max_length=200, description="English name")
     category_id: Optional[int] = Field(None, description="Category ID")
-    description: Optional[str] = Field(None, max_length=2000, description="Pose description")
+    description: Optional[str] = Field(
+        None, max_length=2000, description="Pose description"
+    )
 
 
 class SaveToGalleryResponse(BaseModel):
     """Response after saving to gallery."""
+
     pose_id: int
     message: str
 
 
-async def run_generation_from_text(task_id: str, description: str, additional_notes: Optional[str] = None):
+async def run_generation_from_text(
+    task_id: str, description: str, additional_notes: Optional[str] = None
+):
     """
     Run generation using Google Gemini API from text description.
 
@@ -467,12 +590,14 @@ async def run_generation_from_text(task_id: str, description: str, additional_no
 
             # Broadcast initial processing status via WebSocket
             manager = get_connection_manager()
-            await manager.broadcast_progress(ProgressUpdate(
-                task_id=task_id,
-                status=GenerateStatus.PROCESSING.value,
-                progress=0,
-                status_message="Initializing...",
-            ))
+            await manager.broadcast_progress(
+                ProgressUpdate(
+                    task_id=task_id,
+                    status=GenerateStatus.PROCESSING.value,
+                    progress=0,
+                    status_message="Initializing...",
+                )
+            )
 
             storage = get_storage()
 
@@ -483,47 +608,86 @@ async def run_generation_from_text(task_id: str, description: str, additional_no
                 await db.commit()
 
                 # Broadcast progress via WebSocket
-                await manager.broadcast_progress(ProgressUpdate(
+                await manager.broadcast_progress(
+                    ProgressUpdate(
+                        task_id=task_id,
+                        status=GenerateStatus.PROCESSING.value,
+                        progress=progress,
+                        status_message=status_message,
+                    )
+                )
+
+            if os.getenv("E2E_FAST_AI") == "1":
+                import json
+                from io import BytesIO
+
+                from PIL import Image, ImageDraw
+
+                await progress_callback(5, "Starting generation...")
+                photo = Image.new("RGB", (1024, 1024), color=(245, 238, 230))
+                ImageDraw.Draw(photo).text(
+                    (32, 32), "E2E FAST AI PHOTO (TEXT)", fill=(30, 30, 30)
+                )
+                muscles = Image.new("RGB", (1024, 1024), color=(230, 245, 238))
+                ImageDraw.Draw(muscles).text(
+                    (32, 32), "E2E FAST AI MUSCLES (TEXT)", fill=(30, 30, 30)
+                )
+                b1 = BytesIO()
+                b2 = BytesIO()
+                photo.save(b1, format="PNG")
+                muscles.save(b2, format="PNG")
+                await progress_callback(100, "Completed!")
+
+                photo_bytes = b1.getvalue()
+                muscles_bytes = b2.getvalue()
+                used_placeholders = True
+                analyzed_json = json.dumps(
+                    [
+                        {"name": "rectus_abdominis", "activation_level": 75},
+                        {"name": "obliques", "activation_level": 55},
+                    ]
+                )
+            else:
+                from services.google_generator import GoogleGeminiGenerator
+
+                generator = GoogleGeminiGenerator.get_instance()
+                result_gen = await generator.generate_all(
+                    pose_description=description,
                     task_id=task_id,
-                    status=GenerateStatus.PROCESSING.value,
-                    progress=progress,
-                    status_message=status_message,
-                ))
+                    progress_callback=progress_callback,
+                    additional_notes=additional_notes,
+                )
+                photo_bytes = result_gen.photo_bytes
+                muscles_bytes = result_gen.muscles_bytes
+                used_placeholders = result_gen.used_placeholders
+                if used_placeholders:
+                    raise RuntimeError(
+                        "Generation returned placeholders instead of real AI output."
+                    )
+                analyzed_json = None
+                if result_gen.analyzed_muscles:
+                    import json
 
-            from services.google_generator import GoogleGeminiGenerator
-
-            generator = GoogleGeminiGenerator.get_instance()
-
-            # Combine description with additional notes if provided
-            full_description = description
-            if additional_notes:
-                full_description = f"{description}\n\nAdditional instructions: {additional_notes}"
-
-            result_gen = await generator.generate_all(
-                pose_description=full_description,
-                task_id=task_id,
-                progress_callback=progress_callback,
-            )
+                    analyzed_json = json.dumps(
+                        [
+                            {"name": m.name, "activation_level": m.activation_level}
+                            for m in result_gen.analyzed_muscles
+                        ]
+                    )
 
             photo_key = f"generated/{task_id}_photo.png"
             muscles_key = f"generated/{task_id}_muscles.png"
 
             task.photo_url = await storage.upload_bytes(
-                result_gen.photo_bytes, photo_key, "image/png"
+                photo_bytes, photo_key, "image/png"
             )
             task.muscles_url = await storage.upload_bytes(
-                result_gen.muscles_bytes, muscles_key, "image/png"
+                muscles_bytes, muscles_key, "image/png"
             )
-            task.quota_warning = result_gen.used_placeholders
+            task.quota_warning = used_placeholders
 
-            # Save analyzed muscles as JSON
-            if result_gen.analyzed_muscles:
-                import json
-                muscles_data = [
-                    {"name": m.name, "activation_level": m.activation_level}
-                    for m in result_gen.analyzed_muscles
-                ]
-                task.analyzed_muscles_json = json.dumps(muscles_data)
+            if analyzed_json:
+                task.analyzed_muscles_json = analyzed_json
 
             task.status = GenerateStatus.COMPLETED.value
             task.progress = 100
@@ -532,28 +696,34 @@ async def run_generation_from_text(task_id: str, description: str, additional_no
 
             # Parse analyzed muscles for WebSocket broadcast
             analyzed_muscles_for_ws = None
-            if result_gen.analyzed_muscles:
-                analyzed_muscles_for_ws = [
-                    {"name": m.name, "activation_level": m.activation_level}
-                    for m in result_gen.analyzed_muscles
-                ]
+            if analyzed_json:
+                import json
+
+                try:
+                    analyzed_muscles_for_ws = json.loads(analyzed_json)
+                except Exception:
+                    analyzed_muscles_for_ws = None
 
             # Broadcast completion via WebSocket
-            await manager.broadcast_progress(ProgressUpdate(
-                task_id=task_id,
-                status=GenerateStatus.COMPLETED.value,
-                progress=100,
-                status_message="Completed!",
-                photo_url=task.photo_url,
-                muscles_url=task.muscles_url,
-                quota_warning=task.quota_warning or False,
-                analyzed_muscles=analyzed_muscles_for_ws,
-            ))
+            await manager.broadcast_progress(
+                ProgressUpdate(
+                    task_id=task_id,
+                    status=GenerateStatus.COMPLETED.value,
+                    progress=100,
+                    status_message="Completed!",
+                    photo_url=task.photo_url,
+                    muscles_url=task.muscles_url,
+                    quota_warning=task.quota_warning or False,
+                    analyzed_muscles=analyzed_muscles_for_ws,
+                )
+            )
 
         except Exception as e:
-            import traceback
-
-            traceback.print_exc()
+            logger.exception("Generation failed (task_id=%s)", task_id)
+            public_error = (
+                sanitize_public_error_message(str(e), fallback="Generation failed")
+                or "Generation failed"
+            )
 
             # Re-fetch task in case session was invalidated
             result = await db.execute(
@@ -562,19 +732,21 @@ async def run_generation_from_text(task_id: str, description: str, additional_no
             task = result.scalar_one_or_none()
             if task:
                 task.status = GenerateStatus.FAILED.value
-                task.error_message = str(e)
+                task.error_message = public_error
                 task.status_message = "Generation failed"
                 await db.commit()
 
                 # Broadcast failure via WebSocket
                 manager = get_connection_manager()
-                await manager.broadcast_progress(ProgressUpdate(
-                    task_id=task_id,
-                    status=GenerateStatus.FAILED.value,
-                    progress=task.progress,
-                    status_message="Generation failed",
-                    error_message=str(e),
-                ))
+                await manager.broadcast_progress(
+                    ProgressUpdate(
+                        task_id=task_id,
+                        status=GenerateStatus.FAILED.value,
+                        progress=task.progress,
+                        status_message="Generation failed",
+                        error_message=public_error,
+                    )
+                )
 
 
 @router.post("/from-text", response_model=GenerateResponse)
@@ -670,10 +842,20 @@ async def generate_from_pose(
     storage = get_storage()
     try:
         image_bytes = await storage.download_bytes(pose.schema_path)
-    except Exception as e:
+    except FileNotFoundError:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch schema image: {str(e)}",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Schema image not found",
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid schema image path",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to fetch schema image",
         )
 
     # Check for empty or corrupted file
@@ -689,14 +871,13 @@ async def generate_from_pose(
             detail="Schema image too large. Max size is 10MB",
         )
 
-    # Determine mime type from file extension
-    mime_type = "image/png"
-    if pose.schema_path.lower().endswith(".jpg") or pose.schema_path.lower().endswith(
-        ".jpeg"
-    ):
-        mime_type = "image/jpeg"
-    elif pose.schema_path.lower().endswith(".webp"):
-        mime_type = "image/webp"
+    image_info = validate_uploaded_image_payload(image_bytes, claimed_mime_type=None)
+    mime_type = image_info.mime_type
+    pose_description = " ".join(
+        part.strip()
+        for part in [pose.name or "", pose.description or ""]
+        if part and part.strip()
+    ) or None
 
     # Create task with retry on UUID collision
     task = await create_generation_task_with_retry(
@@ -708,7 +889,14 @@ async def generate_from_pose(
 
     # Start background generation
     if "pytest" not in sys.modules:
-        background_tasks.add_task(run_generation, task.task_id, image_bytes, mime_type, additional_notes)
+        background_tasks.add_task(
+            run_generation,
+            task.task_id,
+            image_bytes,
+            mime_type,
+            additional_notes,
+            pose_description,
+        )
 
     return GenerateResponse(
         task_id=task.task_id,
@@ -744,21 +932,57 @@ async def get_status(
     analyzed_muscles = None
     if task.analyzed_muscles_json:
         import json
+
         try:
+            def _clamp_activation_level(raw: object) -> int:
+                try:
+                    level_int = int(raw)  # type: ignore[arg-type]
+                except Exception:
+                    return 50
+                if level_int < 0:
+                    return 0
+                if level_int > 100:
+                    return 100
+                return level_int
+
             muscles_data = json.loads(task.analyzed_muscles_json)
-            analyzed_muscles = [
-                AnalyzedMuscleResponse(name=m["name"], activation_level=m["activation_level"])
-                for m in muscles_data
-            ]
-        except (json.JSONDecodeError, KeyError):
-            pass
+            if isinstance(muscles_data, list):
+                out: list[AnalyzedMuscleResponse] = []
+                for m in muscles_data:
+                    if not isinstance(m, dict):
+                        continue
+                    name = m.get("name")
+                    if not isinstance(name, str):
+                        continue
+                    level = _clamp_activation_level(m.get("activation_level", 50))
+                    out.append(AnalyzedMuscleResponse(name=name, activation_level=level))
+                analyzed_muscles = out or None
+        except Exception:
+            analyzed_muscles = None
+
+    try:
+        status_enum = GenerateStatus(task.status)
+    except Exception:
+        status_enum = GenerateStatus.FAILED
+
+    progress = task.progress or 0
+    try:
+        progress_int = int(progress)
+    except Exception:
+        progress_int = 0
+    if progress_int < 0:
+        progress_int = 0
+    if progress_int > 100:
+        progress_int = 100
 
     return GenerateResponse(
         task_id=task_id,
-        status=GenerateStatus(task.status),
-        progress=task.progress,
+        status=status_enum,
+        progress=progress_int,
         status_message=task.status_message,
-        error_message=task.error_message,
+        error_message=sanitize_public_error_message(
+            task.error_message, fallback="Generation failed"
+        ),
         photo_url=task.photo_url,
         muscles_url=task.muscles_url,
         quota_warning=task.quota_warning,
@@ -779,9 +1003,10 @@ async def save_to_gallery(
     and associates the analyzed muscles with the pose.
     """
     import json
-    from models.pose import Pose, PoseMuscle
-    from models.muscle import Muscle
+
     from models.category import Category
+    from models.muscle import Muscle
+    from models.pose import Pose, PoseMuscle
     from sqlalchemy import and_, func
 
     # Get the generation task
@@ -861,8 +1086,21 @@ async def save_to_gallery(
 
     # Add analyzed muscles if available
     if task.analyzed_muscles_json:
-        logger.info(f"Processing analyzed muscles for task {request.task_id}: {task.analyzed_muscles_json[:200]}...")
+        logger.info(
+            f"Processing analyzed muscles for task {request.task_id}: {task.analyzed_muscles_json[:200]}..."
+        )
         try:
+            def _clamp_activation_level(raw: object) -> int:
+                try:
+                    level_int = int(raw)  # type: ignore[arg-type]
+                except Exception:
+                    return 50
+                if level_int < 0:
+                    return 0
+                if level_int > 100:
+                    return 100
+                return level_int
+
             muscles_data = json.loads(task.analyzed_muscles_json)
             logger.info(f"Parsed {len(muscles_data)} muscles from JSON")
 
@@ -874,28 +1112,52 @@ async def save_to_gallery(
                 select(Muscle).where(func.lower(Muscle.name).in_(muscle_names))
             )
             muscles_by_name = {m.name.lower(): m for m in result.scalars().all()}
-            logger.info(f"Found {len(muscles_by_name)} muscles in database: {list(muscles_by_name.keys())}")
+            logger.info(
+                f"Found {len(muscles_by_name)} muscles in database: {list(muscles_by_name.keys())}"
+            )
 
             # Create PoseMuscle associations
-            pose_muscles_to_add = [
-                PoseMuscle(
-                    pose_id=pose.id,
-                    muscle_id=muscles_by_name[m["name"].lower()].id,
-                    activation_level=m["activation_level"],
+            pose_muscles_to_add = []
+            for m in muscles_data:
+                name = m.get("name") if isinstance(m, dict) else None
+                if not isinstance(name, str):
+                    continue
+                key = name.lower()
+                muscle = muscles_by_name.get(key)
+                if not muscle:
+                    continue
+                level = _clamp_activation_level(m.get("activation_level", 50))
+                pose_muscles_to_add.append(
+                    PoseMuscle(
+                        pose_id=pose.id,
+                        muscle_id=muscle.id,
+                        activation_level=level,
+                    )
                 )
-                for m in muscles_data
-                if m["name"].lower() in muscles_by_name
-            ]
-            logger.info(f"Creating {len(pose_muscles_to_add)} PoseMuscle associations for pose {pose.id}")
+            logger.info(
+                f"Creating {len(pose_muscles_to_add)} PoseMuscle associations for pose {pose.id}"
+            )
             db.add_all(pose_muscles_to_add)
         except (json.JSONDecodeError, KeyError) as e:
-            logger.warning(f"Failed to parse analyzed muscles for task {request.task_id}: {e}")
+            logger.warning(
+                f"Failed to parse analyzed muscles for task {request.task_id}: {e}"
+            )
         except Exception as e:
-            logger.error(f"Unexpected error creating muscle associations for task {request.task_id}: {e}", exc_info=True)
+            logger.error(
+                f"Unexpected error creating muscle associations for task {request.task_id}: {e}",
+                exc_info=True,
+            )
     else:
         logger.warning(f"No analyzed_muscles_json for task {request.task_id}")
 
-    await db.commit()
+    try:
+        await db.commit()
+    except (IntegrityError, OperationalError):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while saving to gallery. Please retry.",
+        )
 
     return SaveToGalleryResponse(
         pose_id=pose.id,

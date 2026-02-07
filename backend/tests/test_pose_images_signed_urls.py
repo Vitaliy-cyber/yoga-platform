@@ -126,7 +126,8 @@ async def test_get_pose_image_with_bearer_auth(
         )
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("image/jpeg")
+    # Content type is determined from bytes first (sniffed), not file extension.
+    assert response.headers["content-type"].startswith("image/png")
     assert response.headers["cache-control"] == "private, max-age=86400"
     storage.download_bytes.assert_awaited_once_with(pose.schema_path)
 

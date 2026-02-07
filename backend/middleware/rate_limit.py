@@ -12,6 +12,7 @@ SECURITY NOTES:
 import asyncio
 import ipaddress
 import logging
+import os
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -19,11 +20,10 @@ from collections import defaultdict
 from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple
 
+from config import get_settings
 from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
-
-from config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -37,12 +37,12 @@ settings = get_settings()
 # Leaving defaults allows any client on your private network to spoof X-Forwarded-For.
 # Example production config: TRUSTED_PROXIES="10.0.1.5,10.0.1.6" (your load balancer IPs)
 DEFAULT_TRUSTED_PROXIES = [
-    "127.0.0.0/8",      # Loopback
-    "10.0.0.0/8",       # Private Class A
-    "172.16.0.0/12",    # Private Class B
-    "192.168.0.0/16",   # Private Class C
-    "::1/128",          # IPv6 loopback
-    "fc00::/7",         # IPv6 private
+    "127.0.0.0/8",  # Loopback
+    "10.0.0.0/8",  # Private Class A
+    "172.16.0.0/12",  # Private Class B
+    "192.168.0.0/16",  # Private Class C
+    "::1/128",  # IPv6 loopback
+    "fc00::/7",  # IPv6 private
 ]
 
 
@@ -185,6 +185,7 @@ class RedisRateLimiterBackend(RateLimiterBackend):
         if not self._initialized:
             try:
                 import redis.asyncio as redis
+
                 self._redis = redis.from_url(
                     self._redis_url,
                     encoding="utf-8",
@@ -271,7 +272,7 @@ class RateLimiter:
             self._backend = backend
         else:
             # Check for Redis URL in settings
-            redis_url = getattr(settings, 'REDIS_URL', None)
+            redis_url = getattr(settings, "REDIS_URL", None)
             if redis_url:
                 logger.info("Using Redis rate limiter backend")
                 self._backend = RedisRateLimiterBackend(redis_url)
@@ -324,14 +325,17 @@ def _parse_trusted_proxies() -> List[ipaddress.IPv4Network | ipaddress.IPv6Netwo
 
     Returns list of IP networks that are trusted to set X-Forwarded-For headers.
     """
-    trusted_proxies_str = getattr(settings, 'TRUSTED_PROXIES', None)
+    trusted_proxies_str = getattr(settings, "TRUSTED_PROXIES", None)
 
     if trusted_proxies_str:
         # Parse from comma-separated string in config
-        proxy_strings = [p.strip() for p in trusted_proxies_str.split(',') if p.strip()]
+        proxy_strings = [p.strip() for p in trusted_proxies_str.split(",") if p.strip()]
     else:
-        # Use defaults for development
-        proxy_strings = DEFAULT_TRUSTED_PROXIES
+        # SECURITY: Do NOT trust X-Forwarded-* by default.
+        # If TRUSTED_PROXIES is not configured, we treat the direct connection IP
+        # as the client IP and ignore forwarded headers. This prevents spoofing
+        # and aligns behavior with other security-sensitive code paths.
+        proxy_strings = []
 
     networks = []
     for proxy in proxy_strings:
@@ -402,7 +406,7 @@ def get_client_ip(request: Request) -> str:
 
     # Parse X-Forwarded-For: client, proxy1, proxy2, ...
     # We walk from right to left to find the rightmost untrusted IP
-    ips = [ip.strip() for ip in forwarded_for.split(',')]
+    ips = [ip.strip() for ip in forwarded_for.split(",")]
 
     # Walk from right to left (most recent proxy to oldest)
     for ip in reversed(ips):
@@ -452,6 +456,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Disable rate limiting during tests
         if "pytest" in sys.modules:
             return await call_next(request)
+        # Disable rate limiting for Playwright E2E runs (local dev/test mode).
+        # This prevents flaky E2E failures due to middleware-level 429 responses.
+        if os.getenv("E2E_FAST_AI") == "1" or os.getenv("DISABLE_RATE_LIMIT") == "1":
+            return await call_next(request)
 
         # Skip rate limiting for health checks and static files
         path = request.url.path
@@ -479,6 +487,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             max_requests = settings.effective_rate_limit_auth
             window = settings.RATE_LIMIT_WINDOW
             limit_key = f"auth:{client_ip}"
+        elif path.startswith("/api/v1/generate/status/") or path.startswith("/api/generate/status/"):
+            # Status polling is much lighter than image generation itself.
+            # Keep this reasonably permissive so clients can recover if WebSocket is blocked.
+            max_requests = settings.RATE_LIMIT_GLOBAL
+            window = settings.RATE_LIMIT_WINDOW
+            limit_key = f"generate_status:{client_ip}"
         elif path.startswith("/api/v1/generate") or path.startswith("/api/generate"):
             # For generate endpoints, use user-based limiting if authenticated
             # Fall back to IP-based for unauthenticated requests
@@ -496,8 +510,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if not is_allowed:
             logger.warning(
-                f"Rate limit exceeded for {limit_key} "
-                f"(path={path}, ip={client_ip})"
+                f"Rate limit exceeded for {limit_key} (path={path}, ip={client_ip})"
             )
 
             return JSONResponse(
@@ -524,7 +537,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def rate_limit(max_requests: int, window: int = 60, key_func: Optional[Callable] = None):
+def rate_limit(
+    max_requests: int, window: int = 60, key_func: Optional[Callable] = None
+):
     """
     Decorator for endpoint-specific rate limits.
 

@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 
 from db.database import Base
 from sqlalchemy import Column, DateTime, Integer, String
@@ -76,4 +77,4 @@ class User(Base):
         Returns:
             True if the token matches, False otherwise
         """
-        return self.token_hash == hash_user_token(token)
+        return hmac.compare_digest(self.token_hash, hash_user_token(token))

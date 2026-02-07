@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { LucideIcon, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useI18n } from '../../i18n';
+import { fadeSlideUp } from '../../lib/animation-variants';
 
 export interface StatCardProps {
   title: string;
@@ -62,11 +63,13 @@ export const StatCard: React.FC<StatCardProps> = ({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
+      variants={fadeSlideUp}
+      initial="initial"
+      animate="animate"
+      exit="exit"
       transition={{ duration: 0.4, delay: delay * 0.1, ease: 'easeOut' }}
       className={cn(
-        'relative overflow-hidden rounded-2xl p-6 transition-all duration-300 hover:shadow-lg',
+        'relative overflow-hidden rounded-2xl p-6 transition-shadow duration-300 hover:shadow-lg',
         colorStyles[color],
         className
       )}

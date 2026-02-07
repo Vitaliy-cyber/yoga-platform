@@ -59,7 +59,18 @@ def _get_set_cookie_headers(response: Response) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_signed_url_uses_forwarded_proto_and_host_for_public_links():
+async def test_signed_url_uses_forwarded_proto_and_host_for_public_links(monkeypatch):
+    import api.routes.poses as poses_routes
+
+    monkeypatch.setattr(
+        poses_routes.config,
+        "get_settings",
+        lambda: SimpleNamespace(
+            TRUSTED_PROXIES="127.0.0.1/32",
+            APP_MODE=poses_routes.config.AppMode.DEV,
+        ),
+    )
+
     request = _make_request(
         scheme="http",
         host="internal:8000",
@@ -207,6 +218,7 @@ async def test_refresh_sets_refresh_cookie_on_root_path_and_clears_legacy_api_pa
     monkeypatch.setattr(auth_routes, "TokenService", _FakeTokenService)
     monkeypatch.setattr(auth_routes, "AuditService", _FakeAuditService)
     monkeypatch.setattr(auth_service, "decode_token", lambda *_args, **_kwargs: {"sub": "1"})
+    monkeypatch.setattr(auth_routes, "verify_csrf_token", lambda *_args, **_kwargs: True)
 
     user = User.create_with_token("test-auth-token")
     user.id = 1
@@ -221,7 +233,10 @@ async def test_refresh_sets_refresh_cookie_on_root_path_and_clears_legacy_api_pa
         scheme="https",
         host="app.example.com:443",
         path="/api/auth/refresh",
-        headers={"user-agent": "pytest"},
+        headers={
+            "user-agent": "pytest",
+            "x-csrf-token": "csrf-ok",
+        },
     )
     response = Response()
 
@@ -230,4 +245,3 @@ async def test_refresh_sets_refresh_cookie_on_root_path_and_clears_legacy_api_pa
     cookies = _get_set_cookie_headers(response)
     assert any(c.startswith("refresh_token=") and "Path=/api" in c and "Max-Age=0" in c for c in cookies)
     assert any(c.startswith("refresh_token=") and "Path=/" in c and "Max-Age=0" not in c for c in cookies)
-

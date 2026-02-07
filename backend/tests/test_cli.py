@@ -37,19 +37,24 @@ def print_test(name: str, passed: bool, details: str = ""):
     return passed
 
 
-def test_venv_exists() -> bool:
+def report_test(name: str, passed: bool, details: str = "") -> None:
+    """Print test diagnostic without returning a value to pytest."""
+    print_test(name, passed, details)
+
+
+def test_venv_exists() -> None:
     """Тест: venv існує"""
-    return print_test(
+    return report_test(
         "Virtual environment існує",
         VENV_PATH.exists() and VENV_PYTHON.exists(),
         str(VENV_PYTHON) if VENV_PYTHON.exists() else "НЕ ЗНАЙДЕНО"
     )
 
 
-def test_python_packages() -> bool:
+def test_python_packages() -> None:
     """Тест: Python пакети встановлені в venv"""
     if not VENV_PYTHON.exists():
-        return print_test("Python пакети у venv", False, "venv не знайдено")
+        return report_test("Python пакети у venv", False, "venv не знайдено")
 
     packages = [
         "torch",
@@ -72,14 +77,14 @@ def test_python_packages() -> bool:
             missing.append(pkg)
 
     if missing:
-        return print_test("Python пакети у venv", False, f"відсутні: {', '.join(missing)}")
-    return print_test("Python пакети у venv", True, f"{len(packages)} пакетів")
+        return report_test("Python пакети у venv", False, f"відсутні: {', '.join(missing)}")
+    return report_test("Python пакети у venv", True, f"{len(packages)} пакетів")
 
 
-def test_cuda_available() -> bool:
+def test_cuda_available() -> None:
     """Тест: CUDA доступна через venv PyTorch"""
     if not VENV_PYTHON.exists():
-        return print_test("CUDA/GPU", False, "venv не знайдено")
+        return report_test("CUDA/GPU", False, "venv не знайдено")
 
     result = subprocess.run(
         [str(VENV_PYTHON), "-c", """
@@ -97,15 +102,15 @@ else:
 
     output = result.stdout.strip()
     if output.startswith("OK:"):
-        return print_test("CUDA/GPU", True, output[3:])
+        return report_test("CUDA/GPU", True, output[3:])
     else:
-        return print_test("CUDA/GPU", False, "CPU mode - GPU не виявлено")
+        return report_test("CUDA/GPU", False, "CPU mode - GPU не виявлено")
 
 
-def test_pytorch_cuda_version() -> bool:
+def test_pytorch_cuda_version() -> None:
     """Тест: PyTorch має CUDA підтримку (не CPU-only)"""
     if not VENV_PYTHON.exists():
-        return print_test("PyTorch CUDA build", False, "venv не знайдено")
+        return report_test("PyTorch CUDA build", False, "venv не знайдено")
 
     result = subprocess.run(
         [str(VENV_PYTHON), "-c", """
@@ -120,19 +125,19 @@ print(torch.__version__)
     is_cuda = "+cu" in version or "cuda" in version.lower()
 
     if is_cuda:
-        return print_test("PyTorch CUDA build", True, version)
+        return report_test("PyTorch CUDA build", True, version)
     elif "+cpu" in version:
-        return print_test("PyTorch CUDA build", False, f"{version} - CPU-only версія!")
+        return report_test("PyTorch CUDA build", False, f"{version} - CPU-only версія!")
     else:
-        return print_test("PyTorch CUDA build", True, f"{version} - можливо CUDA")
+        return report_test("PyTorch CUDA build", True, f"{version} - можливо CUDA")
 
 
-def test_sd15_model() -> bool:
+def test_sd15_model() -> None:
     """Тест: SD 1.5 модель повністю завантажена (fp16 версії)"""
     sd15_path = MODELS_PATH / "stable-diffusion-v1-5"
 
     if not sd15_path.exists():
-        return print_test("SD 1.5 модель", False, "директорія не існує")
+        return report_test("SD 1.5 модель", False, "директорія не існує")
 
     required_files = [
         "model_index.json",
@@ -161,24 +166,24 @@ def test_sd15_model() -> bool:
 
     if missing_files or missing_patterns:
         all_missing = missing_files + missing_patterns
-        return print_test("SD 1.5 модель", False, f"відсутні: {', '.join(all_missing[:3])}...")
+        return report_test("SD 1.5 модель", False, f"відсутні: {', '.join(all_missing[:3])}...")
 
     # Перевіряємо розмір unet fp16 (має бути > 1.5GB)
     unet_file = sd15_path / "unet" / "diffusion_pytorch_model.fp16.safetensors"
     if unet_file.exists():
         unet_size = unet_file.stat().st_size / (1024**3)
         if unet_size < 1.5:
-            return print_test("SD 1.5 модель", False, f"unet замалий: {unet_size:.1f}GB")
+            return report_test("SD 1.5 модель", False, f"unet замалий: {unet_size:.1f}GB")
 
-    return print_test("SD 1.5 модель", True, "fp16 файли на місці")
+    return report_test("SD 1.5 модель", True, "fp16 файли на місці")
 
 
-def test_controlnet_model() -> bool:
+def test_controlnet_model() -> None:
     """Тест: ControlNet v1.1 модель повністю завантажена (fp16)"""
     cn_path = MODELS_PATH / "control_v11p_sd15_canny"
 
     if not cn_path.exists():
-        return print_test("ControlNet v1.1", False, "директорія не існує")
+        return report_test("ControlNet v1.1", False, "директорія не існує")
 
     required_files = ["config.json"]
     # fp16 версія моделі
@@ -197,19 +202,19 @@ def test_controlnet_model() -> bool:
 
     if missing_files or missing_patterns:
         all_missing = missing_files + missing_patterns
-        return print_test("ControlNet v1.1", False, f"відсутні: {', '.join(all_missing)}")
+        return report_test("ControlNet v1.1", False, f"відсутні: {', '.join(all_missing)}")
 
     # Перевіряємо розмір fp16 (має бути > 600MB)
     model_file = cn_path / "diffusion_pytorch_model.fp16.safetensors"
     if model_file.exists():
         size = model_file.stat().st_size / (1024**3)
         if size < 0.6:
-            return print_test("ControlNet v1.1", False, f"модель замала: {size:.2f}GB")
+            return report_test("ControlNet v1.1", False, f"модель замала: {size:.2f}GB")
 
-    return print_test("ControlNet v1.1", True, "fp16 файл на місці")
+    return report_test("ControlNet v1.1", True, "fp16 файл на місці")
 
 
-def test_no_wrong_model_formats() -> bool:
+def test_no_wrong_model_formats() -> None:
     """Тест: Немає неправильних форматів моделей (Flax, ONNX, OpenVINO)"""
     wrong_patterns = [
         "**/*.msgpack",      # Flax
@@ -229,20 +234,20 @@ def test_no_wrong_model_formats() -> bool:
                 found_wrong.append(m.name)
 
     if found_wrong:
-        return print_test(
+        return report_test(
             "Немає Flax/ONNX/OpenVINO",
             False,
             f"знайдено: {', '.join(found_wrong[:3])}..."
         )
-    return print_test("Немає Flax/ONNX/OpenVINO", True, "тільки PyTorch формат")
+    return report_test("Немає Flax/ONNX/OpenVINO", True, "тільки PyTorch формат")
 
 
-def test_no_unnecessary_large_files() -> bool:
+def test_no_unnecessary_large_files() -> None:
     """Тест: Немає зайвих великих файлів (single-file checkpoints, old formats)"""
     sd15_path = MODELS_PATH / "stable-diffusion-v1-5"
 
     if not sd15_path.exists():
-        return print_test("Немає зайвих файлів", True, "SD 1.5 ще не завантажено")
+        return report_test("Немає зайвих файлів", True, "SD 1.5 ще не завантажено")
 
     # SD 1.5 зазвичай не має fp16 варіантів окремо, але перевіряємо на .ckpt файли
     unnecessary_files = [
@@ -260,40 +265,40 @@ def test_no_unnecessary_large_files() -> bool:
             total_waste += size
 
     if found:
-        return print_test(
+        return report_test(
             "Немає зайвих файлів",
             False,
             f"зайві ~{total_waste:.0f}GB: {', '.join(found[:2])}..."
         )
-    return print_test("Немає зайвих файлів", True, "тільки safetensors формат")
+    return report_test("Немає зайвих файлів", True, "тільки safetensors формат")
 
 
-def test_frontend_dependencies() -> bool:
+def test_frontend_dependencies() -> None:
     """Тест: Frontend залежності встановлені"""
     frontend_path = BASE_PATH / "frontend"
     node_modules = frontend_path / "node_modules"
     package_json = frontend_path / "package.json"
 
     if not package_json.exists():
-        return print_test("Frontend package.json", False, "не знайдено")
+        return report_test("Frontend package.json", False, "не знайдено")
 
     if not node_modules.exists():
-        return print_test("Frontend node_modules", False, "npm install не виконано")
+        return report_test("Frontend node_modules", False, "npm install не виконано")
 
     # Перевіряємо кількість пакетів
     pkg_count = len(list(node_modules.iterdir()))
     if pkg_count < 10:
-        return print_test("Frontend node_modules", False, f"тільки {pkg_count} пакетів")
+        return report_test("Frontend node_modules", False, f"тільки {pkg_count} пакетів")
 
-    return print_test("Frontend node_modules", True, f"{pkg_count} пакетів")
+    return report_test("Frontend node_modules", True, f"{pkg_count} пакетів")
 
 
-def test_api_service_file() -> bool:
+def test_api_service_file() -> None:
     """Тест: API service файл не має помилок з Content-Type"""
     api_file = BASE_PATH / "frontend" / "src" / "services" / "api.ts"
 
     if not api_file.exists():
-        return print_test("Frontend api.ts", False, "файл не знайдено")
+        return report_test("Frontend api.ts", False, "файл не знайдено")
 
     content = api_file.read_text()
 
@@ -312,19 +317,19 @@ def test_api_service_file() -> bool:
             in_formdata_block = False
 
     if bad_patterns:
-        return print_test(
+        return report_test(
             "API FormData Content-Type",
             False,
             f"ручний Content-Type в {', '.join(bad_patterns)}"
         )
 
-    return print_test("API FormData Content-Type", True, "коректно")
+    return report_test("API FormData Content-Type", True, "коректно")
 
 
-def test_cli_imports() -> bool:
+def test_cli_imports() -> None:
     """Тест: CLI імпортується без помилок"""
     if not VENV_PYTHON.exists():
-        return print_test("CLI імпорт", False, "venv не знайдено")
+        return report_test("CLI імпорт", False, "venv не знайдено")
 
     result = subprocess.run(
         [str(VENV_PYTHON), "-c", """
@@ -340,15 +345,15 @@ print("OK")
 
     if result.returncode != 0:
         error = result.stderr.strip().split('\n')[-1] if result.stderr else "unknown"
-        return print_test("CLI імпорт", False, error[:50])
+        return report_test("CLI імпорт", False, error[:50])
 
-    return print_test("CLI імпорт", True)
+    return report_test("CLI імпорт", True)
 
 
-def test_dependency_checker() -> bool:
+def test_dependency_checker() -> None:
     """Тест: DependencyChecker працює коректно"""
     if not VENV_PYTHON.exists():
-        return print_test("DependencyChecker", False, "venv не знайдено")
+        return report_test("DependencyChecker", False, "venv не знайдено")
 
     result = subprocess.run(
         [str(VENV_PYTHON), "-c", """
@@ -378,16 +383,16 @@ print(f"All OK: {all_ok}")
 
     if result.returncode != 0:
         error = result.stderr.strip().split('\n')[-1] if result.stderr else "unknown"
-        return print_test("DependencyChecker", False, error[:50])
+        return report_test("DependencyChecker", False, error[:50])
 
     output = result.stdout.strip()
-    return print_test("DependencyChecker", True, "працює")
+    return report_test("DependencyChecker", True, "працює")
 
 
-def test_models_directory_structure() -> bool:
+def test_models_directory_structure() -> None:
     """Тест: Структура директорії моделей коректна"""
     if not MODELS_PATH.exists():
-        return print_test("Models директорія", False, "не існує")
+        return report_test("Models директорія", False, "не існує")
 
     expected_dirs = [
         "stable-diffusion-v1-5",
@@ -400,9 +405,9 @@ def test_models_directory_structure() -> bool:
             missing.append(d)
 
     if missing:
-        return print_test("Models директорія", False, f"відсутні: {', '.join(missing)}")
+        return report_test("Models директорія", False, f"відсутні: {', '.join(missing)}")
 
-    return print_test("Models директорія", True, f"{len(expected_dirs)} моделей")
+    return report_test("Models директорія", True, f"{len(expected_dirs)} моделей")
 
 
 def run_all_tests():
@@ -411,30 +416,45 @@ def run_all_tests():
 
     results = []
 
+    def run_and_capture(test_fn) -> bool:
+        original_print_test = print_test
+        captured = {"value": True}
+
+        def _capturing_print_test(name: str, passed: bool, details: str = ""):
+            captured["value"] = bool(passed)
+            return original_print_test(name, passed, details)
+
+        globals()["print_test"] = _capturing_print_test
+        try:
+            test_fn()
+        finally:
+            globals()["print_test"] = original_print_test
+        return bool(captured["value"])
+
     # Базові тести
     print(f"{BOLD}Базова інфраструктура:{RESET}")
-    results.append(test_venv_exists())
-    results.append(test_python_packages())
-    results.append(test_cli_imports())
-    results.append(test_dependency_checker())
+    results.append(run_and_capture(test_venv_exists))
+    results.append(run_and_capture(test_python_packages))
+    results.append(run_and_capture(test_cli_imports))
+    results.append(run_and_capture(test_dependency_checker))
 
     # GPU тести
     print(f"\n{BOLD}GPU/CUDA:{RESET}")
-    results.append(test_pytorch_cuda_version())
-    results.append(test_cuda_available())
+    results.append(run_and_capture(test_pytorch_cuda_version))
+    results.append(run_and_capture(test_cuda_available))
 
     # Тести моделей
     print(f"\n{BOLD}AI Моделі:{RESET}")
-    results.append(test_models_directory_structure())
-    results.append(test_sd15_model())
-    results.append(test_controlnet_model())
-    results.append(test_no_wrong_model_formats())
-    results.append(test_no_unnecessary_large_files())
+    results.append(run_and_capture(test_models_directory_structure))
+    results.append(run_and_capture(test_sd15_model))
+    results.append(run_and_capture(test_controlnet_model))
+    results.append(run_and_capture(test_no_wrong_model_formats))
+    results.append(run_and_capture(test_no_unnecessary_large_files))
 
     # Frontend тести
     print(f"\n{BOLD}Frontend:{RESET}")
-    results.append(test_frontend_dependencies())
-    results.append(test_api_service_file())
+    results.append(run_and_capture(test_frontend_dependencies))
+    results.append(run_and_capture(test_api_service_file))
 
     # Підсумок
     passed = sum(results)

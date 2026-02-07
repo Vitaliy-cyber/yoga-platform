@@ -1,12 +1,11 @@
 import React, { useEffect, useState, useRef } from "react";
-import { useSearchParams, useNavigate, Link } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { useSearchParams, useNavigate, useLocation, Link } from "react-router-dom";
 import {
   ArrowLeft,
-  Loader2,
   AlertCircle,
   GitCompareArrows,
   Layers,
+  Loader2,
   Image as ImageIcon,
   X,
   ChevronLeft,
@@ -14,22 +13,47 @@ import {
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "../components/ui/tabs";
 import { ErrorBoundary } from "../components/ui/error-boundary";
 import { MuscleComparisonChart } from "../components/Compare/MuscleComparisonChart";
 import { useCompareStore } from "../store/useCompareStore";
 import { compareApi } from "../services/api";
 import { usePoseImageSrc } from "../hooks/usePoseImageSrc";
-import { useViewTransition } from "../hooks/useViewTransition";
 import { useI18n } from "../i18n";
+import { ComparePageSkeleton } from "../components/ui/skeleton";
 import type { ComparisonResult, PoseComparisonItem } from "../types";
 
 // Color palette matching MuscleComparisonChart
 const POSE_COLORS = [
-  { ring: "ring-indigo-500", bg: "bg-indigo-500", text: "text-indigo-600", badge: "bg-indigo-100 text-indigo-700" },
-  { ring: "ring-emerald-500", bg: "bg-emerald-500", text: "text-emerald-600", badge: "bg-emerald-100 text-emerald-700" },
-  { ring: "ring-amber-500", bg: "bg-amber-500", text: "text-amber-600", badge: "bg-amber-100 text-amber-700" },
-  { ring: "ring-rose-500", bg: "bg-rose-500", text: "text-rose-600", badge: "bg-rose-100 text-rose-700" },
+  {
+    ring: "ring-indigo-500",
+    bg: "bg-indigo-500",
+    text: "text-indigo-600",
+    badge: "bg-indigo-100 text-indigo-700",
+  },
+  {
+    ring: "ring-emerald-500",
+    bg: "bg-emerald-500",
+    text: "text-emerald-600",
+    badge: "bg-emerald-100 text-emerald-700",
+  },
+  {
+    ring: "ring-amber-500",
+    bg: "bg-amber-500",
+    text: "text-amber-600",
+    badge: "bg-amber-100 text-amber-700",
+  },
+  {
+    ring: "ring-rose-500",
+    bg: "bg-rose-500",
+    text: "text-rose-600",
+    badge: "bg-rose-100 text-rose-700",
+  },
 ];
 
 // Image comparison slider component
@@ -111,6 +135,7 @@ const ImageComparisonSlider: React.FC<ImageComparisonSliderProps> = ({
   return (
     <div
       ref={containerRef}
+      data-testid="compare-image-slider"
       className="relative w-full aspect-[4/3] overflow-hidden rounded-xl bg-muted select-none cursor-ew-resize"
       onMouseMove={handleMouseMove}
       onTouchMove={handleTouchMove}
@@ -140,7 +165,10 @@ const ImageComparisonSlider: React.FC<ImageComparisonSliderProps> = ({
           src={leftImage}
           alt={leftLabel || "Left"}
           className="absolute inset-0 w-full h-full object-cover"
-          style={{ width: `${100 / (sliderPosition / 100)}%`, maxWidth: "none" }}
+          style={{
+            width: `${100 / (sliderPosition / 100)}%`,
+            maxWidth: "none",
+          }}
           draggable={false}
           onError={onLeftError}
         />
@@ -225,7 +253,9 @@ const VennDiagram: React.FC<VennDiagramProps> = ({
             ))}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">{t("compare.no_common_muscles")}</p>
+          <p className="text-sm text-muted-foreground">
+            {t("compare.no_common_muscles")}
+          </p>
         )}
       </div>
 
@@ -252,7 +282,9 @@ const VennDiagram: React.FC<VennDiagramProps> = ({
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-muted-foreground">{t("compare.no_unique_muscles")}</p>
+                <p className="text-sm text-muted-foreground">
+                  {t("compare.no_unique_muscles")}
+                </p>
               )}
             </div>
           );
@@ -275,58 +307,80 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
   onRemove,
 }) => {
   const { t } = useI18n();
-  const { startTransition } = useViewTransition();
   const colors = POSE_COLORS[colorIndex % POSE_COLORS.length];
   const [showMuscleLayer, setShowMuscleLayer] = useState(false);
 
   const hasPhoto = Boolean(pose.photo_path);
   const hasMuscleLayer = Boolean(pose.muscle_layer_path);
-  const activeImageType = showMuscleLayer && hasMuscleLayer ? "muscle_layer" : "photo";
-  const activeDirectPath = showMuscleLayer && hasMuscleLayer ? pose.muscle_layer_path : pose.photo_path;
-  const { src: activeImageSrc, refresh: refreshActiveImage } = usePoseImageSrc(
-    activeDirectPath,
+  const { src: photoSrc, refresh: refreshPhoto } = usePoseImageSrc(
+    pose.photo_path,
     pose.id,
-    activeImageType,
-    { enabled: Boolean(activeDirectPath) }
+    "photo",
+    { enabled: hasPhoto, version: pose.version },
   );
+  const { src: muscleSrc, refresh: refreshMuscle } = usePoseImageSrc(
+    pose.muscle_layer_path,
+    pose.id,
+    "muscle_layer",
+    { enabled: hasMuscleLayer, version: pose.version },
+  );
+  const isMuscleRequested = showMuscleLayer && hasMuscleLayer;
+  const isMuscleReady = Boolean(muscleSrc);
+  const showMuscleImage = isMuscleRequested && isMuscleReady;
+  const showMuscleLoading = isMuscleRequested && !isMuscleReady;
 
   return (
-    <div className={`bg-card rounded-xl border-2 ${colors.ring.replace("ring", "border")} overflow-hidden`}>
+    <div
+      data-testid={`compare-pose-card-${pose.id}`}
+      className={`bg-card rounded-xl border-2 ${colors.ring.replace("ring", "border")} overflow-hidden`}
+    >
       {/* Image section */}
       <div className="aspect-[4/3] relative bg-muted">
         {hasPhoto ? (
           <>
-            <AnimatePresence mode="wait">
-              <motion.img
-                key={showMuscleLayer ? "muscle" : "photo"}
-                src={activeImageSrc || undefined}
-                alt={pose.name}
-                className="w-full h-full object-cover"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                onError={() => void refreshActiveImage(true)}
+            <img
+              src={photoSrc || undefined}
+              alt={pose.name}
+              className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ease-out will-change-[opacity] ${
+                showMuscleImage ? "opacity-0" : "opacity-100"
+              }`}
+              onError={() => void refreshPhoto(true)}
+            />
+            {hasMuscleLayer && (
+              <img
+                src={muscleSrc || undefined}
+                alt={`${pose.name} - ${t("compare.muscles")}`}
+                className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ease-out will-change-[opacity] ${
+                  showMuscleImage ? "opacity-100" : "opacity-0"
+                }`}
+                onError={() => void refreshMuscle(true)}
               />
-            </AnimatePresence>
+            )}
+            {showMuscleLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-card/35 backdrop-blur-[1px]">
+                <Loader2 className="w-5 h-5 animate-spin text-foreground/70" />
+              </div>
+            )}
 
             {/* Layer toggle */}
             {hasMuscleLayer && (
-              <div className="absolute bottom-3 right-3 flex gap-1">
+              <div className="absolute bottom-3 right-3 flex gap-1 rounded-lg bg-card/75 p-1 backdrop-blur-sm border border-border/60">
                 <Button
                   size="sm"
-                  variant={!showMuscleLayer ? "default" : "outline"}
-                  className="h-7 text-xs"
-                  onClick={() => void startTransition(() => setShowMuscleLayer(false))}
+                  variant={!showMuscleLayer ? "default" : "ghost"}
+                  className="h-7 text-xs transition-colors duration-200"
+                  data-testid={`compare-toggle-photo-${pose.id}`}
+                  onClick={() => setShowMuscleLayer(false)}
                 >
                   <ImageIcon className="w-3 h-3 mr-1" />
                   {t("compare.photo")}
                 </Button>
                 <Button
                   size="sm"
-                  variant={showMuscleLayer ? "default" : "outline"}
-                  className="h-7 text-xs"
-                  onClick={() => void startTransition(() => setShowMuscleLayer(true))}
+                  variant={showMuscleLayer ? "default" : "ghost"}
+                  className="h-7 text-xs transition-colors duration-200"
+                  data-testid={`compare-toggle-muscles-${pose.id}`}
+                  onClick={() => setShowMuscleLayer(true)}
                 >
                   <Layers className="w-3 h-3 mr-1" />
                   {t("compare.muscles")}
@@ -345,6 +399,7 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
 
         {/* Remove button */}
         <button
+          data-testid={`compare-remove-${pose.id}`}
           onClick={onRemove}
           className="absolute top-3 right-3 w-7 h-7 rounded-full bg-card/90 hover:bg-red-50 dark:hover:bg-red-900/30 text-muted-foreground hover:text-red-600 dark:hover:text-red-400 flex items-center justify-center transition-colors"
           title={t("compare.remove")}
@@ -353,7 +408,9 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
         </button>
 
         {/* Color indicator */}
-        <div className={`absolute top-3 left-3 w-4 h-4 rounded-full ${colors.bg}`} />
+        <div
+          className={`absolute top-3 left-3 w-4 h-4 rounded-full ${colors.bg}`}
+        />
       </div>
 
       {/* Info section */}
@@ -375,7 +432,10 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
         {/* Muscle count */}
         <div className="mt-3 pt-3 border-t border-border">
           <p className="text-xs text-muted-foreground">
-            {t("compare.active_muscles")}: <span className="font-medium text-foreground">{pose.muscles.length}</span>
+            {t("compare.active_muscles")}:{" "}
+            <span className="font-medium text-foreground">
+              {pose.muscles.length}
+            </span>
           </p>
         </div>
       </div>
@@ -387,11 +447,16 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
 export const ComparePage: React.FC = () => {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { startTransition } = useViewTransition();
   const [activeTab, setActiveTab] = useState<string>("muscles");
+  const fromCompareBar = Boolean(
+    (location.state as { fromCompareBar?: boolean } | null)?.fromCompareBar,
+  );
 
-  const [comparisonData, setComparisonData] = useState<ComparisonResult | null>(null);
+  const [comparisonData, setComparisonData] = useState<ComparisonResult | null>(
+    null,
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -431,7 +496,9 @@ export const ComparePage: React.FC = () => {
           return;
         }
         if (!abortController.signal.aborted) {
-          setError(err instanceof Error ? err.message : t("compare.fetch_error"));
+          setError(
+            err instanceof Error ? err.message : t("compare.fetch_error"),
+          );
         }
       } finally {
         if (!abortController.signal.aborted) {
@@ -468,16 +535,36 @@ export const ComparePage: React.FC = () => {
     navigate("/poses", { replace: true });
   };
 
+  // Derive safe defaults so hooks below are called consistently on every render.
+  // (Avoid conditional hook calls after early returns.)
+  const poses = comparisonData?.poses ?? [];
+  const muscle_comparison = comparisonData?.muscle_comparison ?? [];
+  const common_muscles = comparisonData?.common_muscles ?? [];
+  const unique_muscles = comparisonData?.unique_muscles ?? {};
+
+  // For image comparison slider (only if 2 poses with photos).
+  // Hooks MUST be called on every render, so we compute enabled guards.
+  const canShowSlider = Boolean(
+    poses.length === 2 && poses[0]?.photo_path && poses[1]?.photo_path,
+  );
+  const leftSliderPose = poses[0];
+  const rightSliderPose = poses[1];
+  const { src: leftSliderSrc, refresh: refreshLeftSlider } = usePoseImageSrc(
+    leftSliderPose?.photo_path,
+    leftSliderPose?.id ?? 0,
+    "photo",
+    { enabled: Boolean(canShowSlider && leftSliderPose?.photo_path), version: leftSliderPose?.version },
+  );
+  const { src: rightSliderSrc, refresh: refreshRightSlider } = usePoseImageSrc(
+    rightSliderPose?.photo_path,
+    rightSliderPose?.id ?? 0,
+    "photo",
+    { enabled: Boolean(canShowSlider && rightSliderPose?.photo_path), version: rightSliderPose?.version },
+  );
+
   // Loading state
   if (isLoading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mx-auto mb-3" />
-          <p className="text-muted-foreground">{t("compare.loading")}</p>
-        </div>
-      </div>
-    );
+    return <ComparePageSkeleton />;
   }
 
   // Error state
@@ -485,11 +572,7 @@ export const ComparePage: React.FC = () => {
     return (
       <div className="min-h-screen bg-background p-6">
         <div className="max-w-2xl mx-auto">
-          <Button
-            variant="ghost"
-            onClick={() => navigate(-1)}
-            className="mb-6"
-          >
+          <Button variant="ghost" onClick={() => navigate(-1)} className="mb-6">
             <ArrowLeft className="w-4 h-4 mr-2" />
             {t("compare.back")}
           </Button>
@@ -499,7 +582,9 @@ export const ComparePage: React.FC = () => {
             <h2 className="text-xl font-semibold text-foreground mb-2">
               {t("compare.error_title")}
             </h2>
-            <p className="text-muted-foreground mb-6">{error || t("compare.fetch_error")}</p>
+            <p className="text-muted-foreground mb-6">
+              {error || t("compare.fetch_error")}
+            </p>
             <div className="flex justify-center gap-3">
               <Button variant="outline" onClick={() => navigate("/poses")}>
                 {t("compare.go_to_gallery")}
@@ -514,27 +599,12 @@ export const ComparePage: React.FC = () => {
     );
   }
 
-  const { poses, muscle_comparison, common_muscles, unique_muscles } = comparisonData;
-
-  // For image comparison slider (only if 2 poses)
-  const canShowSlider = poses.length === 2 && poses[0].photo_path && poses[1].photo_path;
-  const leftSliderPose = poses[0];
-  const rightSliderPose = poses[1];
-  const { src: leftSliderSrc, refresh: refreshLeftSlider } = usePoseImageSrc(
-    leftSliderPose?.photo_path,
-    leftSliderPose?.id ?? 0,
-    "photo",
-    { enabled: Boolean(canShowSlider && leftSliderPose?.photo_path) }
-  );
-  const { src: rightSliderSrc, refresh: refreshRightSlider } = usePoseImageSrc(
-    rightSliderPose?.photo_path,
-    rightSliderPose?.id ?? 0,
-    "photo",
-    { enabled: Boolean(canShowSlider && rightSliderPose?.photo_path) }
-  );
-
   return (
-    <div className="min-h-screen bg-background">
+    <div
+      className={`min-h-screen bg-background ${
+        fromCompareBar ? "animate-compare-page-enter" : ""
+      }`}
+    >
       {/* Header */}
       <div className="bg-card border-b border-border">
         <div className="max-w-7xl mx-auto px-4 py-4">
@@ -560,7 +630,11 @@ export const ComparePage: React.FC = () => {
               </div>
             </div>
 
-            <Button variant="outline" onClick={handleClearAll}>
+            <Button
+              variant="outline"
+              onClick={handleClearAll}
+              data-testid="compare-clear-all"
+            >
               {t("compare.clear_all")}
             </Button>
           </div>
@@ -575,11 +649,15 @@ export const ComparePage: React.FC = () => {
           resetButtonText={t("compare.try_again")}
         >
           {/* Pose cards grid */}
-          <div className={`grid gap-4 mb-8 ${
-            poses.length === 2 ? "grid-cols-1 md:grid-cols-2" :
-            poses.length === 3 ? "grid-cols-1 md:grid-cols-3" :
-            "grid-cols-1 md:grid-cols-2 lg:grid-cols-4"
-          }`}>
+          <div
+            className={`grid gap-4 mb-8 ${
+              poses.length === 2
+                ? "grid-cols-1 md:grid-cols-2"
+                : poses.length === 3
+                  ? "grid-cols-1 md:grid-cols-3"
+                  : "grid-cols-1 md:grid-cols-2 lg:grid-cols-4"
+            }`}
+          >
             {poses.map((pose, idx) => (
               <PoseComparisonCard
                 key={pose.id}
@@ -591,91 +669,95 @@ export const ComparePage: React.FC = () => {
           </div>
 
           {/* Comparison tabs */}
-          <Tabs value={activeTab} onValueChange={(value) => void startTransition(() => setActiveTab(value))} className="w-full">
-            <TabsList className="grid w-full max-w-md grid-cols-3 mb-6">
-              <TabsTrigger value="muscles">{t("compare.tab_muscles")}</TabsTrigger>
-              <TabsTrigger value="overlap">{t("compare.tab_overlap")}</TabsTrigger>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value)}
+            className="w-full"
+          >
+            <TabsList
+              className="grid w-full max-w-md grid-cols-3 mb-6"
+              data-testid="compare-tabs"
+            >
+              <TabsTrigger value="muscles" data-testid="compare-tab-muscles">
+                {t("compare.tab_muscles")}
+              </TabsTrigger>
+              <TabsTrigger value="overlap" data-testid="compare-tab-overlap">
+                {t("compare.tab_overlap")}
+              </TabsTrigger>
               {canShowSlider && (
-                <TabsTrigger value="slider">{t("compare.tab_slider")}</TabsTrigger>
+                <TabsTrigger value="slider" data-testid="compare-tab-slider">
+                  {t("compare.tab_slider")}
+                </TabsTrigger>
               )}
             </TabsList>
 
             {/* Muscle comparison tab */}
-            <AnimatePresence mode="wait">
-              <TabsContent value="muscles" forceMount={activeTab === "muscles" ? true : undefined}>
-                <motion.div
-                  key="muscles"
-                  className="bg-card rounded-xl p-6 border border-border view-transition-tab-content"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <h3 className="text-lg font-semibold text-foreground mb-4">
-                    {t("compare.muscle_comparison")}
-                  </h3>
-                  <MuscleComparisonChart
-                    muscles={muscle_comparison}
-                    poses={poses}
-                  />
-                </motion.div>
-              </TabsContent>
-            </AnimatePresence>
+            <TabsContent
+              value="muscles"
+              forceMount={activeTab === "muscles" ? true : undefined}
+            >
+              <div
+                key="muscles"
+                className="bg-card rounded-xl p-6 border border-border"
+              >
+                <h3 className="text-lg font-semibold text-foreground mb-4">
+                  {t("compare.muscle_comparison")}
+                </h3>
+                <MuscleComparisonChart
+                  muscles={muscle_comparison}
+                  poses={poses}
+                />
+              </div>
+            </TabsContent>
 
             {/* Muscle overlap tab */}
-            <AnimatePresence mode="wait">
-              <TabsContent value="overlap" forceMount={activeTab === "overlap" ? true : undefined}>
-                <motion.div
-                  key="overlap"
-                  className="bg-card rounded-xl p-6 border border-border view-transition-tab-content"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <h3 className="text-lg font-semibold text-foreground mb-4">
-                    {t("compare.muscle_overlap")}
-                  </h3>
-                  <VennDiagram
-                    poses={poses}
-                    commonMuscles={common_muscles}
-                    uniqueMuscles={unique_muscles}
-                  />
-                </motion.div>
-              </TabsContent>
-            </AnimatePresence>
+            <TabsContent
+              value="overlap"
+              forceMount={activeTab === "overlap" ? true : undefined}
+            >
+              <div
+                key="overlap"
+                className="bg-card rounded-xl p-6 border border-border"
+              >
+                <h3 className="text-lg font-semibold text-foreground mb-4">
+                  {t("compare.muscle_overlap")}
+                </h3>
+                <VennDiagram
+                  poses={poses}
+                  commonMuscles={common_muscles}
+                  uniqueMuscles={unique_muscles}
+                />
+              </div>
+            </TabsContent>
 
             {/* Image slider tab (only for 2 poses with photos) */}
             {canShowSlider && (
-              <AnimatePresence mode="wait">
-                <TabsContent value="slider" forceMount={activeTab === "slider" ? true : undefined}>
-                  <motion.div
-                    key="slider"
-                    className="bg-card rounded-xl p-6 border border-border view-transition-tab-content"
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <h3 className="text-lg font-semibold text-foreground mb-4">
-                      {t("compare.visual_comparison")}
-                    </h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      {t("compare.slider_hint")}
-                    </p>
-                    <div className="max-w-2xl mx-auto">
-                      <ImageComparisonSlider
-                        leftImage={leftSliderSrc || ""}
-                        rightImage={rightSliderSrc || ""}
-                        leftLabel={poses[0].name}
-                        rightLabel={poses[1].name}
-                        onLeftError={() => void refreshLeftSlider(true)}
-                        onRightError={() => void refreshRightSlider(true)}
-                      />
-                    </div>
-                  </motion.div>
-                </TabsContent>
-              </AnimatePresence>
+              <TabsContent
+                value="slider"
+                forceMount={activeTab === "slider" ? true : undefined}
+              >
+                <div
+                  key="slider"
+                  className="bg-card rounded-xl p-6 border border-border"
+                >
+                  <h3 className="text-lg font-semibold text-foreground mb-4">
+                    {t("compare.visual_comparison")}
+                  </h3>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    {t("compare.slider_hint")}
+                  </p>
+                  <div className="max-w-2xl mx-auto">
+                    <ImageComparisonSlider
+                      leftImage={leftSliderSrc || ""}
+                      rightImage={rightSliderSrc || ""}
+                      leftLabel={poses[0].name}
+                      rightLabel={poses[1].name}
+                      onLeftError={() => void refreshLeftSlider(true)}
+                      onRightError={() => void refreshRightSlider(true)}
+                    />
+                  </div>
+                </div>
+              </TabsContent>
             )}
           </Tabs>
 
@@ -685,25 +767,33 @@ export const ComparePage: React.FC = () => {
               <div className="text-2xl font-bold text-indigo-600">
                 {poses.length}
               </div>
-              <div className="text-sm text-muted-foreground">{t("compare.stat_poses")}</div>
+              <div className="text-sm text-muted-foreground">
+                {t("compare.stat_poses")}
+              </div>
             </div>
             <div className="bg-card rounded-lg p-4 border border-border text-center">
               <div className="text-2xl font-bold text-emerald-600">
                 {muscle_comparison.length}
               </div>
-              <div className="text-sm text-muted-foreground">{t("compare.stat_total_muscles")}</div>
+              <div className="text-sm text-muted-foreground">
+                {t("compare.stat_total_muscles")}
+              </div>
             </div>
             <div className="bg-card rounded-lg p-4 border border-border text-center">
               <div className="text-2xl font-bold text-amber-600">
                 {common_muscles.length}
               </div>
-              <div className="text-sm text-muted-foreground">{t("compare.stat_common")}</div>
+              <div className="text-sm text-muted-foreground">
+                {t("compare.stat_common")}
+              </div>
             </div>
             <div className="bg-card rounded-lg p-4 border border-border text-center">
               <div className="text-2xl font-bold text-rose-600">
                 {Object.values(unique_muscles).flat().length}
               </div>
-              <div className="text-sm text-muted-foreground">{t("compare.stat_unique")}</div>
+              <div className="text-sm text-muted-foreground">
+                {t("compare.stat_unique")}
+              </div>
             </div>
           </div>
         </ErrorBoundary>

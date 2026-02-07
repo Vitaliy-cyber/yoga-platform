@@ -22,8 +22,8 @@ import {
 } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { importApi } from '../../services/api';
-import { useViewTransition } from '../../hooks/useViewTransition';
 import { useI18n } from '../../i18n';
+import { slideHorizontalSwap, normalTransition } from '../../lib/animation-variants';
 import type { DuplicateHandling, ImportResult, ImportPreviewResult } from '../../types';
 import ImportPreview from './ImportPreview';
 
@@ -36,9 +36,11 @@ interface ImportModalProps {
 type ImportType = 'json' | 'csv' | 'backup';
 
 const ACCEPTED_FILES: Record<ImportType, Record<string, string[]>> = {
-  json: { 'application/json': ['.json'] },
-  csv: { 'text/csv': ['.csv'] },
-  backup: { 'application/json': ['.json'] },
+  // NOTE: Browser-provided File.type can be empty or 'text/plain' for .json/.csv,
+  // especially in tests or when OS MIME mappings are missing. Accept by extension too.
+  json: { 'application/json': ['.json'], 'text/plain': ['.json'] },
+  csv: { 'text/csv': ['.csv'], 'text/plain': ['.csv'], 'application/vnd.ms-excel': ['.csv'] },
+  backup: { 'application/json': ['.json'], 'text/plain': ['.json'] },
 };
 
 export const ImportModal: React.FC<ImportModalProps> = ({
@@ -47,7 +49,6 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   onImportComplete,
 }) => {
   const { t } = useI18n();
-  const { startTransition } = useViewTransition();
   const [importType, setImportType] = useState<ImportType>('json');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [duplicateHandling, setDuplicateHandling] = useState<DuplicateHandling>('skip');
@@ -146,8 +147,13 @@ export const ImportModal: React.FC<ImportModalProps> = ({
   ];
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-xl">
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) handleClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-xl" data-testid="import-dialog">
         <DialogHeader>
           <DialogTitle>{t('import.title')}</DialogTitle>
           <DialogDescription>{t('import.description')}</DialogDescription>
@@ -158,10 +164,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           <motion.div
             key="upload"
             className="space-y-6 py-4"
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 20 }}
-            transition={{ duration: 0.2 }}
+            variants={slideHorizontalSwap}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={normalTransition}
           >
             {/* Import type selector */}
             <div>
@@ -172,10 +179,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 {importTypes.map(({ type, label, icon: Icon }) => (
                   <button
                     key={type}
-                    onClick={() => void startTransition(() => {
+                    onClick={() => {
+                      // and cause flakey interactions (e.g., file selection + preview) under load.
                       setImportType(type);
                       resetState();
-                    })}
+                    }}
+                    data-testid={`import-type-${type}`}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg border transition-colors ${
                       importType === type
                         ? 'border-primary bg-primary text-primary-foreground'
@@ -192,6 +201,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             {/* Dropzone */}
             <div
               {...getRootProps()}
+              data-testid="import-dropzone"
               className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
                 isDragActive
                   ? 'border-primary/50 bg-accent'
@@ -200,7 +210,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   : 'border-border hover:border-border/80 hover:bg-muted'
               }`}
             >
-              <input {...getInputProps()} />
+              <input {...getInputProps()} data-testid="import-file-input" />
 
               {selectedFile ? (
                 <div className="space-y-2">
@@ -239,6 +249,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 <select
                   value={duplicateHandling}
                   onChange={(e) => setDuplicateHandling(e.target.value as DuplicateHandling)}
+                  data-testid="import-duplicate-select"
                   className="w-full appearance-none rounded-lg border border-input bg-background px-4 py-2 pr-10 text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20"
                 >
                   {duplicateOptions.map(({ value, label }) => (
@@ -252,11 +263,18 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             </div>
 
             {/* Preview section */}
-            {preview && <ImportPreview preview={preview} />}
+            {preview && (
+              <div data-testid="import-preview-result">
+                <ImportPreview preview={preview} />
+              </div>
+            )}
 
             {/* Error message */}
             {error && (
-              <div className="flex items-start gap-3 p-4 bg-red-50 dark:bg-red-900/30 rounded-lg text-red-700 dark:text-red-400">
+              <div
+                data-testid="import-error"
+                className="flex items-start gap-3 p-4 bg-red-50 dark:bg-red-900/30 rounded-lg text-red-700 dark:text-red-400"
+              >
                 <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5" />
                 <div className="text-sm">{error}</div>
               </div>
@@ -267,10 +285,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({
           <motion.div
             key="result"
             className="py-6"
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            transition={{ duration: 0.2 }}
+            data-testid="import-result"
+            variants={slideHorizontalSwap}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={normalTransition}
           >
             <div className="text-center mb-6">
               {result.success ? (
@@ -322,7 +342,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         <DialogFooter>
           {!result ? (
             <>
-              <Button variant="outline" onClick={handleClose} disabled={isUploading}>
+              <Button
+                variant="outline"
+                onClick={handleClose}
+                disabled={isUploading}
+                data-testid="import-cancel"
+              >
                 {t('import.cancel')}
               </Button>
 
@@ -331,6 +356,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                   variant="secondary"
                   onClick={handlePreview}
                   disabled={isPreviewing}
+                  data-testid="import-preview"
                 >
                   {isPreviewing ? (
                     <>
@@ -346,6 +372,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               <Button
                 onClick={handleImport}
                 disabled={!selectedFile || isUploading}
+                data-testid="import-submit"
               >
                 {isUploading ? (
                   <>
@@ -358,7 +385,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               </Button>
             </>
           ) : (
-            <Button onClick={handleClose}>{t('import.close')}</Button>
+            <Button onClick={handleClose} data-testid="import-close">
+              {t('import.close')}
+            </Button>
           )}
         </DialogFooter>
       </DialogContent>

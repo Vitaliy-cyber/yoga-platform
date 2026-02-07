@@ -1,9 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
 import { render } from "../test/utils";
 import { Dashboard } from "./Dashboard";
 
 describe("Dashboard", () => {
+  beforeEach(() => {
+    window.localStorage.setItem("yoga_locale", "ua");
+  });
+
   it("renders header", () => {
     render(<Dashboard />);
     expect(screen.getByText("Лабораторія Поз")).toBeInTheDocument();

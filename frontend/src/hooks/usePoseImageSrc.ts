@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getSignedImageUrl } from "../services/api";
 import { logger } from "../lib/logger";
 
@@ -31,17 +31,43 @@ const isLocalStoragePath = (directPath?: string | null): boolean =>
 const isHttpUrl = (directPath?: string | null): boolean =>
   Boolean(directPath && (directPath.startsWith("http://") || directPath.startsWith("https://")));
 
+const buildCacheKey = (
+  poseId: number,
+  imageType: "schema" | "photo" | "muscle_layer" | "skeleton_layer",
+  directPath: string | null | undefined,
+  version?: number
+): string =>
+  typeof version === "number"
+    ? `${poseId}:${imageType}:v${version}`
+    : `${poseId}:${imageType}:${directPath ?? ""}`;
+
+const getCacheEntry = (cacheKey: string): CacheEntry | undefined =>
+  signedUrlCache.get(cacheKey);
+
+const isFreshCacheEntry = (entry: CacheEntry): boolean =>
+  entry.expiresAt - Date.now() > CACHE_TTL_BUFFER_MS;
+
 export const usePoseImageSrc = (
   directPath: string | null | undefined,
   poseId: number,
   imageType: "schema" | "photo" | "muscle_layer" | "skeleton_layer",
-  options: { enabled?: boolean } = {}
+  options: { enabled?: boolean; version?: number } = {}
 ) => {
-  const [src, setSrc] = useState<string>("");
+  const enabled = options.enabled ?? true;
+  const cacheKey = useMemo(
+    () => buildCacheKey(poseId, imageType, directPath, options.version),
+    [directPath, imageType, options.version, poseId]
+  );
+  const [src, setSrc] = useState<string>(() => {
+    if (!enabled) return "";
+    if (isLocalStoragePath(directPath)) return directPath || "";
+    const cached = getCacheEntry(cacheKey);
+    if (cached?.url) return cached.url;
+    if (isHttpUrl(directPath)) return directPath || "";
+    return "";
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const usedDirectFallback = useRef(false);
-  const enabled = options.enabled ?? true;
 
   const refresh = useCallback(
     async (force = false) => {
@@ -58,13 +84,22 @@ export const usePoseImageSrc = (
         return;
       }
 
-      const cacheKey = `${poseId}:${imageType}`;
-      const cached = signedUrlCache.get(cacheKey);
-      if (!force && cached && cached.expiresAt - Date.now() > CACHE_TTL_BUFFER_MS) {
+      const cached = getCacheEntry(cacheKey);
+      if (!force && cached && isFreshCacheEntry(cached)) {
         setSrc(cached.url);
         setLoading(false);
         setError(false);
         return;
+      }
+
+      // Keep an already-renderable source visible while refreshing signed URL.
+      // This avoids white flashes during cache refresh and remounts.
+      if (!force) {
+        if (cached?.url) {
+          setSrc((prev) => prev || cached.url);
+        } else if (isHttpUrl(directPath)) {
+          setSrc((prev) => prev || directPath || "");
+        }
       }
 
       setLoading(true);
@@ -78,19 +113,38 @@ export const usePoseImageSrc = (
         setError(false);
       } catch (err) {
         logger.warn(`Failed to fetch signed image URL for pose ${poseId} (${imageType})`, err);
-        if (isHttpUrl(directPath) && !usedDirectFallback.current) {
-          usedDirectFallback.current = true;
+        if (isHttpUrl(directPath)) {
+          // If signed-url fetch fails, prefer showing the direct URL instead of an error state.
+          // This keeps the UI resilient when the signed-url endpoint is temporarily unavailable.
           setSrc(directPath || "");
           setError(false);
-        } else {
-          setError(true);
+          return;
         }
+        setError(true);
       } finally {
         setLoading(false);
       }
     },
-    [directPath, enabled, imageType, poseId]
+    [cacheKey, directPath, enabled, imageType, poseId]
   );
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (isLocalStoragePath(directPath)) return;
+
+    const cached = getCacheEntry(cacheKey);
+    if (cached?.url) {
+      setSrc(cached.url);
+      setLoading(false);
+      setError(false);
+      return;
+    }
+    if (isHttpUrl(directPath)) {
+      setSrc((prev) => prev || directPath || "");
+      return;
+    }
+    setSrc("");
+  }, [cacheKey, directPath, enabled]);
 
   useEffect(() => {
     if (!enabled) {

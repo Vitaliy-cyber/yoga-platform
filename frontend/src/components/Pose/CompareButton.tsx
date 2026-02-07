@@ -41,8 +41,9 @@ export const CompareButton: React.FC<CompareButtonProps> = ({
         size="icon"
         onClick={handleClick}
         disabled={isDisabled}
+        data-testid={`pose-compare-toggle-${pose.id}`}
         className={`h-8 w-8 ${isSelected ? "bg-indigo-600 hover:bg-indigo-700 text-white" : "hover:border-indigo-300 hover:text-indigo-600"} ${className}`}
-        title={isSelected ? t("compare.remove") : t("compare.add")}
+        aria-label={isSelected ? t("compare.remove") : t("compare.add")}
       >
         {isSelected ? (
           <Check className="w-4 h-4" />
@@ -58,19 +59,22 @@ export const CompareButton: React.FC<CompareButtonProps> = ({
       <button
         onClick={handleClick}
         disabled={isDisabled}
+        data-testid={`pose-compare-toggle-${pose.id}`}
+        aria-label={isSelected ? t("compare.remove") : t("compare.add")}
         className={`
           absolute top-3 right-3 z-10
           w-8 h-8 rounded-full
           flex items-center justify-center
-          transition-all duration-200
-          ${isSelected
-            ? "bg-indigo-600 text-white shadow-lg scale-100"
-            : "bg-card/90 text-muted-foreground hover:bg-primary/10 hover:text-primary opacity-0 group-hover:opacity-100 scale-95 hover:scale-100"
+          transition-[opacity,background-color,color,box-shadow,transform] duration-200 ease-out
+          active:scale-90
+          ${
+            isSelected
+              ? "bg-indigo-600 text-white shadow-lg opacity-100 translate-y-0"
+              : "bg-card/90 text-muted-foreground hover:bg-primary/10 hover:text-primary opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0"
           }
           ${isDisabled && !isSelected ? "opacity-50 cursor-not-allowed" : ""}
           ${className}
         `}
-        title={isSelected ? t("compare.remove") : t("compare.add")}
       >
         {isSelected ? (
           <Check className="w-4 h-4" />
@@ -88,10 +92,12 @@ export const CompareButton: React.FC<CompareButtonProps> = ({
       size="sm"
       onClick={handleClick}
       disabled={isDisabled}
+      data-testid={`pose-compare-toggle-${pose.id}`}
       className={`
-        ${isSelected
-          ? "bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600"
-          : "hover:border-indigo-300 hover:text-indigo-600"
+        ${
+          isSelected
+            ? "bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600"
+            : "hover:border-indigo-300 hover:text-indigo-600"
         }
         ${className}
       `}

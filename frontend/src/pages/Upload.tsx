@@ -4,10 +4,27 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import { Label } from "../components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Upload as UploadIcon, FileImage, Type, Loader2, Plus } from "lucide-react";
-import { categoriesApi, posesApi } from "../services/api";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
+import {
+  Upload as UploadIcon,
+  FileImage,
+  Type,
+  Loader2,
+  Plus,
+} from "lucide-react";
+import { categoriesApi, generateApi, posesApi } from "../services/api";
 import type { Category } from "../types";
 import { useI18n } from "../i18n";
 import { CategoryModal } from "../components/Category/CategoryModal";
@@ -80,14 +97,49 @@ export const Upload: React.FC = () => {
 
     setIsUploading(true);
     try {
+      const code = `${Date.now()}`;
+      const categoryId = category ? parseInt(category, 10) : undefined;
+      const poseDescription = description?.trim() ? description : undefined;
+
+      if (inputType === "text") {
+        const prompt = textDescription.trim();
+        if (!prompt) return;
+
+        const additionalNotes = poseDescription ? `Upload description: ${poseDescription}` : undefined;
+        const started = await generateApi.generateFromText(prompt, additionalNotes);
+        const taskId = started.task_id;
+
+        const startedAt = Date.now();
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          // eslint-disable-next-line no-await-in-loop
+          const st = await generateApi.getStatus(taskId);
+          if (st.status === "completed") break;
+          if (st.status === "failed") throw new Error(st.error_message || "Generation failed");
+          if (Date.now() - startedAt > 120_000) throw new Error("Generation timeout");
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 500));
+        }
+
+        const saved = await generateApi.saveToGallery({
+          task_id: taskId,
+          name,
+          code,
+          category_id: categoryId,
+          description: poseDescription,
+        });
+        navigate(`/poses/${saved.pose_id}`);
+        return;
+      }
+
       const pose = await posesApi.create({
-        code: `${Date.now()}`,
+        code,
         name,
         description,
-        category_id: category ? parseInt(category, 10) : undefined,
+        category_id: categoryId,
       });
 
-      if (inputType === "schematic" && uploadedFile) {
+      if (uploadedFile) {
         await posesApi.uploadSchema(pose.id, uploadedFile);
       }
 
@@ -103,24 +155,34 @@ export const Upload: React.FC = () => {
     <div className="min-h-screen bg-stone-50 py-8">
       <div className="max-w-4xl mx-auto px-6">
         <div className="bg-white rounded-2xl border border-stone-200 p-8">
-          <h2 className="text-xl font-medium text-stone-800 mb-6">{t("upload.title")}</h2>
+          <h2 className="text-xl font-medium text-stone-800 mb-6">
+            {t("upload.title")}
+          </h2>
 
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label className="text-stone-600">{t("upload.pose_name")}</Label>
+                <Label className="text-stone-600">
+                  {t("upload.pose_name")}
+                </Label>
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder={t("upload.pose_name_placeholder")}
                   className="border-stone-200"
+                  data-testid="upload-pose-name"
                 />
               </div>
               <div className="space-y-2">
                 <Label className="text-stone-600">{t("upload.category")}</Label>
                 <Select value={category} onValueChange={setCategory}>
-                  <SelectTrigger className="border-stone-200">
-                    <SelectValue placeholder={t("upload.category_placeholder")} />
+                  <SelectTrigger
+                    className="border-stone-200"
+                    data-testid="upload-category-select"
+                  >
+                    <SelectValue
+                      placeholder={t("upload.category_placeholder")}
+                    />
                   </SelectTrigger>
                   <SelectContent>
                     {categories.length === 0 ? (
@@ -154,94 +216,129 @@ export const Upload: React.FC = () => {
             </div>
 
             <div className="space-y-2">
-              <Label className="text-stone-600">{t("upload.description")}</Label>
+              <Label className="text-stone-600">
+                {t("upload.description")}
+              </Label>
               <Textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder={t("upload.description_placeholder")}
                 className="border-stone-200 min-h-[80px] resize-none"
+                data-testid="upload-description"
               />
             </div>
 
-            <Tabs value={inputType} onValueChange={setInputType} className="w-full">
+            <Tabs
+              value={inputType}
+              onValueChange={(v) => setInputType(v)}
+              className="w-full"
+            >
               <TabsList className="grid w-full grid-cols-2 bg-stone-100 p-1 rounded-xl">
-                <TabsTrigger value="schematic" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
+                <TabsTrigger
+                  value="schematic"
+                  data-testid="upload-tab-schematic"
+                  className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm"
+                >
                   <FileImage className="w-4 h-4 mr-2" />
                   {t("upload.upload_schematic")}
                 </TabsTrigger>
-                <TabsTrigger value="text" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">
+                <TabsTrigger
+                  value="text"
+                  data-testid="upload-tab-text"
+                  className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm"
+                >
                   <Type className="w-4 h-4 mr-2" />
                   {t("upload.text_description")}
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="schematic" className="mt-4">
-                <div
-                  className={`relative border-2 border-dashed rounded-xl transition-all duration-200 ${
-                    dragActive ? "border-stone-400 bg-stone-50" : "border-stone-200 hover:border-stone-300"
-                  }`}
-                  onDragEnter={handleDrag}
-                  onDragLeave={handleDrag}
-                  onDragOver={handleDrag}
-                  onDrop={handleDrop}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
-                    className="hidden"
+              <div className="mt-4 min-h-[20rem]">
+                <TabsContent value="schematic" className="mt-0">
+                  <div
+                    className={`relative min-h-[20rem] border-2 border-dashed rounded-xl transition-colors duration-200 ${
+                      dragActive
+                        ? "border-stone-400 bg-stone-50"
+                        : "border-stone-200 hover:border-stone-300"
+                    }`}
+                    onDragEnter={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDragOver={handleDrag}
+                    onDrop={handleDrop}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) =>
+                        e.target.files?.[0] && handleFileSelect(e.target.files[0])
+                      }
+                      className="hidden"
+                      data-testid="upload-file-input"
+                    />
+
+                    {previewUrl ? (
+                      <div className="min-h-[20rem] p-4 flex flex-col justify-center">
+                        <div className="relative aspect-[4/3] max-h-[300px] mx-auto">
+                          <img
+                            src={previewUrl}
+                            alt="Schematic preview"
+                            className="w-full h-full object-contain rounded-lg"
+                          />
+                          <button
+                            onClick={() => {
+                              setUploadedFile(null);
+                              setPreviewUrl(null);
+                            }}
+                            className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full p-2 shadow-sm hover:bg-white transition-colors"
+                          >
+                            <span className="text-stone-600 text-sm">✕</span>
+                          </button>
+                        </div>
+                        <p className="text-center text-sm text-stone-500 mt-3">
+                          {uploadedFile?.name}
+                        </p>
+                      </div>
+                    ) : (
+                      <div
+                        className="min-h-[20rem] p-12 text-center cursor-pointer flex flex-col items-center justify-center"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
+                          <UploadIcon className="w-7 h-7 text-stone-400" />
+                        </div>
+                        <p className="text-stone-600 font-medium">
+                          {t("upload.drop_here")}
+                        </p>
+                        <p className="text-stone-400 text-sm mt-1">
+                          {t("upload.browse")}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="text" className="mt-0">
+                  <Textarea
+                    value={textDescription}
+                    onChange={(e) => setTextDescription(e.target.value)}
+                    placeholder={t("upload.text_placeholder")}
+                    className="border-stone-200 h-[20rem] min-h-[20rem] resize-none font-mono text-sm"
+                    data-testid="upload-text-description"
                   />
-
-                  {previewUrl ? (
-                    <div className="p-4">
-                      <div className="relative aspect-[4/3] max-h-[300px] mx-auto">
-                        <img
-                          src={previewUrl}
-                          alt="Schematic preview"
-                          className="w-full h-full object-contain rounded-lg"
-                        />
-                        <button
-                          onClick={() => {
-                            setUploadedFile(null);
-                            setPreviewUrl(null);
-                          }}
-                          className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full p-2 shadow-sm hover:bg-white transition-colors"
-                        >
-                          <span className="text-stone-600 text-sm">✕</span>
-                        </button>
-                      </div>
-                      <p className="text-center text-sm text-stone-500 mt-3">
-                        {uploadedFile?.name}
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="p-12 text-center cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                      <div className="w-16 h-16 rounded-full bg-stone-100 flex items-center justify-center mx-auto mb-4">
-                        <UploadIcon className="w-7 h-7 text-stone-400" />
-                      </div>
-                        <p className="text-stone-600 font-medium">{t("upload.drop_here")}</p>
-                        <p className="text-stone-400 text-sm mt-1">{t("upload.browse")}</p>
-
-                    </div>
-                  )}
-                </div>
-              </TabsContent>
-
-              <TabsContent value="text" className="mt-4">
-                <Textarea
-                  value={textDescription}
-                  onChange={(e) => setTextDescription(e.target.value)}
-                  placeholder={t("upload.text_placeholder")}
-                  className="border-stone-200 min-h-[200px] resize-none font-mono text-sm"
-                />
-              </TabsContent>
+                </TabsContent>
+              </div>
             </Tabs>
 
             <Button
               onClick={handleSubmit}
-              disabled={!name || isUploading || (inputType === "schematic" && !uploadedFile)}
+              disabled={
+                !name ||
+                isUploading ||
+                (inputType === "schematic" && !uploadedFile) ||
+                (inputType === "text" && !textDescription.trim())
+              }
               className="w-full bg-stone-800 hover:bg-stone-900 text-white h-12 rounded-xl font-medium"
+              data-testid="upload-submit"
             >
               {isUploading ? (
                 <>

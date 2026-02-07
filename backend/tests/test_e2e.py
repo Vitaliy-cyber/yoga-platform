@@ -12,6 +12,14 @@ import io
 
 import pytest
 from httpx import AsyncClient
+from PIL import Image
+
+
+def _valid_png_bytes(width: int = 128, height: int = 128) -> bytes:
+    image = Image.new("RGB", (width, height), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 class TestHealthAndInfo:
@@ -315,8 +323,8 @@ class TestGenerationE2E:
     ):
         """Тест що генерація повертає task_id"""
 
-        # Створюємо фейковий файл
-        file_content = b"fake image content"
+        # Створюємо валідний PNG-файл
+        file_content = _valid_png_bytes()
         files = {"schema_file": ("test.png", io.BytesIO(file_content), "image/png")}
 
         response = await auth_client_with_mocked_storage.post(
@@ -335,7 +343,7 @@ class TestGenerationE2E:
         """Тест отримання статусу генерації"""
 
         # Створюємо задачу
-        file_content = b"fake image content"
+        file_content = _valid_png_bytes()
         files = {"schema_file": ("test.png", io.BytesIO(file_content), "image/png")}
 
         create_response = await auth_client_with_mocked_storage.post(
@@ -429,7 +437,7 @@ class TestIntegrationE2E:
         assert len(search.json()) >= 1
 
         # 9. Генерація (mock)
-        file_content = b"fake schema"
+        file_content = _valid_png_bytes()
         files = {"schema_file": ("schema.png", io.BytesIO(file_content), "image/png")}
         gen_response = await auth_client_with_mocked_storage.post(
             "/api/generate", files=files

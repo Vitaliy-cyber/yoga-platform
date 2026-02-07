@@ -178,18 +178,44 @@ export const getSignedImageUrl = async (
   imageType: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer',
   options: { allowProxyFallback?: boolean } = {}
 ): Promise<string> => {
-  try {
-    const response = await api.get<{ signed_url: string }>(
-      `${API_V1_PREFIX}/poses/${poseId}/image/${imageType}/signed-url`
-    );
-    return ensureHttpsIfNeeded(response.data.signed_url);
-  } catch (error) {
-    logger.warn(`Failed to get signed URL for pose ${poseId} ${imageType}:`, error);
-    if (options.allowProxyFallback) {
-      return getImageProxyUrl(poseId, imageType);
+  const maxAttempts = 5;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await api.get<{ signed_url: string }>(
+        `${API_V1_PREFIX}/poses/${poseId}/image/${imageType}/signed-url`
+      );
+      return ensureHttpsIfNeeded(response.data.signed_url);
+    } catch (error) {
+      const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
+      const statusCode = axios.isAxiosError(error)
+        ? error.response?.status
+        : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+      const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+
+      if (isTransient && attempt < maxAttempts - 1) {
+        const retryAfterMs =
+          statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+            ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+            : null;
+        const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+        const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+
+      logger.warn(`Failed to get signed URL for pose ${poseId} ${imageType}:`, error);
+      if (options.allowProxyFallback) {
+        return getImageProxyUrl(poseId, imageType);
+      }
+      throw error;
     }
-    throw error;
   }
+  // Unreachable, but TS wants a return.
+  if (options.allowProxyFallback) {
+    return getImageProxyUrl(poseId, imageType);
+  }
+  throw new Error("Failed to get signed image URL");
 };
 
 // Test-only exports (kept under a stable name to avoid accidental production usage)
@@ -271,12 +297,26 @@ const refreshAccessToken = async (): Promise<string | null> => {
   // Create a new refresh promise
   refreshPromise = (async () => {
     try {
+      const csrfToken = getCsrfToken();
+      const existingAccessToken = getAuthToken();
+      const refreshHeaders: Record<string, string> = {};
+      if (csrfToken) {
+        refreshHeaders["X-CSRF-Token"] = csrfToken;
+      }
+      if (existingAccessToken) {
+        // Helps backend treat refresh as same-user browser flow when possible.
+        refreshHeaders.Authorization = `Bearer ${existingAccessToken}`;
+      }
+
       // SECURITY: Don't send refresh_token in body - it's in httpOnly cookie
       // The server will read it from the cookie
       const response = await axios.post<TokenPairResponse>(
         `${API_BASE_URL}${API_V1_PREFIX}/auth/refresh`,
         {}, // Empty body - token comes from cookie
-        { withCredentials: true }
+        {
+          withCredentials: true,
+          headers: refreshHeaders,
+        }
       );
 
       const { access_token, expires_in, user } = response.data;
@@ -897,8 +937,45 @@ api.interceptors.response.use(
   }
 );
 
+export const isAbortRequestError = (error: unknown): boolean => {
+  if (axios.isCancel(error)) {
+    return true;
+  }
+
+  if (axios.isAxiosError(error)) {
+    // Axios v1 cancellation consistently uses ERR_CANCELED.
+    if (error.code === 'ERR_CANCELED') {
+      return true;
+    }
+  }
+
+  if (error instanceof Error) {
+    const loweredMessage = error.message.toLowerCase();
+    if (
+      error.name === 'AbortError' ||
+      loweredMessage.includes('request aborted') ||
+      loweredMessage === 'canceled' ||
+      loweredMessage === 'cancelled'
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+const createAbortError = (): Error => {
+  const abortError = new Error('Request aborted');
+  abortError.name = 'AbortError';
+  return abortError;
+};
+
 // Error handling helper
 const handleError = (error: AxiosError<ApiError>): never => {
+  if (isAbortRequestError(error)) {
+    throw createAbortError();
+  }
+
   // Check if it's a rate limit error
   if ((error as Error & { isRateLimited?: boolean }).isRateLimited) {
     throw error;
@@ -922,7 +999,11 @@ const handleError = (error: AxiosError<ApiError>): never => {
     message = error.message || 'Unknown error';
   }
 
-  throw new Error(message);
+  const err = new Error(message) as Error & { status?: number };
+  if (typeof error.response?.status === 'number') {
+    err.status = error.response.status;
+  }
+  throw err;
 };
 
 /**
@@ -986,11 +1067,8 @@ export const categoriesApi = {
       const response = await api.get<Category[]>(`${API_V1_PREFIX}/categories`, { signal });
       return response.data;
     } catch (error) {
-      // Re-throw abort errors without transformation
-      if (axios.isCancel(error) || (error instanceof Error && error.name === 'AbortError')) {
-        const abortError = new Error('Request aborted');
-        abortError.name = 'AbortError';
-        throw abortError;
+      if (isAbortRequestError(error)) {
+        throw createAbortError();
       }
       throw handleError(error as AxiosError<ApiError>);
     }
@@ -1201,18 +1279,39 @@ export const generateApi = {
    * Пайплайн: Схема → Фото → М'язи
    */
   generate: async (file: File, additionalNotes?: string): Promise<GenerateResponse> => {
-    try {
-      const formData = new FormData();
-      formData.append('schema_file', file);
-      if (additionalNotes?.trim()) {
-        formData.append('additional_notes', additionalNotes);
-      }
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const formData = new FormData();
+        formData.append('schema_file', file);
+        if (additionalNotes?.trim()) {
+          formData.append('additional_notes', additionalNotes);
+        }
 
-      const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData);
-      return response.data;
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
+        const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData);
+        return response.data;
+      } catch (error) {
+        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
+        const statusCode = axios.isAxiosError(error)
+          ? error.response?.status
+          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+        if (isTransient && attempt < maxAttempts - 1) {
+          const retryAfterMs =
+            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+              : null;
+          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw handleError(error as AxiosError<ApiError>);
+      }
     }
+    // Unreachable, but TS wants a return.
+    throw new Error("Failed to start generation");
   },
 
   /**
@@ -1224,28 +1323,50 @@ export const generateApi = {
     referencePhoto: File;
     additionalNotes?: string;
   }): Promise<GenerateResponse> => {
-    try {
-      const formData = new FormData();
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const formData = new FormData();
 
-      // Primary source - use schema if available, otherwise reference photo
-      if (options.schemaFile) {
-        formData.append('schema_file', options.schemaFile);
-        // Also send reference photo for context
-        formData.append('reference_photo', options.referencePhoto);
-      } else {
-        // No schema - use reference photo as schema
-        formData.append('schema_file', options.referencePhoto);
+        // Primary source - use schema if available, otherwise reference photo.
+        // NOTE: Backend currently accepts only `schema_file` (+ optional `additional_notes`).
+        // We intentionally do NOT upload `reference_photo` to avoid unnecessary payload
+        // (and potential 413 / proxy body-size limits) until the backend supports it.
+        if (options.schemaFile) {
+          formData.append('schema_file', options.schemaFile);
+        } else {
+          // No schema - use reference photo as schema
+          formData.append('schema_file', options.referencePhoto);
+        }
+
+        if (options.additionalNotes?.trim()) {
+          formData.append('additional_notes', options.additionalNotes);
+        }
+
+        const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData);
+        return response.data;
+      } catch (error) {
+        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
+        const statusCode = axios.isAxiosError(error)
+          ? error.response?.status
+          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+        if (isTransient && attempt < maxAttempts - 1) {
+          const retryAfterMs =
+            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+              : null;
+          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw handleError(error as AxiosError<ApiError>);
       }
-
-      if (options.additionalNotes?.trim()) {
-        formData.append('additional_notes', options.additionalNotes);
-      }
-
-      const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData);
-      return response.data;
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
     }
+    // Unreachable, but TS wants a return.
+    throw new Error("Failed to start regeneration");
   },
 
   /**
@@ -1253,14 +1374,35 @@ export const generateApi = {
    * Обходить CORS проблеми - сервер сам завантажує схему
    */
   generateFromPose: async (poseId: number, additionalNotes?: string): Promise<GenerateResponse> => {
-    try {
-      // Always send an object body (even empty) to ensure Content-Type: application/json is set
-      const body = additionalNotes?.trim() ? { additional_notes: additionalNotes } : {};
-      const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate/from-pose/${poseId}`, body);
-      return response.data;
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        // Always send an object body (even empty) to ensure Content-Type: application/json is set
+        const body = additionalNotes?.trim() ? { additional_notes: additionalNotes } : {};
+        const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate/from-pose/${poseId}`, body);
+        return response.data;
+      } catch (error) {
+        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
+        const statusCode = axios.isAxiosError(error)
+          ? error.response?.status
+          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+        if (isTransient && attempt < maxAttempts - 1) {
+          const retryAfterMs =
+            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+              : null;
+          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw handleError(error as AxiosError<ApiError>);
+      }
     }
+    // Unreachable, but TS wants a return.
+    throw new Error("Failed to start generation");
   },
 
   /**
@@ -1268,16 +1410,36 @@ export const generateApi = {
    * Не потребує завантаження зображення - AI генерує з опису
    */
   generateFromText: async (description: string, additionalNotes?: string): Promise<GenerateResponse> => {
-    try {
-      const body: { description: string; additional_notes?: string } = { description };
-      if (additionalNotes?.trim()) {
-        body.additional_notes = additionalNotes;
+    const maxAttempts = 5;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const body: { description: string; additional_notes?: string } = { description };
+        if (additionalNotes?.trim()) {
+          body.additional_notes = additionalNotes;
+        }
+        const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate/from-text`, body);
+        return response.data;
+      } catch (error) {
+        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
+        const statusCode = axios.isAxiosError(error)
+          ? error.response?.status
+          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+        if (isTransient && attempt < maxAttempts - 1) {
+          const retryAfterMs =
+            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+              : null;
+          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw handleError(error as AxiosError<ApiError>);
       }
-      const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate/from-text`, body);
-      return response.data;
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
     }
+    throw new Error("Failed to start generation");
   },
 
   getStatus: async (taskId: string): Promise<GenerateResponse> => {
@@ -1298,13 +1460,12 @@ export const generateApi = {
    * - Lower bandwidth and server load
    *
    * @param taskId - The generation task ID
-   * @returns WebSocket URL with token authentication
+   * @returns WebSocket URL (token passed via Sec-WebSocket-Protocol; not in URL)
    */
   getWebSocketUrl: (taskId: string): string => {
-    const token = getAuthToken();
     // Convert http(s) to ws(s)
     const wsBase = API_BASE_URL.replace(/^http/, 'ws');
-    return `${wsBase}${API_V1_PREFIX}/ws/generate/${taskId}?token=${encodeURIComponent(token || '')}`;
+    return `${wsBase}${API_V1_PREFIX}/ws/generate/${taskId}`;
   },
 
   /**
@@ -1359,12 +1520,16 @@ export const authApi = {
       await api.post(`${API_V1_PREFIX}/auth/logout`, body);
     } catch {
       // Ignore logout errors - we're logging out anyway
+    } finally {
+      // Ensure other tabs are informed even if the API call fails
+      tokenManager.broadcastLogout();
     }
   },
 
   logoutAll: async (): Promise<void> => {
     try {
       await api.post(`${API_V1_PREFIX}/auth/logout-all`);
+      tokenManager.broadcastLogout();
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
     }
@@ -1417,7 +1582,7 @@ export const compareApi = {
    */
   poses: async (ids: number[], signal?: AbortSignal): Promise<ComparisonResult> => {
     try {
-      const response = await api.get<ComparisonResult>('/api/compare/poses', {
+      const response = await api.get<ComparisonResult>(`${API_V1_PREFIX}/compare/poses`, {
         params: { ids: ids.join(',') },
         signal,
       });
@@ -1432,7 +1597,7 @@ export const compareApi = {
    */
   muscles: async (ids: number[]): Promise<MuscleComparison[]> => {
     try {
-      const response = await api.get<MuscleComparison[]>('/api/compare/muscles', {
+      const response = await api.get<MuscleComparison[]>(`${API_V1_PREFIX}/compare/muscles`, {
         params: { pose_ids: ids.join(',') },
       });
       return response.data;
@@ -1450,7 +1615,7 @@ export const analyticsApi = {
    */
   getOverview: async (): Promise<OverviewStats> => {
     try {
-      const response = await api.get<OverviewStats>('/api/analytics/overview');
+      const response = await api.get<OverviewStats>(`${API_V1_PREFIX}/analytics/overview`);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1462,7 +1627,7 @@ export const analyticsApi = {
    */
   getMuscles: async (): Promise<MuscleStats[]> => {
     try {
-      const response = await api.get<MuscleStats[]>('/api/analytics/muscles');
+      const response = await api.get<MuscleStats[]>(`${API_V1_PREFIX}/analytics/muscles`);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1474,7 +1639,7 @@ export const analyticsApi = {
    */
   getMuscleHeatmap: async (): Promise<MuscleHeatmapData> => {
     try {
-      const response = await api.get<MuscleHeatmapData>('/api/analytics/muscle-heatmap');
+      const response = await api.get<MuscleHeatmapData>(`${API_V1_PREFIX}/analytics/muscle-heatmap`);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1486,7 +1651,7 @@ export const analyticsApi = {
    */
   getCategories: async (): Promise<CategoryStats[]> => {
     try {
-      const response = await api.get<CategoryStats[]>('/api/analytics/categories');
+      const response = await api.get<CategoryStats[]>(`${API_V1_PREFIX}/analytics/categories`);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1498,7 +1663,7 @@ export const analyticsApi = {
    */
   getRecentActivity: async (limit = 10): Promise<RecentActivity[]> => {
     try {
-      const response = await api.get<RecentActivity[]>('/api/analytics/recent-activity', {
+      const response = await api.get<RecentActivity[]>(`${API_V1_PREFIX}/analytics/recent-activity`, {
         params: { limit },
       });
       return response.data;
@@ -1512,7 +1677,7 @@ export const analyticsApi = {
    */
   getBodyPartBalance: async (): Promise<BodyPartBalance[]> => {
     try {
-      const response = await api.get<BodyPartBalance[]>('/api/analytics/body-part-balance');
+      const response = await api.get<BodyPartBalance[]>(`${API_V1_PREFIX}/analytics/body-part-balance`);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1525,7 +1690,7 @@ export const analyticsApi = {
    */
   getSummary: async (signal?: AbortSignal): Promise<AnalyticsSummary> => {
     try {
-      const response = await api.get<AnalyticsSummary>('/api/analytics/summary', { signal });
+      const response = await api.get<AnalyticsSummary>(`${API_V1_PREFIX}/analytics/summary`, { signal });
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1541,7 +1706,7 @@ export const sequencesApi = {
    */
   getAll: async (skip = 0, limit = 20): Promise<PaginatedSequenceResponse> => {
     try {
-      const response = await api.get<PaginatedSequenceResponse>('/api/sequences', {
+      const response = await api.get<PaginatedSequenceResponse>(`${API_V1_PREFIX}/sequences`, {
         params: { skip, limit },
       });
       return response.data;
@@ -1555,7 +1720,7 @@ export const sequencesApi = {
    */
   getById: async (id: number): Promise<Sequence> => {
     try {
-      const response = await api.get<Sequence>(`/api/sequences/${id}`);
+      const response = await api.get<Sequence>(`${API_V1_PREFIX}/sequences/${id}`);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1567,7 +1732,7 @@ export const sequencesApi = {
    */
   create: async (data: SequenceCreate): Promise<Sequence> => {
     try {
-      const response = await api.post<Sequence>('/api/sequences', data);
+      const response = await api.post<Sequence>(`${API_V1_PREFIX}/sequences`, data);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1579,7 +1744,7 @@ export const sequencesApi = {
    */
   update: async (id: number, data: SequenceUpdate): Promise<Sequence> => {
     try {
-      const response = await api.put<Sequence>(`/api/sequences/${id}`, data);
+      const response = await api.put<Sequence>(`${API_V1_PREFIX}/sequences/${id}`, data);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1591,7 +1756,7 @@ export const sequencesApi = {
    */
   delete: async (id: number): Promise<void> => {
     try {
-      await api.delete(`/api/sequences/${id}`);
+      await api.delete(`${API_V1_PREFIX}/sequences/${id}`);
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
     }
@@ -1602,7 +1767,7 @@ export const sequencesApi = {
    */
   addPose: async (sequenceId: number, poseData: SequencePoseCreate): Promise<Sequence> => {
     try {
-      const response = await api.post<Sequence>(`/api/sequences/${sequenceId}/poses`, poseData);
+      const response = await api.post<Sequence>(`${API_V1_PREFIX}/sequences/${sequenceId}/poses`, poseData);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1614,7 +1779,7 @@ export const sequencesApi = {
    */
   updatePose: async (sequenceId: number, sequencePoseId: number, poseData: SequencePoseUpdate): Promise<Sequence> => {
     try {
-      const response = await api.put<Sequence>(`/api/sequences/${sequenceId}/poses/${sequencePoseId}`, poseData);
+      const response = await api.put<Sequence>(`${API_V1_PREFIX}/sequences/${sequenceId}/poses/${sequencePoseId}`, poseData);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1626,7 +1791,7 @@ export const sequencesApi = {
    */
   removePose: async (sequenceId: number, sequencePoseId: number): Promise<Sequence> => {
     try {
-      const response = await api.delete<Sequence>(`/api/sequences/${sequenceId}/poses/${sequencePoseId}`);
+      const response = await api.delete<Sequence>(`${API_V1_PREFIX}/sequences/${sequenceId}/poses/${sequencePoseId}`);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
@@ -1638,10 +1803,28 @@ export const sequencesApi = {
    */
   reorderPoses: async (sequenceId: number, data: ReorderPosesRequest): Promise<Sequence> => {
     try {
-      const response = await api.put<Sequence>(`/api/sequences/${sequenceId}/poses/reorder`, data);
+      const response = await api.put<Sequence>(`${API_V1_PREFIX}/sequences/${sequenceId}/poses/reorder`, data);
       return response.data;
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
+    }
+  },
+
+  /**
+   * Export all poses from a sequence as a single PDF (keeps sequence order)
+   */
+  exportPdf: async (
+    sequenceId: number,
+    pageSize: 'A4' | 'Letter' = 'A4',
+  ): Promise<Blob> => {
+    try {
+      const response = await api.get(`${API_V1_PREFIX}/sequences/${sequenceId}/pdf`, {
+        params: { page_size: pageSize },
+        responseType: 'blob',
+      });
+      return response.data;
+    } catch (error) {
+      return handleBlobError(error as AxiosError);
     }
   },
 };
@@ -1653,32 +1836,56 @@ export const versionsApi = {
    * Get version history for a pose
    */
   list: async (poseId: number, skip = 0, limit = 50, signal?: AbortSignal): Promise<PoseVersionListItem[]> => {
-    try {
-      const response = await api.get<PoseVersionListItem[] | { items: PoseVersionListItem[] }>(`${API_V1_PREFIX}/poses/${poseId}/versions`, {
-        params: { skip, limit },
-        signal,
-      });
-      // Handle both array response and paginated response { items: [] }
-      const data = response.data;
-      if (Array.isArray(data)) {
-        return data;
+    const maxAttempts = 6;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await api.get<PoseVersionListItem[] | { items: PoseVersionListItem[] }>(`${API_V1_PREFIX}/poses/${poseId}/versions`, {
+          params: { skip, limit },
+          signal,
+        });
+        // Handle both array response and paginated response { items: [] }
+        const data = response.data;
+        if (Array.isArray(data)) {
+          return data;
+        }
+        // Paginated response format
+        if (data && typeof data === 'object' && 'items' in data && Array.isArray(data.items)) {
+          return data.items;
+        }
+        // Fallback to empty array if response is unexpected
+        console.warn('Unexpected versions response format:', data);
+        return [];
+      } catch (error) {
+        // Re-throw abort errors without transformation
+        if (axios.isCancel(error) || (error instanceof Error && error.name === 'AbortError')) {
+          const abortError = new Error('Request aborted');
+          abortError.name = 'AbortError';
+          throw abortError;
+        }
+
+        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number };
+        const statusCode = axios.isAxiosError(error)
+          ? error.response?.status
+          : (anyErr as unknown as { status?: number })?.status ??
+            (anyErr?.isRateLimited ? 429 : undefined);
+        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+        if (isTransient && attempt < maxAttempts - 1 && !signal?.aborted) {
+          const retryAfterMs =
+            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === 'number'
+              ? Math.max(100, Math.floor(anyErr.retryAfter * 1000))
+              : null;
+          const backoffMs = Math.min(50 * (2 ** attempt), 800) + Math.floor(Math.random() * 50);
+          const delayMs = Math.min(retryAfterMs ?? backoffMs, 5_000);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+
+        throw handleError(error as AxiosError<ApiError>);
       }
-      // Paginated response format
-      if (data && typeof data === 'object' && 'items' in data && Array.isArray(data.items)) {
-        return data.items;
-      }
-      // Fallback to empty array if response is unexpected
-      console.warn('Unexpected versions response format:', data);
-      return [];
-    } catch (error) {
-      // Re-throw abort errors without transformation
-      if (axios.isCancel(error) || (error instanceof Error && error.name === 'AbortError')) {
-        const abortError = new Error('Request aborted');
-        abortError.name = 'AbortError';
-        throw abortError;
-      }
-      throw handleError(error as AxiosError<ApiError>);
     }
+    // Unreachable, but TS wants a return.
+    return [];
   },
 
   /**
@@ -1697,39 +1904,102 @@ export const versionsApi = {
    * Get detailed version info
    */
   get: async (poseId: number, versionId: number): Promise<PoseVersionDetail> => {
-    try {
-      const response = await api.get<PoseVersionDetail>(`${API_V1_PREFIX}/poses/${poseId}/versions/${versionId}`);
-      return response.data;
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
+    const maxAttempts = 6;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await api.get<PoseVersionDetail>(`${API_V1_PREFIX}/poses/${poseId}/versions/${versionId}`);
+        return response.data;
+      } catch (error) {
+        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
+        const statusCode = axios.isAxiosError(error)
+          ? error.response?.status
+          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+        if (isTransient && attempt < maxAttempts - 1) {
+          const retryAfterMs =
+            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+              : null;
+          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw handleError(error as AxiosError<ApiError>);
+      }
     }
+    // Unreachable, but TS wants a return.
+    throw new Error("Failed to load version");
   },
 
   /**
    * Restore pose to a specific version
    */
   restore: async (poseId: number, versionId: number, data?: RestoreVersionRequest): Promise<{ success: boolean; message: string; pose_id: number }> => {
-    try {
-      const response = await api.post<{ success: boolean; message: string; pose_id: number }>(
-        `${API_V1_PREFIX}/poses/${poseId}/versions/${versionId}/restore`,
-        data || {}
-      );
-      return response.data;
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
+    const maxAttempts = 6;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await api.post<{ success: boolean; message: string; pose_id: number }>(
+          `${API_V1_PREFIX}/poses/${poseId}/versions/${versionId}/restore`,
+          data || {}
+        );
+        return response.data;
+      } catch (error) {
+        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
+        const statusCode = axios.isAxiosError(error)
+          ? error.response?.status
+          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+        if (isTransient && attempt < maxAttempts - 1) {
+          const retryAfterMs =
+            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+              : null;
+          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw handleError(error as AxiosError<ApiError>);
+      }
     }
+    // Unreachable, but TS wants a return.
+    throw new Error("Failed to restore version");
   },
 
   /**
    * Compare two versions
    */
   diff: async (poseId: number, v1: number, v2: number): Promise<VersionComparisonResult> => {
-    try {
-      const response = await api.get<VersionComparisonResult>(`${API_V1_PREFIX}/poses/${poseId}/versions/${v1}/diff/${v2}`);
-      return response.data;
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
+    const maxAttempts = 6;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await api.get<VersionComparisonResult>(`${API_V1_PREFIX}/poses/${poseId}/versions/${v1}/diff/${v2}`);
+        return response.data;
+      } catch (error) {
+        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
+        const statusCode = axios.isAxiosError(error)
+          ? error.response?.status
+          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+        if (isTransient && attempt < maxAttempts - 1) {
+          const retryAfterMs =
+            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
+              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+              : null;
+          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw handleError(error as AxiosError<ApiError>);
+      }
     }
+    // Unreachable, but TS wants a return.
+    throw new Error("Failed to compare versions");
   },
 };
 
@@ -1756,7 +2026,7 @@ export const exportApi = {
   posesJson: async (categoryId?: number): Promise<Blob> => {
     try {
       const params = categoryId ? { category_id: categoryId } : {};
-      const response = await api.get('/api/export/poses/json', {
+      const response = await api.get(`${API_V1_PREFIX}/export/poses/json`, {
         params,
         responseType: 'blob',
       });
@@ -1772,7 +2042,7 @@ export const exportApi = {
   posesCsv: async (categoryId?: number): Promise<Blob> => {
     try {
       const params = categoryId ? { category_id: categoryId } : {};
-      const response = await api.get('/api/export/poses/csv', {
+      const response = await api.get(`${API_V1_PREFIX}/export/poses/csv`, {
         params,
         responseType: 'blob',
       });
@@ -1785,7 +2055,13 @@ export const exportApi = {
   /**
    * Export a single pose as PDF
    */
-  posePdf: async (poseId: number, options?: Partial<PDFExportOptions>): Promise<Blob> => {
+  posePdf: async (
+    poseId: number,
+    options?: Partial<PDFExportOptions>,
+    handlers?: {
+      onProgress?: (percent: number) => void;
+    },
+  ): Promise<Blob> => {
     try {
       const params: Record<string, boolean | string> = {};
       if (options?.include_photo !== undefined) params.include_photo = options.include_photo;
@@ -1795,9 +2071,23 @@ export const exportApi = {
       if (options?.include_description !== undefined) params.include_description = options.include_description;
       if (options?.page_size) params.page_size = options.page_size;
 
-      const response = await api.get(`/api/export/pose/${poseId}/pdf`, {
+      const response = await api.get(`${API_V1_PREFIX}/export/pose/${poseId}/pdf`, {
         params,
         responseType: 'blob',
+        onDownloadProgress: (event) => {
+          if (!handlers?.onProgress) return;
+          const total = typeof event.total === 'number' ? event.total : 0;
+          if (total > 0) {
+            const percent = Math.min(100, Math.max(0, Math.round((event.loaded / total) * 100)));
+            handlers.onProgress(percent);
+            return;
+          }
+          if (event.loaded > 0) {
+            // Fallback when content-length is unavailable.
+            const estimated = Math.min(95, Math.max(5, Math.round(Math.log10(event.loaded + 1) * 18)));
+            handlers.onProgress(estimated);
+          }
+        },
       });
       return response.data;
     } catch (error) {
@@ -1814,7 +2104,7 @@ export const exportApi = {
       if (categoryId) params.category_id = categoryId;
       if (pageSize) params.page_size = pageSize;
 
-      const response = await api.get('/api/export/poses/pdf', {
+      const response = await api.get(`${API_V1_PREFIX}/export/poses/pdf`, {
         params,
         responseType: 'blob',
       });
@@ -1829,7 +2119,7 @@ export const exportApi = {
    */
   backup: async (): Promise<Blob> => {
     try {
-      const response = await api.get('/api/export/backup', {
+      const response = await api.get(`${API_V1_PREFIX}/export/backup`, {
         responseType: 'blob',
       });
       return response.data;
@@ -1843,7 +2133,7 @@ export const exportApi = {
    */
   categoriesJson: async (): Promise<Blob> => {
     try {
-      const response = await api.get('/api/export/categories/json', {
+      const response = await api.get(`${API_V1_PREFIX}/export/categories/json`, {
         responseType: 'blob',
       });
       return response.data;
@@ -1864,7 +2154,7 @@ export const importApi = {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await api.post<ImportResult>('/api/import/poses/json', formData, {
+      const response = await api.post<ImportResult>(`${API_V1_PREFIX}/import/poses/json`, formData, {
         params: { duplicate_handling: duplicateHandling },
       });
       return response.data;
@@ -1881,7 +2171,7 @@ export const importApi = {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await api.post<ImportResult>('/api/import/poses/csv', formData, {
+      const response = await api.post<ImportResult>(`${API_V1_PREFIX}/import/poses/csv`, formData, {
         params: { duplicate_handling: duplicateHandling },
       });
       return response.data;
@@ -1903,7 +2193,7 @@ export const importApi = {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await api.post<ImportResult>('/api/import/backup', formData, {
+      const response = await api.post<ImportResult>(`${API_V1_PREFIX}/import/backup`, formData, {
         params: {
           duplicate_handling: duplicateHandling,
           import_categories: importCategories,
@@ -1924,7 +2214,7 @@ export const importApi = {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await api.post<ImportPreviewResult>('/api/import/preview/json', formData, {
+      const response = await api.post<ImportPreviewResult>(`${API_V1_PREFIX}/import/preview/json`, formData, {
         params: { duplicate_handling: duplicateHandling },
       });
       return response.data;

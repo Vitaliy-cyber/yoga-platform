@@ -484,6 +484,10 @@ const translations = {
     en: "Active Muscles",
     ua: "Активні м'язи",
   },
+  "pose.viewer.active_muscles_toast": {
+    en: "Active muscles loaded: {count}",
+    ua: "Активні м'язи завантажено: {count}",
+  },
   "pose.viewer.activation_level": {
     en: "Activation level",
     ua: "Рівень активації",
@@ -900,8 +904,8 @@ const translations = {
   },
   // Generation steps
   "generate.step_analyzing": {
-    en: "Analyzing pose",
-    ua: "Аналіз пози",
+    en: "Preparing pose",
+    ua: "Підготовка пози",
   },
   "generate.step_photo": {
     en: "Generating photo",
@@ -1053,8 +1057,44 @@ const translations = {
     ua: "Обробка...",
   },
   "generate.modal_hint": {
-    en: "This may take up to a minute. Please don't close this window.",
-    ua: "Це може зайняти до хвилини. Не закривайте це вікно.",
+    en: "This may take up to a minute. You can close this window; generation will continue in background.",
+    ua: "Це може зайняти до хвилини. Можна закрити це вікно - генерація продовжиться у фоні.",
+  },
+  "generate.bg.processing": {
+    en: "Processing...",
+    ua: "Обробка...",
+  },
+  "generate.bg.completed": {
+    en: "Generation completed",
+    ua: "Генерацію завершено",
+  },
+  "generate.bg.failed": {
+    en: "Generation failed",
+    ua: "Генерація завершилась помилкою",
+  },
+  "generate.bg.applying": {
+    en: "Applying result to pose...",
+    ua: "Застосовуємо результат до пози...",
+  },
+  "generate.bg.dismiss": {
+    en: "Dismiss",
+    ua: "Прибрати",
+  },
+  "generate.bg.open_pose": {
+    en: "Open pose",
+    ua: "Відкрити позу",
+  },
+  "generate.bg.retry_apply": {
+    en: "Retry apply",
+    ua: "Повторити застосування",
+  },
+  "generate.bg.mode_generate": {
+    en: "Generate",
+    ua: "Генерація",
+  },
+  "generate.bg.mode_regenerate": {
+    en: "Regenerate",
+    ua: "Перегенерація",
   },
   "generate.schema_fetch_failed": {
     en: "Failed to fetch schema",
@@ -1252,6 +1292,10 @@ const translations = {
   "generate.error_failed": {
     en: "Generation failed",
     ua: "Помилка генерації",
+  },
+  "generate.error_pose_mismatch": {
+    en: "Generated image does not match the source pose closely enough. Please retry.",
+    ua: "Згенероване зображення недостатньо точно повторює вихідну позу. Спробуйте ще раз.",
   },
   "generate.status_failed": {
     en: "Status check failed",
@@ -2736,10 +2780,15 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [locale]);
 
   const setLocale = useCallback((nextLocale: Locale) => {
-    setLocaleState(nextLocale);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("yoga_locale", nextLocale);
-    }
+    setLocaleState((prevLocale) => {
+      if (prevLocale === nextLocale) {
+        return prevLocale;
+      }
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("yoga_locale", nextLocale);
+      }
+      return nextLocale;
+    });
   }, []);
 
   const t = useCallback(

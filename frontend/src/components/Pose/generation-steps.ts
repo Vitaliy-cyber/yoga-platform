@@ -3,7 +3,7 @@ import { Lightbulb, Camera, Activity, Search } from "lucide-react";
 /**
  * Generation progress steps used by both GenerateModal and RegenerateModal.
  * Backend progress values (from google_generator.py):
- * - 5% - Analyzing pose
+ * - 5% - Preparing pose
  * - 25% - Generating photo (starts)
  * - 55% - Generating muscles (starts)
  * - 85% - Analyzing active muscles

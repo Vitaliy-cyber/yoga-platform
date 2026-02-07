@@ -1,10 +1,9 @@
 import asyncio
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Protocol
-
-import aiofiles
 
 from config import get_settings
 logger = logging.getLogger(__name__)
@@ -52,20 +51,24 @@ class LocalStorage:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Local storage initialized at %s", self.base_dir)
 
+    def _validate_within_base_dir(self, file_path: Path) -> None:
+        base_dir_resolved = self.base_dir.resolve()
+        resolved_path = file_path.resolve()
+        try:
+            resolved_path.relative_to(base_dir_resolved)
+        except ValueError:
+            raise ValueError("Invalid path: path traversal attempt detected")
+
     async def upload_bytes(self, data: bytes, key: str, content_type: str) -> str:
         """Upload bytes to local filesystem."""
         key = key.lstrip("/")
         file_path = self.base_dir / key
 
         # SECURITY: Validate path to prevent directory traversal attacks
-        resolved_path = file_path.resolve()
-        if not str(resolved_path).startswith(str(self.base_dir.resolve())):
-            raise ValueError("Invalid key: path traversal attempt detected")
+        self._validate_within_base_dir(file_path)
 
         file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        async with aiofiles.open(file_path, "wb") as f:
-            await f.write(data)
+        file_path.write_bytes(data)
 
         logger.info("Saved file locally: %s", file_path)
         # Return relative URL that will be served by FastAPI
@@ -81,15 +84,11 @@ class LocalStorage:
         file_path = self.base_dir / path
 
         # SECURITY: Validate path to prevent directory traversal attacks
-        resolved_path = file_path.resolve()
-        if not str(resolved_path).startswith(str(self.base_dir.resolve())):
-            raise ValueError("Invalid path: path traversal attempt detected")
+        self._validate_within_base_dir(file_path)
 
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
-
-        async with aiofiles.open(file_path, "rb") as f:
-            return await f.read()
+        return file_path.read_bytes()
 
     def get_presigned_url(
         self, key: str, expiration: int = PRESIGNED_URL_EXPIRATION
@@ -99,6 +98,7 @@ class LocalStorage:
         # Remove /storage/ prefix if present
         if key.startswith("storage/"):
             key = key[8:]
+        self._validate_within_base_dir(self.base_dir / key)
         return f"/storage/{key}"
 
 
@@ -244,6 +244,17 @@ class S3Storage:
             logger.error("Failed to generate presigned URL: %s", str(e))
             raise
 
+    async def _run_blocking(self, fn, *args, **kwargs):
+        """
+        Run a blocking SDK call.
+
+        In pytest we avoid creating executor threads to prevent intermittent
+        loop teardown hangs on Python 3.14.
+        """
+        if "pytest" in sys.modules:
+            return fn(*args, **kwargs)
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
     async def upload_bytes(self, data: bytes, key: str, content_type: str) -> str:
         """Upload bytes to S3 and return a public URL for access."""
         s3_key = self._build_key(key)
@@ -261,7 +272,7 @@ class S3Storage:
                 s3_key,
                 self.endpoint_url,
             )
-            await asyncio.to_thread(self.client.put_object, **params)
+            await self._run_blocking(self.client.put_object, **params)
 
             url = self._build_public_url(key)
             logger.info("Upload successful, public URL generated")
@@ -294,7 +305,7 @@ class S3Storage:
 
         try:
             logger.info("Downloading from S3: bucket=%s, key=%s", self.bucket, s3_key)
-            response = await asyncio.to_thread(
+            response = await self._run_blocking(
                 self.client.get_object,
                 Bucket=self.bucket,
                 Key=s3_key,

@@ -443,6 +443,110 @@ class TestPoseSchemaUpload:
         )
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_upload_schema_accepts_octet_stream_when_bytes_are_valid(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        create_response = await auth_client_with_mocked_storage.post(
+            "/api/poses", json={"code": "SCH02", "name": "Schema Pose Octet"}
+        )
+        pose_id = create_response.json()["id"]
+
+        img = Image.new("RGB", (128, 128), "red")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            f"/api/poses/{pose_id}/schema",
+            files={"file": ("test.bin", buffer, "application/octet-stream")},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["schema_path"] is not None
+
+    @pytest.mark.asyncio
+    async def test_upload_schema_rejects_too_small_image(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        create_response = await auth_client_with_mocked_storage.post(
+            "/api/poses", json={"code": "SCH03", "name": "Too Small Schema Pose"}
+        )
+        pose_id = create_response.json()["id"]
+
+        img = Image.new("RGB", (1, 1), "red")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            f"/api/poses/{pose_id}/schema",
+            files={"file": ("tiny.png", buffer, "image/png")},
+        )
+        assert response.status_code == 400
+        assert "too small" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_upload_schema_accepts_content_type_with_parameters(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        create_response = await auth_client_with_mocked_storage.post(
+            "/api/poses", json={"code": "SCH04", "name": "Schema MIME Parameters"}
+        )
+        pose_id = create_response.json()["id"]
+
+        img = Image.new("RGB", (128, 128), "red")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            f"/api/poses/{pose_id}/schema",
+            files={"file": ("test.png", buffer, "image/png; charset=binary")},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_upload_schema_accepts_image_x_png_alias(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        create_response = await auth_client_with_mocked_storage.post(
+            "/api/poses", json={"code": "SCH05", "name": "Schema X-PNG"}
+        )
+        pose_id = create_response.json()["id"]
+
+        img = Image.new("RGB", (128, 128), "red")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            f"/api/poses/{pose_id}/schema",
+            files={"file": ("test.png", buffer, "image/x-png")},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_upload_schema_rejects_extreme_aspect_ratio(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        create_response = await auth_client_with_mocked_storage.post(
+            "/api/poses", json={"code": "SCH06", "name": "Schema Extreme Aspect"}
+        )
+        pose_id = create_response.json()["id"]
+
+        img = Image.new("RGB", (2048, 64), "red")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            f"/api/poses/{pose_id}/schema",
+            files={"file": ("wide.png", buffer, "image/png")},
+        )
+        assert response.status_code == 400
+        assert "aspect ratio" in response.json()["detail"].lower()
+
 
 # ============== Muscles API ==============
 
@@ -504,6 +608,79 @@ class TestMusclesAPI:
         response = await auth_client.get("/api/muscles/99999")
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_muscle_mutation_routes_blocked_in_prod_mode(self, auth_client: AsyncClient):
+        """Mutating global muscles dictionary must be blocked in production."""
+        from api.routes import muscles as muscles_routes
+        from config import AppMode
+
+        previous_mode = muscles_routes.settings.APP_MODE
+        muscles_routes.settings.APP_MODE = AppMode.PROD
+        try:
+            create_resp = await auth_client.post(
+                "/api/muscles",
+                json={
+                    "name": "test_muscle",
+                    "name_ua": "Тестовий м'яз",
+                    "body_part": "core",
+                },
+            )
+            assert create_resp.status_code == 403
+
+            seed_resp = await auth_client.post("/api/muscles/seed")
+            assert seed_resp.status_code == 403
+        finally:
+            muscles_routes.settings.APP_MODE = previous_mode
+
+
+# ============== Sequences API ==============
+
+
+class TestSequencesAPI:
+    """Tests for sequence endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_create_sequence_with_multiple_poses(self, auth_client: AsyncClient):
+        pose_1 = await auth_client.post(
+            "/api/poses",
+            json={"code": "SQA001", "name": "Seq Pose 1"},
+        )
+        pose_2 = await auth_client.post(
+            "/api/poses",
+            json={"code": "SQA002", "name": "Seq Pose 2"},
+        )
+        assert pose_1.status_code == 201
+        assert pose_2.status_code == 201
+
+        response = await auth_client.post(
+            "/api/sequences",
+            json={
+                "name": "Morning Flow",
+                "description": "Test flow",
+                "poses": [
+                    {"pose_id": pose_1.json()["id"], "order_index": 0, "duration_seconds": 30},
+                    {"pose_id": pose_2.json()["id"], "order_index": 1, "duration_seconds": 45},
+                ],
+            },
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["name"] == "Morning Flow"
+        assert len(data["poses"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_create_sequence_rejects_missing_pose_ids(self, auth_client: AsyncClient):
+        response = await auth_client.post(
+            "/api/sequences",
+            json={
+                "name": "Broken Flow",
+                "poses": [{"pose_id": 999999, "order_index": 0, "duration_seconds": 30}],
+            },
+        )
+        assert response.status_code == 400
+        assert "not found" in response.json()["detail"].lower()
+
 
 # ============== Generate API ==============
 
@@ -558,6 +735,98 @@ class TestGenerateAPI:
             files={"schema_file": ("test.jpg", buffer, "image/jpeg")},
         )
         assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_generate_accepts_octet_stream_when_bytes_are_valid_image(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        img = Image.new("RGB", (128, 128), "purple")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            "/api/generate",
+            files={"schema_file": ("test.bin", buffer, "application/octet-stream")},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_generate_rejects_too_small_schema_image(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        img = Image.new("RGB", (1, 1), "white")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            "/api/generate",
+            files={"schema_file": ("tiny.png", buffer, "image/png")},
+        )
+        assert response.status_code == 400
+        assert "too small" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_generate_accepts_content_type_with_parameters(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        img = Image.new("RGB", (128, 128), "green")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            "/api/generate",
+            files={"schema_file": ("test.png", buffer, "image/png; charset=binary")},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_generate_accepts_image_pjpeg_alias(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        img = Image.new("RGB", (128, 128), "green")
+        buffer = BytesIO()
+        img.save(buffer, format="JPEG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            "/api/generate",
+            files={"schema_file": ("test.jpg", buffer, "image/pjpeg")},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_generate_accepts_image_x_png_alias(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        img = Image.new("RGB", (128, 128), "green")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            "/api/generate",
+            files={"schema_file": ("test.png", buffer, "image/x-png")},
+        )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_generate_rejects_extreme_aspect_ratio_schema(
+        self, auth_client_with_mocked_storage: AsyncClient
+    ):
+        img = Image.new("RGB", (2048, 64), "green")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        response = await auth_client_with_mocked_storage.post(
+            "/api/generate",
+            files={"schema_file": ("wide.png", buffer, "image/png")},
+        )
+        assert response.status_code == 400
+        assert "aspect ratio" in response.json()["detail"].lower()
 
     @pytest.mark.asyncio
     async def test_get_generation_status_not_found(self, auth_client: AsyncClient):

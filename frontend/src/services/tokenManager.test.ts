@@ -36,6 +36,7 @@ beforeEach(() => {
   resetTokenManager();
   server.resetHandlers();
   setAuthState();
+  document.cookie = "csrf_token=; Max-Age=0; path=/";
 });
 
 afterEach(() => {
@@ -67,6 +68,30 @@ describe("TokenManager", () => {
   it("refreshes token when expired", async () => {
     server.use(
       http.post("http://localhost:3000/api/v1/auth/refresh", () => {
+        return HttpResponse.json({
+          access_token: "new-token",
+          expires_in: 300,
+          user: { id: 1, name: "Test" },
+        });
+      })
+    );
+
+    setAuthState({ tokenExpiresAt: Date.now() - 1000 });
+
+    const manager = TokenManager.getInstance();
+    const result = await manager.silentRefresh();
+
+    expect(result).toBe(true);
+    expect(useAuthStore.getState().accessToken).toBe("new-token");
+  });
+
+  it("sends CSRF and Authorization headers on refresh request", async () => {
+    document.cookie = "csrf_token=test-csrf-token; path=/";
+
+    server.use(
+      http.post("http://localhost:3000/api/v1/auth/refresh", ({ request }) => {
+        expect(request.headers.get("x-csrf-token")).toBe("test-csrf-token");
+        expect(request.headers.get("authorization")).toBe("Bearer token");
         return HttpResponse.json({
           access_token: "new-token",
           expires_in: 300,

@@ -8,12 +8,12 @@ This replaces HTTP polling with WebSocket push notifications:
 - Better user experience with instant feedback
 
 Authentication:
-- JWT token is passed as query parameter: ?token=<access_token>
+- JWT token is passed via WebSocket subprotocol to avoid leaking tokens in URLs/logs.
 - Token is validated using the same logic as HTTP endpoints
 - Only task owner can subscribe to task updates
 
 Usage (frontend):
-    const ws = new WebSocket(`ws://host/api/v1/ws/generate/${taskId}?token=${accessToken}`);
+    const ws = new WebSocket(`ws://host/api/v1/ws/generate/${taskId}`, ['jwt', accessToken]);
 
     ws.onmessage = (event) => {
         const update = JSON.parse(event.data);
@@ -32,7 +32,6 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
-from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +40,7 @@ from db.database import AsyncSessionLocal
 from models.generation_task import GenerationTask
 from models.user import User
 from services.auth import decode_token, is_token_blacklisted
+from services.error_sanitizer import sanitize_public_error_message
 from services.websocket_manager import (
     ConnectionManager,
     ProgressUpdate,
@@ -131,12 +131,28 @@ async def get_task_current_status(task_id: str, user_id: int) -> Optional[Progre
             except json.JSONDecodeError:
                 pass
 
+        progress = task.progress or 0
+        try:
+            progress_int = int(progress)
+        except Exception:
+            progress_int = 0
+        if progress_int < 0:
+            progress_int = 0
+        if progress_int > 100:
+            progress_int = 100
+
+        status_value = task.status or "failed"
+        if status_value not in ("pending", "processing", "completed", "failed"):
+            status_value = "failed"
+
         return ProgressUpdate(
             task_id=task_id,
-            status=task.status,
-            progress=task.progress,
+            status=status_value,
+            progress=progress_int,
             status_message=task.status_message,
-            error_message=task.error_message,
+            error_message=sanitize_public_error_message(
+                task.error_message, fallback="Generation failed"
+            ),
             photo_url=task.photo_url,
             muscles_url=task.muscles_url,
             quota_warning=task.quota_warning or False,
@@ -148,13 +164,16 @@ async def get_task_current_status(task_id: str, user_id: int) -> Optional[Progre
 async def websocket_generation_status(
     websocket: WebSocket,
     task_id: str,
-    token: str = Query(..., description="JWT access token"),
+    token: str | None = Query(
+        None,
+        description="DEPRECATED: JWT access token in query. Prefer Sec-WebSocket-Protocol: jwt,<token>.",
+    ),
     manager: ConnectionManager = Depends(get_connection_manager),
 ):
     """
     WebSocket endpoint for real-time generation status updates.
 
-    Connection URL: ws://host/api/v1/ws/generate/{task_id}?token=<access_token>
+    Connection URL: ws://host/api/v1/ws/generate/{task_id}
 
     Messages sent by server:
     {
@@ -175,8 +194,26 @@ async def websocket_generation_status(
     - 1008: Policy violation (unauthorized)
     - 1011: Internal error
     """
-    # Authenticate user from token
-    user = await get_user_from_token(token)
+    # SECURITY: Prefer passing access token via Sec-WebSocket-Protocol to avoid URL/log leaks.
+    # Client should connect with: new WebSocket(url, ['jwt', accessToken])
+    chosen_subprotocol: str | None = None
+    token_value = (token or "").strip()
+    if not token_value:
+        raw_protocols = websocket.headers.get("sec-websocket-protocol") or ""
+        protocols = [p.strip() for p in raw_protocols.split(",") if p.strip()]
+        if len(protocols) >= 2 and protocols[0].lower() == "jwt":
+            token_value = protocols[1].strip()
+            chosen_subprotocol = "jwt"
+        else:
+            # Best-effort: accept a JWT-looking token as any offered subprotocol item.
+            for p in protocols:
+                if p.count(".") >= 2 and len(p) > 32:
+                    token_value = p
+                    chosen_subprotocol = protocols[0] if protocols else None
+                    break
+
+    # Authenticate user from token (query fallback is allowed but discouraged).
+    user = await get_user_from_token(token_value)
     if user is None:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid or expired token")
         return
@@ -187,7 +224,7 @@ async def websocket_generation_status(
         return
 
     # Connect and register subscription
-    await manager.connect(websocket, user.id, task_id)
+    await manager.connect(websocket, user.id, task_id, subprotocol=chosen_subprotocol)
 
     try:
         # Send current task status immediately after connection

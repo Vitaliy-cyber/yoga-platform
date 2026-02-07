@@ -142,8 +142,8 @@ class TestCORSOrigins:
             settings = Settings()
             origins = settings.CORS_ORIGINS
 
-            # Should return wildcard when no custom origins set
-            assert origins == ["*"]
+            # Production now fails closed: no wildcard fallback.
+            assert origins == []
 
     def test_cors_allowed_origins_custom(self):
         """Test custom CORS_ALLOWED_ORIGINS are added."""
@@ -247,6 +247,42 @@ class TestAISettings:
 
             settings = Settings()
             assert settings.ENABLE_AI_GENERATION is False
+
+
+class TestProductionSecurityValidation:
+    """Production security guardrails."""
+
+    def test_prod_rejects_insecure_secret_placeholder(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_MODE": "prod",
+                "SECRET_KEY": "change-me-in-production",
+                "DATABASE_URL": "sqlite+aiosqlite:///./test.db",
+            },
+            clear=True,
+        ):
+            import config
+
+            config.get_settings.cache_clear()
+            with pytest.raises(ValueError, match="Insecure SECRET_KEY"):
+                config.get_settings()
+
+    def test_prod_rejects_short_secret(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_MODE": "prod",
+                "SECRET_KEY": "short-secret",
+                "DATABASE_URL": "sqlite+aiosqlite:///./test.db",
+            },
+            clear=True,
+        ):
+            import config
+
+            config.get_settings.cache_clear()
+            with pytest.raises(ValueError, match="too short"):
+                config.get_settings()
 
 
 class TestGetSettings:

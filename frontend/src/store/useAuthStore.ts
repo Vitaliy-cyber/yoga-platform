@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { User } from '../types';
 import { TOKEN_REFRESH_THRESHOLD_MS } from '../lib/constants';
+import { useGenerationStore } from './useGenerationStore';
 
 // Storage key for persisting auth state
 const TOKEN_KEY = 'yoga_auth_token';
@@ -62,6 +63,7 @@ export const useAuthStore = create<AuthState>()(
           isAuthenticated: Boolean(accessToken),
           isLoading: false,
         });
+        useGenerationStore.getState().syncOwner(user.id);
       },
 
       setTokens: (accessToken, refreshToken, expiresIn) => {
@@ -77,7 +79,8 @@ export const useAuthStore = create<AuthState>()(
         });
       },
 
-      logout: () =>
+      logout: () => {
+        useGenerationStore.getState().syncOwner(null);
         set({
           user: null,
           accessToken: null,
@@ -88,7 +91,8 @@ export const useAuthStore = create<AuthState>()(
           isRefreshing: false,
           lastRefreshAt: null,
           refreshError: null,
-        }),
+        });
+      },
 
       setLoading: (isLoading) => set({ isLoading }),
 
@@ -165,6 +169,7 @@ useAuthStore.persist.onFinishHydration((state) => {
     isLoading: shouldStayAuthenticated || mightHaveRefreshCookie,
     _hasHydrated: true,
   });
+  useGenerationStore.getState().syncOwner(state.user?.id ?? null);
 });
 
 // Ensure hydration happens

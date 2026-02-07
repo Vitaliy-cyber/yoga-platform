@@ -9,6 +9,8 @@ Provides endpoints for:
 """
 
 import json
+import asyncio
+import random
 from typing import List
 
 from db.database import get_db
@@ -29,7 +31,9 @@ from schemas.version import (
 from services.auth import get_current_user
 from services.versioning import versioning_service
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 router = APIRouter(prefix="/poses/{pose_id}/versions", tags=["versions"])
 
@@ -43,18 +47,36 @@ async def get_user_pose(
     Helper to get a pose and verify ownership.
     Raises 404 if not found or not owned by user.
     """
-    result = await db.execute(
-        select(Pose).where(
-            and_(Pose.id == pose_id, Pose.user_id == current_user.id)
-        )
+    # Reads can still hit transient SQLite contention under parallel E2E load.
+    # Retry/backoff so ownership checks stay stable and don't devolve into 5xx/flake.
+    max_attempts = 12
+    last_err: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            result = await db.execute(
+                select(Pose).where(
+                    and_(Pose.id == pose_id, Pose.user_id == current_user.id)
+                )
+            )
+            pose = result.scalar_one_or_none()
+            if not pose:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Pose not found"
+                )
+            return pose
+        except OperationalError as e:
+            last_err = e
+            await db.rollback()
+            if attempt >= max_attempts - 1:
+                break
+            backoff = min(0.05 * (2**attempt), 0.8) + random.random() * 0.05
+            await asyncio.sleep(backoff)
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Conflict while reading pose. Please retry.",
     )
-    pose = result.scalar_one_or_none()
-    if not pose:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Pose not found"
-        )
-    return pose
 
 
 def build_version_list_response(version) -> PoseVersionListResponse:
@@ -76,16 +98,33 @@ def build_version_detail_response(version) -> PoseVersionDetailResponse:
     if version.muscles_json:
         try:
             muscles_data = json.loads(version.muscles_json)
-            for m in muscles_data:
-                muscles.append(VersionMuscleSnapshot(
-                    muscle_id=m.get("muscle_id"),
-                    muscle_name=m.get("muscle_name"),
-                    muscle_name_ua=m.get("muscle_name_ua"),
-                    body_part=m.get("body_part"),
-                    activation_level=m.get("activation_level", 50),
-                ))
+            if isinstance(muscles_data, list):
+                for m in muscles_data:
+                    if not isinstance(m, dict):
+                        continue
+                    raw_level = m.get("activation_level", 50)
+                    try:
+                        level = int(raw_level)  # type: ignore[arg-type]
+                    except Exception:
+                        level = 50
+                    if level < 0:
+                        level = 0
+                    if level > 100:
+                        level = 100
+                    muscles.append(
+                        VersionMuscleSnapshot(
+                            muscle_id=m.get("muscle_id"),
+                            muscle_name=m.get("muscle_name"),
+                            muscle_name_ua=m.get("muscle_name_ua"),
+                            body_part=m.get("body_part"),
+                            activation_level=level,
+                        )
+                    )
         except json.JSONDecodeError:
             pass
+        except Exception:
+            # Corrupted/unexpected version data should not crash the endpoint.
+            muscles = []
 
     return PoseVersionDetailResponse(
         id=version.id,
@@ -125,11 +164,26 @@ async def list_versions(
     # Verify pose ownership
     await get_user_pose(pose_id, current_user, db)
 
-    # Get total count
-    total = await versioning_service.get_version_count(db, pose_id)
+    max_attempts = 8
+    total = 0
+    versions = []
+    for attempt in range(max_attempts):
+        try:
+            # Get total count
+            total = await versioning_service.get_version_count(db, pose_id)
 
-    # Get paginated versions
-    versions = await versioning_service.get_versions(db, pose_id, skip, limit)
+            # Get paginated versions
+            versions = await versioning_service.get_versions(db, pose_id, skip, limit)
+            break
+        except OperationalError:
+            await db.rollback()
+            if attempt >= max_attempts - 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Conflict while listing versions. Please retry.",
+                )
+            backoff = min(0.05 * (2**attempt), 0.8) + random.random() * 0.05
+            await asyncio.sleep(backoff)
     items = [build_version_list_response(v) for v in versions]
 
     return PaginatedVersionResponse(
@@ -148,8 +202,20 @@ async def get_version_count(
 ):
     """Get the total number of versions for a pose."""
     await get_user_pose(pose_id, current_user, db)
-    count = await versioning_service.get_version_count(db, pose_id)
-    return VersionCountResponse(pose_id=pose_id, version_count=count)
+    max_attempts = 8
+    for attempt in range(max_attempts):
+        try:
+            count = await versioning_service.get_version_count(db, pose_id)
+            return VersionCountResponse(pose_id=pose_id, version_count=count)
+        except OperationalError:
+            await db.rollback()
+            if attempt >= max_attempts - 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Conflict while counting versions. Please retry.",
+                )
+            backoff = min(0.05 * (2**attempt), 0.8) + random.random() * 0.05
+            await asyncio.sleep(backoff)
 
 
 @router.get("/{version_id}", response_model=PoseVersionDetailResponse)
@@ -166,7 +232,21 @@ async def get_version(
     """
     await get_user_pose(pose_id, current_user, db)
 
-    version = await versioning_service.get_version(db, pose_id, version_id)
+    max_attempts = 8
+    version = None
+    for attempt in range(max_attempts):
+        try:
+            version = await versioning_service.get_version(db, pose_id, version_id)
+            break
+        except OperationalError:
+            await db.rollback()
+            if attempt >= max_attempts - 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Conflict while reading version. Please retry.",
+                )
+            backoff = min(0.05 * (2**attempt), 0.8) + random.random() * 0.05
+            await asyncio.sleep(backoff)
     if not version:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -202,17 +282,32 @@ async def restore_version(
         result = await versioning_service.restore_version(
             db, pose_id, version_id, current_user.id, change_note
         )
-    except ValueError as e:
-        # This is raised when muscles_json is corrupted
+    except ValueError:
+        # This is raised when muscles_json is corrupted; don't leak raw exception text.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
+            detail="Invalid version data",
+        )
+    except (IntegrityError, OperationalError, StaleDataError):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while restoring version. Please retry.",
         )
 
     if not result:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Version not found"
+        )
+
+    try:
+        await db.commit()
+    except (IntegrityError, OperationalError, StaleDataError):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conflict while restoring version. Please retry.",
         )
 
     response = {
@@ -247,23 +342,41 @@ async def diff_versions(
     """
     await get_user_pose(pose_id, current_user, db)
 
-    # Verify both versions belong to this pose
-    version1 = await versioning_service.get_version(db, pose_id, v1)
-    version2 = await versioning_service.get_version(db, pose_id, v2)
+    max_attempts = 8
+    for attempt in range(max_attempts):
+        try:
+            # Verify both versions belong to this pose
+            version1 = await versioning_service.get_version(db, pose_id, v1)
+            version2 = await versioning_service.get_version(db, pose_id, v2)
 
-    if not version1 or not version2:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="One or both versions not found"
-        )
+            if not version1 or not version2:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="One or both versions not found"
+                )
 
-    diff_result = await versioning_service.diff_versions(db, v1, v2)
+            diff_result = await versioning_service.diff_versions(db, v1, v2)
 
-    if not diff_result:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Could not compare versions"
-        )
+            if not diff_result:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Could not compare versions"
+                )
+            break
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid version data",
+            )
+        except OperationalError:
+            await db.rollback()
+            if attempt >= max_attempts - 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Conflict while comparing versions. Please retry.",
+                )
+            backoff = min(0.05 * (2**attempt), 0.8) + random.random() * 0.05
+            await asyncio.sleep(backoff)
 
     return VersionComparisonResult(
         version_1=VersionSummary(**diff_result["version_1"]),

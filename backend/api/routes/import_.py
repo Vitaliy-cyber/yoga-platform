@@ -8,20 +8,17 @@ import io
 import json
 import logging
 import re
+import unicodedata
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from pydantic import ValidationError
-from sqlalchemy import and_, func, select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from db.database import get_db
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from models.category import Category
 from models.muscle import Muscle
 from models.pose import Pose, PoseMuscle
 from models.user import User
+from pydantic import ValidationError
 from schemas.export import (
     BackupData,
     CategoryExport,
@@ -35,6 +32,9 @@ from schemas.export import (
     PoseExport,
 )
 from services.auth import get_current_user
+from sqlalchemy import and_, func, select, text
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +43,152 @@ router = APIRouter(prefix="/import", tags=["import"])
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 CHUNK_SIZE = 64 * 1024  # 64KB chunks for streaming file reads
 
-# Maximum number of retries for race condition handling
-MAX_RETRY_ATTEMPTS = 3
+# Prevent extremely deep JSON from crashing validation / encoding and leaking 500s.
+# This is a "defense in depth" guardrail: normal import payloads are shallow.
+MAX_JSON_NESTING_DEPTH = 200
+
+# Maximum number of retries for race condition handling.
+# Under heavy Playwright atomic stress we can see transient SQLite "database is locked"
+# errors. A few extra retries dramatically reduces flakiness without masking real 5xx bugs.
+MAX_RETRY_ATTEMPTS = 8
+
+# CSV injection protection characters (formula triggers).
+# Export prefixes these with an apostrophe; import should reverse that when safe.
+CSV_INJECTION_CHARS = ("=", "+", "-", "@")
+
+
+def _strip_csv_formula_guard(value: str) -> str:
+    """
+    Remove CSV formula-guard apostrophes when safe.
+
+    Export prefixes fields that start with formula triggers (=, +, -, @) with
+    a single quote to prevent CSV injection. During import, strip that guard
+    so round-trips preserve original values. If the original value itself
+    started with an apostrophe before a formula trigger (e.g., "'=2+2"),
+    export adds a second apostrophe; in that case, drop only one.
+    """
+    if not isinstance(value, str) or not value.startswith("'"):
+        return value
+
+    # Handle escaped leading apostrophe (double apostrophe + formula trigger).
+    if value.startswith("''"):
+        idx = 2
+        while idx < len(value):
+            ch = value[idx]
+            if ch.isspace() or unicodedata.category(ch) == "Cf":
+                idx += 1
+                continue
+            break
+        if idx < len(value) and value[idx] in CSV_INJECTION_CHARS:
+            return value[1:]
+
+    idx = 1
+    while idx < len(value):
+        ch = value[idx]
+        if ch.isspace() or unicodedata.category(ch) == "Cf":
+            idx += 1
+            continue
+        break
+
+    if idx < len(value) and value[idx] in CSV_INJECTION_CHARS:
+        return value[1:]
+
+    return value
+
+
+def parse_json_upload_bytes(content: bytes) -> object:
+    """
+    Decode and parse uploaded JSON bytes.
+
+    SECURITY: never reflect decoder/parser exception text back to clients.
+    """
+    try:
+        # utf-8-sig strips optional UTF-8 BOM, which is common in "Excel-saved" JSON.
+        decoded = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file encoding. Expected UTF-8.",
+        )
+
+    try:
+        parsed = json.loads(decoded)
+    except RecursionError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="JSON nesting too deep.",
+        )
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid JSON",
+        )
+
+    def _ensure_utf8_encodable(value: object) -> None:
+        """
+        Reject JSON payloads that contain unpaired surrogates / non-UTF8-encodable text.
+
+        Attack class: JSON allows \\uD800 escapes; Python will materialize them as
+        unpaired surrogates. If we persist such strings, later JSON responses can
+        crash while encoding to UTF-8 (500).
+        """
+        stack: List[Tuple[object, int]] = [(value, 0)]
+        while stack:
+            cur, depth = stack.pop()
+            if depth > MAX_JSON_NESTING_DEPTH:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="JSON nesting too deep.",
+                )
+
+            if cur is None:
+                continue
+            if isinstance(cur, (int, float, bool)):
+                continue
+            if isinstance(cur, str):
+                try:
+                    cur.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid Unicode characters in JSON file.",
+                    )
+                continue
+            if isinstance(cur, list):
+                stack.extend((v, depth + 1) for v in cur)
+                continue
+            if isinstance(cur, dict):
+                for k, v in cur.items():
+                    stack.append((k, depth + 1))
+                    stack.append((v, depth + 1))
+                continue
+
+    _ensure_utf8_encodable(parsed)
+    return parsed
+
+
+async def safe_commit(db: AsyncSession, action: str) -> None:
+    """
+    Commit with defensive handling for concurrency issues.
+
+    In E2E / dev we frequently run concurrent imports; SQLite can raise
+    transient errors (e.g., locked database) or integrity conflicts.
+    Convert those into 409 responses instead of leaking 500s.
+    """
+    try:
+        await db.commit()
+    except (IntegrityError, OperationalError):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Conflict while {action}. Please retry.",
+        )
+
 
 # File type validation
 try:
     import magic
+
     MAGIC_AVAILABLE = True
 except ImportError:
     MAGIC_AVAILABLE = False
@@ -107,7 +247,7 @@ def validate_file_mime_type(content: bytes, expected_extension: str) -> bool:
         if expected_extension == ".json":
             # Check if content looks like JSON
             try:
-                decoded = content.decode("utf-8").strip()
+                decoded = content.decode("utf-8-sig").strip()
                 if not (decoded.startswith("{") or decoded.startswith("[")):
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -121,7 +261,7 @@ def validate_file_mime_type(content: bytes, expected_extension: str) -> bool:
         elif expected_extension == ".csv":
             # Check if content looks like CSV (text with commas)
             try:
-                content.decode("utf-8")
+                content.decode("utf-8-sig")
             except UnicodeDecodeError:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -169,7 +309,10 @@ def sanitize_error_message(error: Exception) -> str:
     # Patterns to remove (SQL details, file paths, etc.)
     sensitive_patterns = [
         # SQL-related patterns
-        (r"(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|JOIN|AND|OR)\s+[\w\s,.*=<>]+", "[SQL query hidden]"),
+        (
+            r"(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|JOIN|AND|OR)\s+[\w\s,.*=<>]+",
+            "[SQL query hidden]",
+        ),
         (r"sqlalchemy\.[a-zA-Z.]+", "[database error]"),
         (r"psycopg2\.[a-zA-Z.]+", "[database error]"),
         (r"sqlite3\.[a-zA-Z.]+", "[database error]"),
@@ -194,6 +337,59 @@ def sanitize_error_message(error: Exception) -> str:
     return sanitized
 
 
+def _summarize_validation_error(error: ValidationError, max_len: int = 220) -> str:
+    """
+    Create a concise ValidationError message without echoing large input values.
+
+    SECURITY: Pydantic's stringified ValidationError can include large `input_value`
+    snippets and external doc URLs, which can amplify responses and leak more than needed.
+    """
+    try:
+        errors = error.errors()
+    except Exception:
+        return "Invalid format"
+
+    if not errors:
+        return "Invalid format"
+
+    parts: List[str] = []
+    for e in errors[:2]:
+        loc = e.get("loc")
+        msg = e.get("msg") or "Invalid value"
+        loc_s = ""
+        if isinstance(loc, (list, tuple)) and loc:
+            loc_s = ".".join(str(x) for x in loc)
+        text = f"{loc_s}: {msg}" if loc_s else str(msg)
+        parts.append(sanitize_error_message(Exception(text)))
+
+    summary = "; ".join(parts)
+    if len(summary) > max_len:
+        return summary[:max_len] + "…"
+    return summary
+
+
+def _strip_invisible_edges(value: str) -> str:
+    """
+    Strip leading/trailing whitespace and Unicode format characters (Cf).
+
+    This prevents visually-identical names like "\\u200bYoga" or "\\ufeffYoga"
+    from bypassing uniqueness and confusing users.
+    """
+    if not isinstance(value, str):
+        return value
+    start = 0
+    end = len(value)
+    while start < end and (
+        value[start].isspace() or unicodedata.category(value[start]) == "Cf"
+    ):
+        start += 1
+    while end > start and (
+        value[end - 1].isspace() or unicodedata.category(value[end - 1]) == "Cf"
+    ):
+        end -= 1
+    return value[start:end]
+
+
 async def get_or_create_category(
     db: AsyncSession,
     user_id: int,
@@ -205,16 +401,26 @@ async def get_or_create_category(
 
     Returns tuple of (category, was_created).
     """
-    # Check if category exists
-    result = await db.execute(
-        select(Category).where(
-            and_(
-                func.lower(Category.name) == category_name.lower(),
-                Category.user_id == user_id,
-            )
-        )
+    # Normalize inputs to match Category schema behavior.
+    category_name = _strip_invisible_edges(category_name)
+    if not category_name:
+        raise ValueError("Category name cannot be blank")
+    if len(category_name) > 100:
+        raise ValueError("Category name too long")
+    if isinstance(description, str):
+        description = _strip_invisible_edges(description) or None
+
+    # Check if category exists (Unicode-aware, case-insensitive).
+    result = await db.execute(select(Category).where(Category.user_id == user_id))
+    target = category_name.casefold()
+    existing = next(
+        (
+            cat
+            for cat in result.scalars()
+            if isinstance(cat.name, str) and cat.name.casefold() == target
+        ),
+        None,
     )
-    existing = result.scalar_one_or_none()
 
     if existing:
         return existing, False
@@ -225,8 +431,24 @@ async def get_or_create_category(
         name=category_name,
         description=description,
     )
-    db.add(new_category)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            db.add(new_category)
+            await db.flush()
+    except IntegrityError:
+        # Concurrent create: fetch existing and treat as "already exists".
+        result = await db.execute(select(Category).where(Category.user_id == user_id))
+        existing = next(
+            (
+                cat
+                for cat in result.scalars()
+                if isinstance(cat.name, str) and cat.name.casefold() == target
+            ),
+            None,
+        )
+        if existing:
+            return existing, False
+        raise
 
     return new_category, True
 
@@ -236,7 +458,21 @@ async def get_muscle_by_name(db: AsyncSession, muscle_name: str) -> Optional[Mus
     result = await db.execute(
         select(Muscle).where(func.lower(Muscle.name) == muscle_name.lower())
     )
-    return result.scalar_one_or_none()
+    muscle = result.scalar_one_or_none()
+    if muscle:
+        return muscle
+
+    # If CSV export prefixed a leading apostrophe to neutralize formula injection,
+    # allow a safe fallback lookup without that prefix so round-trips preserve muscles.
+    if isinstance(muscle_name, str):
+        fallback_name = _strip_csv_formula_guard(muscle_name)
+        if fallback_name != muscle_name:
+            result = await db.execute(
+                select(Muscle).where(func.lower(Muscle.name) == fallback_name.lower())
+            )
+            return result.scalar_one_or_none()
+
+    return None
 
 
 async def check_pose_exists(
@@ -270,6 +506,24 @@ async def check_pose_exists(
     return result.scalar_one_or_none()
 
 
+async def _category_exists_casefold(
+    db: AsyncSession,
+    user_id: int,
+    name: str,
+) -> bool:
+    normalized = name.strip()
+    if not normalized:
+        return False
+    target = normalized.casefold()
+    result = await db.execute(select(Category.name).where(Category.user_id == user_id))
+    for existing in result.scalars():
+        if not isinstance(existing, str):
+            continue
+        if existing.casefold() == target:
+            return True
+    return False
+
+
 def _clamp_activation_level(level: int) -> int:
     """Clamp activation level to valid 0-100 range."""
     return max(0, min(100, level))
@@ -293,87 +547,101 @@ async def import_single_pose(
     Returns ImportItemResult with status.
     """
     try:
-        # Use SELECT FOR UPDATE to prevent race conditions when checking
-        # for existing poses with the same code
-        existing_pose = await check_pose_exists(
-            db, user_id, pose_data.code, for_update=True
-        )
+        # Savepoint per pose: prevents "transaction aborted" states during
+        # concurrent imports from bubbling up as 500s at commit time.
+        async with db.begin_nested():
+            # Use SELECT FOR UPDATE to prevent race conditions when checking
+            # for existing poses with the same code (dialects may ignore it).
+            existing_pose = await check_pose_exists(
+                db, user_id, pose_data.code, for_update=True
+            )
 
-        if existing_pose:
-            if duplicate_handling == DuplicateHandling.SKIP:
-                return ImportItemResult(
-                    code=pose_data.code,
-                    name=pose_data.name,
-                    status="skipped",
-                    message="Pose already exists",
-                )
-            elif duplicate_handling == DuplicateHandling.RENAME:
-                # Find unique code with locking to prevent race conditions
-                base_code = pose_data.code
-                counter = 1
-                # Limit search to prevent infinite loops
-                max_attempts = 100
-                while counter < max_attempts:
-                    new_code = f"{base_code}_{counter}"
-                    if not await check_pose_exists(db, user_id, new_code, for_update=True):
-                        pose_data.code = new_code
-                        existing_pose = None  # Create new with renamed code
-                        break
-                    counter += 1
-                else:
+            if existing_pose:
+                if duplicate_handling == DuplicateHandling.SKIP:
                     return ImportItemResult(
                         code=pose_data.code,
                         name=pose_data.name,
-                        status="error",
-                        message="Could not generate unique code after many attempts",
+                        status="skipped",
+                        message="Pose already exists",
                     )
-            # For OVERWRITE, we continue and update existing_pose
+                elif duplicate_handling == DuplicateHandling.RENAME:
+                    # Find unique code with locking to prevent race conditions
+                    base_code = pose_data.code
+                    counter = 1
+                    # Limit search to prevent infinite loops
+                    max_attempts = 100
+                    while counter < max_attempts:
+                        new_code = f"{base_code}_{counter}"
+                        if not await check_pose_exists(
+                            db, user_id, new_code, for_update=True
+                        ):
+                            pose_data.code = new_code
+                            existing_pose = None  # Create new with renamed code
+                            break
+                        counter += 1
+                    else:
+                        return ImportItemResult(
+                            code=pose_data.code,
+                            name=pose_data.name,
+                            status="error",
+                            message="Could not generate unique code after many attempts",
+                        )
+                # For OVERWRITE, we continue and update existing_pose
 
-        # Handle category
-        category_id = None
-        if pose_data.category_name:
-            if pose_data.category_name in category_cache:
-                category_id = category_cache[pose_data.category_name].id
-            else:
-                category, _ = await get_or_create_category(
-                    db, user_id, pose_data.category_name
+            # Handle category
+            category_id = None
+            if pose_data.category_name:
+                normalized_category_name = _strip_invisible_edges(pose_data.category_name)
+                if not normalized_category_name:
+                    category_id = None
+                else:
+                    cache_key = normalized_category_name.casefold()
+                    if cache_key in category_cache:
+                        category_id = category_cache[cache_key].id
+                    else:
+                        category, _ = await get_or_create_category(
+                            db, user_id, normalized_category_name
+                        )
+                        category_cache[cache_key] = category
+                        category_id = category.id
+
+            if existing_pose and duplicate_handling == DuplicateHandling.OVERWRITE:
+                # Update existing pose
+                existing_pose.name = pose_data.name
+                existing_pose.name_en = pose_data.name_en
+                existing_pose.category_id = category_id
+                existing_pose.description = pose_data.description
+                existing_pose.effect = pose_data.effect
+                existing_pose.breathing = pose_data.breathing
+
+                # Remove old muscles
+                for pm in existing_pose.pose_muscles:
+                    await db.delete(pm)
+
+                # Add new muscles with activation level validation
+                for muscle_data in pose_data.muscles:
+                    muscle = await get_muscle_by_name(db, muscle_data.name)
+                    if muscle:
+                        # Clamp activation level to 0-100 range
+                        clamped_level = _clamp_activation_level(
+                            muscle_data.activation_level
+                        )
+                        pose_muscle = PoseMuscle(
+                            pose_id=existing_pose.id,
+                            muscle_id=muscle.id,
+                            activation_level=clamped_level,
+                        )
+                        db.add(pose_muscle)
+
+                await db.flush()
+
+                return ImportItemResult(
+                    code=pose_data.code,
+                    name=pose_data.name,
+                    status="updated",
+                    message="Pose updated successfully",
                 )
-                category_cache[pose_data.category_name] = category
-                category_id = category.id
 
-        if existing_pose and duplicate_handling == DuplicateHandling.OVERWRITE:
-            # Update existing pose
-            existing_pose.name = pose_data.name
-            existing_pose.name_en = pose_data.name_en
-            existing_pose.category_id = category_id
-            existing_pose.description = pose_data.description
-            existing_pose.effect = pose_data.effect
-            existing_pose.breathing = pose_data.breathing
-
-            # Remove old muscles
-            for pm in existing_pose.pose_muscles:
-                await db.delete(pm)
-
-            # Add new muscles with activation level validation
-            for muscle_data in pose_data.muscles:
-                muscle = await get_muscle_by_name(db, muscle_data.name)
-                if muscle:
-                    # Clamp activation level to 0-100 range
-                    clamped_level = _clamp_activation_level(muscle_data.activation_level)
-                    pose_muscle = PoseMuscle(
-                        pose_id=existing_pose.id,
-                        muscle_id=muscle.id,
-                        activation_level=clamped_level,
-                    )
-                    db.add(pose_muscle)
-
-            return ImportItemResult(
-                code=pose_data.code,
-                name=pose_data.name,
-                status="updated",
-                message="Pose updated successfully",
-            )
-        else:
             # Create new pose
             new_pose = Pose(
                 user_id=user_id,
@@ -393,13 +661,17 @@ async def import_single_pose(
                 muscle = await get_muscle_by_name(db, muscle_data.name)
                 if muscle:
                     # Clamp activation level to 0-100 range
-                    clamped_level = _clamp_activation_level(muscle_data.activation_level)
+                    clamped_level = _clamp_activation_level(
+                        muscle_data.activation_level
+                    )
                     pose_muscle = PoseMuscle(
                         pose_id=new_pose.id,
                         muscle_id=muscle.id,
                         activation_level=clamped_level,
                     )
                     db.add(pose_muscle)
+
+            await db.flush()
 
             return ImportItemResult(
                 code=pose_data.code,
@@ -415,23 +687,32 @@ async def import_single_pose(
             code=pose_data.code,
             name=pose_data.name,
             status="error",
-            message=f"Validation error: {str(e)[:100]}",
+            message=f"Validation error: {_summarize_validation_error(e)}",
         )
 
-    except IntegrityError as e:
-        # Database constraint violation - may be a race condition
-        logger.warning(f"Integrity error importing pose {pose_data.code}: {e}")
+    except (IntegrityError, OperationalError) as e:
+        # Database constraint violation or transient operational failure (e.g. SQLite busy/locked).
+        # Treat as a concurrency conflict and retry a few times.
+        logger.warning(
+            f"Database error importing pose {pose_data.code} (attempt={retry_count + 1}): {e}"
+        )
 
-        # Rollback the failed operation
-        await db.rollback()
-
-        # Retry with exponential backoff for race conditions
         if retry_count < MAX_RETRY_ATTEMPTS:
             import asyncio
-            await asyncio.sleep(0.1 * (2 ** retry_count))  # 0.1s, 0.2s, 0.4s
+            import random
+
+            # Cap backoff so we don't stall the whole import request for tens of seconds
+            # under contention (especially with SQLite busy/locked).
+            base = min(0.1 * (2**retry_count), 1.0)  # 0.1s, 0.2s, 0.4s, 0.8s, 1.0s...
+            jitter = random.uniform(0, 0.05)
+            await asyncio.sleep(base + jitter)
             return await import_single_pose(
-                db, user_id, pose_data, duplicate_handling,
-                category_cache, retry_count + 1
+                db,
+                user_id,
+                pose_data,
+                duplicate_handling,
+                category_cache,
+                retry_count + 1,
             )
 
         return ImportItemResult(
@@ -453,32 +734,121 @@ async def import_single_pose(
 
 
 def parse_muscles_from_csv(muscles_str: str) -> List[MuscleExport]:
-    """Parse muscles from CSV format: 'muscle1:level,muscle2:level'."""
+    """
+    Parse muscles from CSV format: 'muscle1:level,muscle2:level'.
+
+    Supports escaping inside names using backslashes:
+    - '\\,' for literal commas
+    - '\\:' for literal colons
+    - '\\\\' for literal backslashes
+    """
     if not muscles_str or not muscles_str.strip():
         return []
 
-    muscles = []
-    for pair in muscles_str.split(","):
+    def _split_unescaped(value: str, sep: str) -> List[str]:
+        parts: List[str] = []
+        buf: List[str] = []
+        i = 0
+        while i < len(value):
+            ch = value[i]
+            if ch == "\\" and i + 1 < len(value):
+                nxt = value[i + 1]
+                # Preserve escaped separators/backslashes in buffer (unescape later).
+                if nxt in {sep, "\\", ":", ","}:
+                    buf.append(ch)
+                    buf.append(nxt)
+                    i += 2
+                    continue
+            if ch == sep:
+                parts.append("".join(buf))
+                buf = []
+                i += 1
+                continue
+            buf.append(ch)
+            i += 1
+        parts.append("".join(buf))
+        return parts
+
+    def _unescape_token(value: str) -> str:
+        out: List[str] = []
+        i = 0
+        while i < len(value):
+            ch = value[i]
+            if ch == "\\" and i + 1 < len(value):
+                nxt = value[i + 1]
+                if nxt in {",", ":", "\\"}:
+                    out.append(nxt)
+                    i += 2
+                    continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
+    muscles: List[MuscleExport] = []
+    for pair in _split_unescaped(muscles_str, ","):
         pair = pair.strip()
-        if ":" in pair:
-            name, level_str = pair.split(":", 1)
+        if not pair:
+            continue
+
+        # Split on the first unescaped colon
+        name_part = pair
+        level_part: Optional[str] = None
+        buf: List[str] = []
+        i = 0
+        while i < len(pair):
+            ch = pair[i]
+            if ch == "\\" and i + 1 < len(pair):
+                nxt = pair[i + 1]
+                if nxt in {":", ",", "\\"}:
+                    buf.append(ch)
+                    buf.append(nxt)
+                    i += 2
+                    continue
+            if ch == ":":
+                name_part = "".join(buf)
+                level_part = pair[i + 1 :]
+                break
+            buf.append(ch)
+            i += 1
+        if level_part is None:
+            name_part = "".join(buf) if buf else pair
+
+        name = _unescape_token(name_part).strip()
+        if not name:
+            continue
+
+        if level_part is not None:
             try:
-                level = int(level_str.strip())
+                level = int(_unescape_token(level_part).strip())
                 level = max(0, min(100, level))  # Clamp to 0-100
-                muscles.append(MuscleExport(
-                    name=name.strip(),
-                    activation_level=level,
-                ))
+                muscles.append(
+                    MuscleExport(
+                        name=name,
+                        activation_level=level,
+                    )
+                )
             except ValueError:
                 continue  # Skip invalid entries
         else:
-            # If no level specified, use default 50
-            muscles.append(MuscleExport(
-                name=pair.strip(),
-                activation_level=50,
-            ))
+            muscles.append(
+                MuscleExport(
+                    name=name,
+                    activation_level=50,
+                )
+            )
 
     return muscles
+
+
+def _csv_cell(value: Optional[str], *, required: bool = False) -> str:
+    """Normalize a CSV cell and undo formula guards when safe."""
+    if value is None:
+        if required:
+            raise ValueError("Missing required CSV field")
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+    return _strip_csv_formula_guard(value).strip()
 
 
 @router.post("/poses/json", response_model=ImportResult)
@@ -506,13 +876,7 @@ async def import_poses_json(
     # Validate MIME type (if python-magic available)
     validate_file_mime_type(content, ".json")
 
-    try:
-        data = json.loads(content.decode("utf-8"))
-    except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid JSON: {str(e)}",
-        )
+    data = parse_json_upload_bytes(content)
 
     # Determine format: array of poses or backup format
     poses_data: List[dict] = []
@@ -541,11 +905,16 @@ async def import_poses_json(
     validation_errors: List[str] = []
 
     for i, pose_dict in enumerate(poses_data):
+        if not isinstance(pose_dict, dict):
+            validation_errors.append(f"Pose #{i + 1}: Invalid pose object")
+            continue
         try:
             pose_export = PoseExport(**pose_dict)
             valid_poses.append(pose_export)
         except ValidationError as e:
-            validation_errors.append(f"Pose #{i+1}: {str(e)}")
+            validation_errors.append(f"Pose #{i + 1}: {_summarize_validation_error(e)}")
+        except (TypeError, ValueError) as e:
+            validation_errors.append(f"Pose #{i + 1}: {sanitize_error_message(e)}")
 
     if not valid_poses:
         raise HTTPException(
@@ -563,9 +932,8 @@ async def import_poses_json(
         )
         results.append(result)
 
-    # CRITICAL: Commit the transaction to persist changes
-    # flush() only sends changes to database but doesn't commit
-    await db.commit()
+    # Commit the transaction to persist changes
+    await safe_commit(db, "importing poses from JSON")
 
     # Calculate summary
     created = sum(1 for r in results if r.status == "created")
@@ -612,8 +980,22 @@ async def import_poses_csv(
 
     try:
         # Decode and parse CSV
-        text_content = content.decode("utf-8")
-        reader = csv.DictReader(io.StringIO(text_content))
+        # utf-8-sig strips optional UTF-8 BOM, which otherwise breaks header matching
+        # (e.g., "\ufeffcode" instead of "code").
+        text_content = content.decode("utf-8-sig")
+        # Accept large fields up to MAX_FILE_SIZE (we already cap total file size).
+        try:
+            csv.field_size_limit(MAX_FILE_SIZE)
+        except Exception:
+            pass
+        # Use strict parsing to reject malformed CSV (e.g. unclosed quotes) deterministically.
+        # Python's csv module may otherwise accept ambiguous/broken inputs without raising,
+        # leading to surprising partial imports.
+        try:
+            reader = csv.DictReader(io.StringIO(text_content), strict=True)
+        except TypeError:
+            # Older Python versions may not support strict=.
+            reader = csv.DictReader(io.StringIO(text_content))
 
         # Validate required columns
         required_columns = {"code", "name"}
@@ -643,18 +1025,18 @@ async def import_poses_csv(
                     muscles = parse_muscles_from_csv(row["muscles"])
 
                 pose_export = PoseExport(
-                    code=row["code"].strip(),
-                    name=row["name"].strip(),
-                    name_en=row.get("name_en", "").strip() or None,
-                    category_name=row.get("category_name", "").strip() or None,
-                    description=row.get("description", "").strip() or None,
-                    effect=row.get("effect", "").strip() or None,
-                    breathing=row.get("breathing", "").strip() or None,
+                    code=_csv_cell(row.get("code"), required=True),
+                    name=_csv_cell(row.get("name"), required=True),
+                    name_en=_csv_cell(row.get("name_en")) or None,
+                    category_name=_csv_cell(row.get("category_name")) or None,
+                    description=_csv_cell(row.get("description")) or None,
+                    effect=_csv_cell(row.get("effect")) or None,
+                    breathing=_csv_cell(row.get("breathing")) or None,
                     muscles=muscles,
                 )
                 valid_poses.append(pose_export)
             except ValidationError as e:
-                validation_errors.append(f"Row {i}: {str(e)}")
+                validation_errors.append(f"Row {i}: {_summarize_validation_error(e)}")
             except Exception as e:
                 validation_errors.append(f"Row {i}: {sanitize_error_message(e)}")
 
@@ -662,6 +1044,11 @@ async def import_poses_csv(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File encoding error. Please use UTF-8 encoded CSV",
+        )
+    except csv.Error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid CSV format",
         )
 
     if not valid_poses:
@@ -680,9 +1067,8 @@ async def import_poses_csv(
         )
         results.append(result)
 
-    # CRITICAL: Commit the transaction to persist changes
-    # flush() only sends changes to database but doesn't commit
-    await db.commit()
+    # Commit the transaction to persist changes
+    await safe_commit(db, "importing poses from CSV")
 
     # Calculate summary
     created = sum(1 for r in results if r.status == "created")
@@ -728,21 +1114,15 @@ async def import_backup(
     # Validate MIME type (if python-magic available)
     validate_file_mime_type(content, ".json")
 
-    try:
-        data = json.loads(content.decode("utf-8"))
-    except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid JSON: {str(e)}",
-        )
+    data = parse_json_upload_bytes(content)
 
     # Validate backup format
     try:
         backup = BackupData(**data)
-    except ValidationError as e:
+    except ValidationError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid backup format: {str(e)}",
+            detail="Invalid backup format",
         )
 
     results: List[ImportItemResult] = []
@@ -755,20 +1135,26 @@ async def import_backup(
                 category, created = await get_or_create_category(
                     db, current_user.id, cat_data.name, cat_data.description
                 )
-                category_cache[cat_data.name] = category
+                category_cache[_strip_invisible_edges(cat_data.name).casefold()] = category
 
-                results.append(ImportItemResult(
-                    name=cat_data.name,
-                    status="created" if created else "skipped",
-                    message="Category created" if created else "Category already exists",
-                ))
+                results.append(
+                    ImportItemResult(
+                        name=cat_data.name,
+                        status="created" if created else "skipped",
+                        message="Category created"
+                        if created
+                        else "Category already exists",
+                    )
+                )
             except Exception as e:
                 # Sanitize error message to prevent information disclosure
-                results.append(ImportItemResult(
-                    name=cat_data.name,
-                    status="error",
-                    message=sanitize_error_message(e),
-                ))
+                results.append(
+                    ImportItemResult(
+                        name=cat_data.name,
+                        status="error",
+                        message=sanitize_error_message(e),
+                    )
+                )
 
     # Import poses
     if import_poses and backup.poses:
@@ -778,9 +1164,8 @@ async def import_backup(
             )
             results.append(result)
 
-    # CRITICAL: Commit the transaction to persist changes
-    # flush() only sends changes to database but doesn't commit
-    await db.commit()
+    # Commit the transaction to persist changes
+    await safe_commit(db, "restoring from backup")
 
     # Calculate summary
     created = sum(1 for r in results if r.status == "created")
@@ -839,13 +1224,8 @@ async def preview_import_json(
         )
 
     try:
-        data = json.loads(content.decode("utf-8"))
-    except json.JSONDecodeError as e:
-        # Sanitize JSON error message - limit info about internal structure
-        error_msg = str(e)
-        # Only show basic error info, not detailed position/context
-        if "line" in error_msg.lower():
-            error_msg = "Invalid JSON syntax"
+        data = parse_json_upload_bytes(content)
+    except HTTPException as e:
         return ImportPreviewResult(
             valid=False,
             total_items=0,
@@ -855,7 +1235,7 @@ async def preview_import_json(
             will_update=0,
             will_skip=0,
             items=[],
-            validation_errors=[f"Invalid JSON: {error_msg}"],
+            validation_errors=[e.detail],
         )
 
     # Determine format
@@ -874,32 +1254,47 @@ async def preview_import_json(
     validation_errors: List[str] = []
 
     # Preview categories
+    seen_category_keys: set[str] = set()
     for i, cat_dict in enumerate(categories_data):
         try:
             cat = CategoryExport(**cat_dict)
-            # Check if exists
-            result = await db.execute(
-                select(Category).where(
-                    and_(
-                        func.lower(Category.name) == cat.name.lower(),
-                        Category.user_id == current_user.id,
+            normalized_name = _strip_invisible_edges(cat.name)
+            if not normalized_name or len(normalized_name) > 100:
+                validation_errors.append(f"Category #{i + 1}: Invalid format")
+                continue
+            key = normalized_name.casefold()
+
+            # If the same category appears multiple times in the uploaded file,
+            # preview should reflect that later entries will be skipped.
+            if key in seen_category_keys:
+                items.append(
+                    ImportPreviewItem(
+                        name=cat.name,
+                        type="category",
+                        exists=True,
+                        will_be="skipped",
                     )
                 )
-            )
-            exists = result.scalar_one_or_none() is not None
+                continue
 
-            items.append(ImportPreviewItem(
-                name=cat.name,
-                type="category",
-                exists=exists,
-                will_be="skipped" if exists else "created",
-            ))
+            # Check if exists
+            exists = await _category_exists_casefold(db, current_user.id, normalized_name)
+            seen_category_keys.add(key)
+
+            items.append(
+                ImportPreviewItem(
+                    name=cat.name,
+                    type="category",
+                    exists=exists,
+                    will_be="skipped" if exists else "created",
+                )
+            )
         except ValidationError as e:
             # Sanitize validation error - don't expose field details
-            validation_errors.append(f"Category #{i+1}: Invalid format")
+            validation_errors.append(f"Category #{i + 1}: Invalid format")
         except Exception as e:
             # Sanitize unexpected errors
-            validation_errors.append(f"Category #{i+1}: Processing error")
+            validation_errors.append(f"Category #{i + 1}: Processing error")
             logger.warning(f"Preview category error: {e}")
 
     # Preview poses
@@ -907,7 +1302,9 @@ async def preview_import_json(
         try:
             pose = PoseExport(**pose_dict)
             # Check if exists (don't use FOR UPDATE since this is read-only preview)
-            existing = await check_pose_exists(db, current_user.id, pose.code, for_update=False)
+            existing = await check_pose_exists(
+                db, current_user.id, pose.code, for_update=False
+            )
             exists = existing is not None
 
             if exists:
@@ -920,20 +1317,26 @@ async def preview_import_json(
             else:
                 will_be = "created"
 
-            items.append(ImportPreviewItem(
-                code=pose.code,
-                name=pose.name,
-                type="pose",
-                exists=exists,
-                will_be=will_be,
-            ))
+            items.append(
+                ImportPreviewItem(
+                    code=pose.code,
+                    name=pose.name,
+                    type="pose",
+                    exists=exists,
+                    will_be=will_be,
+                )
+            )
         except ValidationError as e:
             # Sanitize validation error - provide limited info
-            code = pose_dict.get("code", f"#{i+1}")
+            code = pose_dict.get("code", f"#{i + 1}")
             validation_errors.append(f"Pose {code}: Invalid format")
         except Exception as e:
             # Sanitize unexpected errors - don't expose SQL or internal details
-            code = pose_dict.get("code", f"#{i+1}") if isinstance(pose_dict, dict) else f"#{i+1}"
+            code = (
+                pose_dict.get("code", f"#{i + 1}")
+                if isinstance(pose_dict, dict)
+                else f"#{i + 1}"
+            )
             validation_errors.append(f"Pose {code}: Processing error")
             logger.warning(f"Preview pose error: {e}")
 

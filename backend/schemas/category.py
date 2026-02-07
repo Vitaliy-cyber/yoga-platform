@@ -1,7 +1,32 @@
 from datetime import datetime
 from typing import Optional
+import unicodedata
 
 from pydantic import BaseModel, Field, field_validator
+
+from .validators import ensure_utf8_encodable
+
+
+def _strip_invisible_edges(value: str) -> str:
+    """
+    Strip leading/trailing whitespace and Unicode format characters (Cf).
+
+    This prevents visually-identical names like "\\u200bYoga" or "\\ufeffYoga"
+    from bypassing uniqueness and confusing users.
+    """
+    if not isinstance(value, str):
+        return value
+    start = 0
+    end = len(value)
+    while start < end and (
+        value[start].isspace() or unicodedata.category(value[start]) == "Cf"
+    ):
+        start += 1
+    while end > start and (
+        value[end - 1].isspace() or unicodedata.category(value[end - 1]) == "Cf"
+    ):
+        end -= 1
+    return value[start:end]
 
 
 class CategoryBase(BaseModel):
@@ -12,10 +37,10 @@ class CategoryBase(BaseModel):
     @classmethod
     def normalize_name(cls, value: str) -> str:
         if isinstance(value, str):
-            normalized = value.strip()
+            normalized = _strip_invisible_edges(value)
             if not normalized:
                 raise ValueError("Name cannot be blank")
-            return normalized
+            return ensure_utf8_encodable(normalized)
         return value
 
     @field_validator("description", mode="before")
@@ -24,8 +49,10 @@ class CategoryBase(BaseModel):
         if value is None:
             return None
         if isinstance(value, str):
-            normalized = value.strip()
-            return normalized or None
+            normalized = _strip_invisible_edges(value)
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
         return value
 
 
@@ -43,10 +70,10 @@ class CategoryUpdate(BaseModel):
         if value is None:
             return None
         if isinstance(value, str):
-            normalized = value.strip()
+            normalized = _strip_invisible_edges(value)
             if not normalized:
                 raise ValueError("Name cannot be blank")
-            return normalized
+            return ensure_utf8_encodable(normalized)
         return value
 
     @field_validator("description", mode="before")
@@ -55,8 +82,10 @@ class CategoryUpdate(BaseModel):
         if value is None:
             return None
         if isinstance(value, str):
-            normalized = value.strip()
-            return normalized or None
+            normalized = _strip_invisible_edges(value)
+            if not normalized:
+                return None
+            return ensure_utf8_encodable(normalized)
         return value
 
 

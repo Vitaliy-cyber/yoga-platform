@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Input } from "../ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import { Search, Plus } from "lucide-react";
 import { useI18n } from "../../i18n";
 import { useDebounce } from "../../hooks/useDebounce";
@@ -13,7 +19,11 @@ interface PoseFiltersProps {
     status: string;
   };
   categories: { id: number; name: string }[];
-  onFilterChange: (filters: { search: string; category: string; status: string }) => void;
+  onFilterChange: (filters: {
+    search: string;
+    category: string;
+    status: string;
+  }) => void;
   /** Debounce delay for search input in milliseconds (default: 300ms) */
   searchDebounceMs?: number;
 }
@@ -51,9 +61,12 @@ export const PoseFilters: React.FC<PoseFiltersProps> = ({
     }
   }, [debouncedSearch, filters, onFilterChange]);
 
-  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setLocalSearch(e.target.value);
-  }, []);
+  const handleSearchChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setLocalSearch(e.target.value);
+    },
+    [],
+  );
 
   return (
     <div className="flex flex-col sm:flex-row gap-4">
@@ -65,19 +78,24 @@ export const PoseFilters: React.FC<PoseFiltersProps> = ({
           onChange={handleSearchChange}
           className="pl-10"
           aria-label={t("pose.filters.search")}
+          data-testid="pose-search-input"
         />
       </div>
 
       <div className="flex gap-3">
         <Select
           value={filters.category}
-          onValueChange={(value) => onFilterChange({ ...filters, category: value })}
+          onValueChange={(value) =>
+            onFilterChange({ ...filters, category: value })
+          }
         >
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-40" data-testid="pose-category-select">
             <SelectValue placeholder={t("pose.filters.category")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t("pose.filters.all_categories")}</SelectItem>
+            <SelectItem value="all">
+              {t("pose.filters.all_categories")}
+            </SelectItem>
             {categories.map((cat) => (
               <SelectItem key={cat.id} value={String(cat.id)}>
                 {cat.name}
@@ -102,9 +120,11 @@ export const PoseFilters: React.FC<PoseFiltersProps> = ({
 
         <Select
           value={filters.status}
-          onValueChange={(value) => onFilterChange({ ...filters, status: value })}
+          onValueChange={(value) =>
+            onFilterChange({ ...filters, status: value })
+          }
         >
-          <SelectTrigger className="w-36">
+          <SelectTrigger className="w-36" data-testid="pose-status-select">
             <SelectValue placeholder={t("pose.filters.status")} />
           </SelectTrigger>
           <SelectContent>
