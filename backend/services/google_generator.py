@@ -78,7 +78,15 @@ class GoogleGeminiGenerator:
         "You are an expert yoga photography studio specializing in anatomically "
         "precise pose reproduction. Given a reference pose diagram, you generate "
         "studio-quality photographs that faithfully replicate every joint angle, "
-        "limb direction, and body orientation visible in the reference."
+        "limb direction, and body orientation visible in the reference. "
+        "Maintain strict visual consistency for the character across all "
+        "generations: the subject is always the same fit young woman with a "
+        "calm demeanor, dressed entirely in a clean, monochromatic white "
+        "outfit. Her attire consists of a white fitted t-shirt, white yoga "
+        "leggings, and a white head-wrap, devoid of any logos, patterns, or "
+        "contrasting colors. Her physical features, skin tone, and styling "
+        "must remain identical in every image to ensure character continuity "
+        "throughout the series."
     )
 
     @staticmethod
