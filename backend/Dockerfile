@@ -19,6 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Pre-download PoseLandmarker model for MediaPipe pose fidelity
+RUN mkdir -p /app/models && \
+    python -c "from services.pose_fidelity import MediaPipeLandmarkExtractor; MediaPipeLandmarkExtractor()" || true
+
 # No local storage - using S3
 
 # Railway injects PORT env variable, default to 8000

@@ -50,6 +50,7 @@ backend/*.db.*
 # AI models (large files)
 ai/models/*
 !ai/models/.gitkeep
+backend/models/*.task
 
 # Docker
 *.log

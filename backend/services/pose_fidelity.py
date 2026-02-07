@@ -4,15 +4,20 @@ Pose fidelity evaluation for image-to-image generation.
 Compares source and generated poses using body landmarks and joint angles.
 The implementation is dependency-tolerant: if MediaPipe is unavailable,
 validation is marked as unavailable rather than crashing generation.
+
+Supports both the new MediaPipe Tasks API (PoseLandmarker, >= 0.10.14)
+and the legacy mp.solutions.pose API for backward compatibility.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import urllib.request
 from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
+from pathlib import Path
 from statistics import mean
 from typing import Dict, Protocol
 
@@ -61,7 +66,16 @@ class LandmarkExtractorProtocol(Protocol):
 
 
 class MediaPipeLandmarkExtractor:
-    """Extract pose landmarks using MediaPipe (if available)."""
+    """Extract pose landmarks using MediaPipe.
+
+    Supports two backends (tried in order):
+    1. **Tasks API** — ``mp.tasks.vision.PoseLandmarker`` (>= 0.10.14).
+       Requires a ``.task`` model file which is auto-downloaded on first use.
+    2. **Legacy solutions API** — ``mp.solutions.pose`` (older builds).
+
+    If neither backend is usable the extractor reports ``available = False``
+    and the evaluator falls back to silhouette comparison.
+    """
 
     LANDMARK_IDS = {
         "nose": 0,
@@ -85,35 +99,132 @@ class MediaPipeLandmarkExtractor:
         "right_foot_index": 32,
     }
 
+    _MODEL_URL = (
+        "https://storage.googleapis.com/mediapipe-models/"
+        "pose_landmarker/pose_landmarker_heavy/float16/1/"
+        "pose_landmarker_heavy.task"
+    )
+    _MODEL_DIR = Path(__file__).parent.parent / "models"
+    _MODEL_FILENAME = "pose_landmarker_heavy.task"
+
     def __init__(self, *, min_detection_confidence: float = 0.45):
         self._available = False
-        self._mp_pose = None
-        self._pose = None
+        self._backend: str | None = None  # "tasks" or "legacy"
+        self._mp = None
         self._np = None
+        # Tasks API objects
+        self._landmarker = None
+        # Legacy API objects
+        self._pose = None
+
         try:
             import mediapipe as mp
             import numpy as np
 
+            self._mp = mp
             self._np = np
-            mp_solutions = getattr(mp, "solutions", None)
-            mp_pose = getattr(mp_solutions, "pose", None) if mp_solutions is not None else None
-            if mp_pose is None:
-                logger.warning(
-                    "MediaPipe package lacks solutions.pose API (version=%s); "
-                    "landmark-based pose fidelity is disabled on this runtime.",
-                    getattr(mp, "__version__", "unknown"),
+            version = getattr(mp, "__version__", "unknown")
+
+            # --- Try new Tasks API first ---
+            if self._init_tasks_api(mp, min_detection_confidence):
+                self._backend = "tasks"
+                self._available = True
+                logger.info(
+                    "MediaPipe Tasks API initialized (version=%s)", version
                 )
                 return
-            self._mp_pose = mp_pose
-            self._pose = self._mp_pose.Pose(
+
+            # --- Fallback to legacy solutions API ---
+            if self._init_legacy_api(mp, min_detection_confidence):
+                self._backend = "legacy"
+                self._available = True
+                logger.info(
+                    "MediaPipe legacy solutions.pose API initialized (version=%s)",
+                    version,
+                )
+                return
+
+            logger.warning(
+                "MediaPipe %s: neither Tasks API nor solutions.pose available; "
+                "landmark-based pose fidelity is disabled.",
+                version,
+            )
+        except Exception as exc:
+            logger.warning("Pose fidelity detector unavailable: %s", exc)
+
+    def _init_tasks_api(self, mp, min_detection_confidence: float) -> bool:
+        """Try to initialize the MediaPipe Tasks PoseLandmarker."""
+        try:
+            tasks = getattr(mp, "tasks", None)
+            if tasks is None:
+                return False
+            vision = getattr(tasks, "vision", None)
+            if vision is None:
+                return False
+            PoseLandmarker = getattr(vision, "PoseLandmarker", None)
+            PoseLandmarkerOptions = getattr(vision, "PoseLandmarkerOptions", None)
+            if PoseLandmarker is None or PoseLandmarkerOptions is None:
+                return False
+
+            model_path = self._ensure_model_downloaded()
+            if model_path is None:
+                return False
+
+            options = PoseLandmarkerOptions(
+                base_options=mp.tasks.BaseOptions(
+                    model_asset_path=str(model_path)
+                ),
+                running_mode=vision.RunningMode.IMAGE,
+                min_pose_detection_confidence=min_detection_confidence,
+                min_tracking_confidence=min_detection_confidence,
+            )
+            self._landmarker = PoseLandmarker.create_from_options(options)
+            return True
+        except Exception as exc:
+            logger.debug("Tasks API init failed: %s", exc)
+            return False
+
+    def _init_legacy_api(self, mp, min_detection_confidence: float) -> bool:
+        """Try to initialize the legacy mp.solutions.pose API."""
+        try:
+            mp_solutions = getattr(mp, "solutions", None)
+            mp_pose = (
+                getattr(mp_solutions, "pose", None)
+                if mp_solutions is not None
+                else None
+            )
+            if mp_pose is None:
+                return False
+            self._pose = mp_pose.Pose(
                 static_image_mode=True,
                 model_complexity=1,
                 enable_segmentation=False,
                 min_detection_confidence=min_detection_confidence,
             )
-            self._available = True
+            return True
         except Exception as exc:
-            logger.warning("Pose fidelity detector unavailable: %s", exc)
+            logger.debug("Legacy solutions.pose init failed: %s", exc)
+            return False
+
+    @classmethod
+    def _ensure_model_downloaded(cls) -> Path | None:
+        """Download the PoseLandmarker .task model if not cached."""
+        cls._MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        model_path = cls._MODEL_DIR / cls._MODEL_FILENAME
+        if model_path.exists() and model_path.stat().st_size > 0:
+            return model_path
+        try:
+            logger.info(
+                "Downloading PoseLandmarker model to %s ...", model_path
+            )
+            urllib.request.urlretrieve(cls._MODEL_URL, str(model_path))
+            logger.info("PoseLandmarker model downloaded (%d bytes)", model_path.stat().st_size)
+            return model_path
+        except Exception as exc:
+            logger.warning("Failed to download PoseLandmarker model: %s", exc)
+            if model_path.exists():
+                model_path.unlink(missing_ok=True)
+            return None
 
     @property
     def available(self) -> bool:
@@ -122,11 +233,50 @@ class MediaPipeLandmarkExtractor:
     def extract_landmarks(
         self, image_bytes: bytes
     ) -> Dict[str, tuple[float, float, float]] | None:
-        if not self._available or not self._pose or self._np is None:
+        if not self._available or self._np is None:
+            return None
+        if self._backend == "tasks":
+            return self._extract_tasks(image_bytes)
+        return self._extract_legacy(image_bytes)
+
+    def _extract_tasks(
+        self, image_bytes: bytes
+    ) -> Dict[str, tuple[float, float, float]] | None:
+        """Extract landmarks via the Tasks PoseLandmarker API."""
+        if self._landmarker is None or self._mp is None:
             return None
         try:
-            with Image.open(BytesIO(image_bytes)) as image:
-                rgb = ImageOps.exif_transpose(image).convert("RGB")
+            with Image.open(BytesIO(image_bytes)) as pil_img:
+                rgb = ImageOps.exif_transpose(pil_img).convert("RGB")
+                image_np = self._np.array(rgb)
+            mp_image = self._mp.Image(
+                image_format=self._mp.ImageFormat.SRGB, data=image_np
+            )
+            result = self._landmarker.detect(mp_image)
+            if not result.pose_landmarks or len(result.pose_landmarks) == 0:
+                return None
+            landmarks = result.pose_landmarks[0]  # first detected person
+            out: Dict[str, tuple[float, float, float]] = {}
+            for name, idx in self.LANDMARK_IDS.items():
+                if idx >= len(landmarks):
+                    continue
+                lm = landmarks[idx]
+                visibility = getattr(lm, "visibility", 0.0) or 0.0
+                out[name] = (float(lm.x), float(lm.y), float(visibility))
+            return out
+        except Exception as exc:
+            logger.warning("Tasks API landmark extraction failed: %s", exc)
+            return None
+
+    def _extract_legacy(
+        self, image_bytes: bytes
+    ) -> Dict[str, tuple[float, float, float]] | None:
+        """Extract landmarks via the legacy mp.solutions.pose API."""
+        if self._pose is None or self._np is None:
+            return None
+        try:
+            with Image.open(BytesIO(image_bytes)) as pil_img:
+                rgb = ImageOps.exif_transpose(pil_img).convert("RGB")
                 image_np = self._np.array(rgb)
             results = self._pose.process(image_np)
             if not results.pose_landmarks:
@@ -138,7 +288,7 @@ class MediaPipeLandmarkExtractor:
                 out[name] = (float(lm.x), float(lm.y), float(lm.visibility))
             return out
         except Exception as exc:
-            logger.warning("Pose fidelity landmark extraction failed: %s", exc)
+            logger.warning("Legacy landmark extraction failed: %s", exc)
             return None
 
 
