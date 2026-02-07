@@ -33,6 +33,9 @@ boto3>=1.34.0
 # PDF Generation
 reportlab>=4.0.0
 
+# Redis (rate limiting backend)
+redis>=5.0.0
+
 # Database
 alembic>=1.13.1
 psycopg2-binary>=2.9.9
