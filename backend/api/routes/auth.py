@@ -257,12 +257,13 @@ async def login(
             # Only mutate cookies after successful commit so we never hand out a refresh token
             # that was rolled back.
             response.delete_cookie(key="refresh_token", path="/api")
+            _is_cross_site = settings.APP_MODE.value == "prod"
             response.set_cookie(
                 key="refresh_token",
                 value=tokens.refresh_token,
                 httponly=True,
-                secure=settings.APP_MODE.value == "prod",  # HTTPS only in production
-                samesite="lax",
+                secure=_is_cross_site,
+                samesite="none" if _is_cross_site else "lax",
                 max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
                 path="/",
             )
@@ -272,8 +273,8 @@ async def login(
                 key="csrf_token",
                 value=csrf_token,
                 httponly=False,  # JavaScript needs to read this
-                secure=settings.APP_MODE.value == "prod",
-                samesite="strict",  # Strict for CSRF token
+                secure=_is_cross_site,
+                samesite="none" if _is_cross_site else "strict",
                 max_age=3600,  # 1 hour
                 path="/",
             )
@@ -465,12 +466,13 @@ async def refresh_tokens(
         response.delete_cookie(key="refresh_token", path="/api")
 
         # Update refresh token cookie
+        _is_cross_site = settings.APP_MODE.value == "prod"
         response.set_cookie(
             key="refresh_token",
             value=tokens.refresh_token,
             httponly=True,
-            secure=settings.APP_MODE.value == "prod",
-            samesite="lax",
+            secure=_is_cross_site,
+            samesite="none" if _is_cross_site else "lax",
             max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
             path="/",
         )
@@ -481,8 +483,8 @@ async def refresh_tokens(
             key="csrf_token",
             value=csrf_token,
             httponly=False,
-            secure=settings.APP_MODE.value == "prod",
-            samesite="strict",
+            secure=_is_cross_site,
+            samesite="none" if _is_cross_site else "strict",
             max_age=3600,
             path="/",
         )
