@@ -84,9 +84,9 @@ class Settings(BaseSettings):
     # Rate Limiting
     # Note: These are default values. In DEV mode, auth limit is increased
     # to support E2E testing without hitting rate limits.
-    RATE_LIMIT_GLOBAL: int = 100  # requests per minute per IP
-    RATE_LIMIT_AUTH: int = 10  # requests per minute per IP for auth endpoints (production)
-    RATE_LIMIT_GENERATE: int = 5  # requests per minute per user for generate endpoints
+    RATE_LIMIT_GLOBAL: int = 300  # requests per minute per IP
+    RATE_LIMIT_AUTH: int = 30  # requests per minute per IP for auth endpoints (production)
+    RATE_LIMIT_GENERATE: int = 15  # requests per minute per user for generate endpoints
     RATE_LIMIT_WINDOW: int = 60  # window in seconds
 
     @property
