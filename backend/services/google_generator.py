@@ -82,10 +82,10 @@ class GoogleGeminiGenerator:
         "TASK: Create a photorealistic studio photograph of a woman based on the Visual Input provided."
         "SUBJECT & ATTIRE:"
         "- A woman wearing modest, all-white clothing: a white long-sleeved tunic, full-length white leggings, and a white fabric turban completely covering her hair."
-        "VISUAL INSTRUCTIONS:"
-        "1. Faithfully recreate the exact structural pose, silhouette form, and spatial orientation shown in the Input Image. Do not mirror or flip the pose."
-        "2. **CRITICAL POSE DETAIL:** Pay strict attention to limb placement. If a leg is tucked underneath the body and not clearly extending to the side in the Input reference, it must remain hidden underneath in the generated photo. Do not visually \"correct\" the pose by extending limbs that should be folded."
-        "3. Treat the Input Image's geometry as the primary authority for accuracy, overriding any standard pose assumptions."
+        "VISUAL INSTRUCTIONS (STRICT ADHERENCE):"
+        "1. **Treat the Input Image as a rigid visual stencil.** Your goal is to fill this exact shape with photorealistic detail. Do not alter the outer boundary of the silhouette."
+        "2. **Silhouette Integrity Rule:** If a limb is folded inward and does not stick out from the main body shape in the Input reference, it MUST NOT stick out in your generation. Do not \"invent\" limbs extending into the negative space if they are not there in the reference."
+        "3. **Orientation Lock:** Replicate the pose exactly as seen, without mirroring or flipping horizontally. The left side of the reference must remain the left side of the generation."
         "STYLE: High-key lighting, seamless white background, 8k resolution, elegant and respectful editorial style. No harsh shadows."
     )
     MAX_REFERENCE_SIDE = 2048
