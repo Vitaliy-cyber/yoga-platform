@@ -78,26 +78,24 @@ class GoogleGeminiGenerator:
     IMAGE_ASPECT_RATIO = "1:1"
     IMAGE_SIZE = "1K"
     IMAGE_MAX_RETRIES = 3
-    STUDIO_PHOTO_PROMPT = """SYSTEM: You are a Forensic Visual Reconstruction Engine.
-TASK: Apply photorealistic human texture to the strict geometry of the Input Image.
+    STUDIO_PHOTO_PROMPT = """SYSTEM: You are a Precision Digital Twin Generator (Non-Mirroring).
+TASK: Create a photorealistic studio image that matches the Input Image pixel-for-pixel in orientation.
 
-***CRITICAL SPATIAL MAPPING (PRIORITY 0 - DO NOT FAIL):***
-1. **NO MIRRORING:** This is an asymmetrical data replication task. Do not flip the image horizontally.
-2. **QUADRANT LOCK:**
-   - Look at the Input Image as a grid.
-   - If a limb extends into the **Left side** of the frame in the Input, it MUST extend into the **Left side** of the generated image.
-   - If the subject is facing **Left** in the Input, they MUST face **Left** in the output.
-3. **LIMB ID CHECK:** If the reference shows the subject holding their LEFT foot, you must generate them holding the LEFT foot. Do not swap legs.
+CRITICAL ORIENTATION PROTOCOL (THE "NO-FLIP" RULE):
+1. **SCREEN COORDINATE LOCK:** Treat the image as a coordinate grid.
+   - Objects on the **LEFT SIDE** of the screen in the Input MUST remain on the **LEFT SIDE** in the Output.
+   - Objects on the **RIGHT SIDE** must remain on the **RIGHT**.
+2. **DIRECTIONAL MATCH:**
+   - If the subject is facing **Screen-Left**, generate them facing **Screen-Left**.
+   - If the extended leg points to the **Bottom-Left corner**, it MUST point to the **Bottom-Left corner**.
+3. **STRICT PROHIBITION:** Do NOT mirror, flip, or rotate the pose for "better composition". The asymmetry must be preserved exactly.
 
-GEOMETRY & FORM (PRIORITY 1):
-1. **The Rigid Mold:** Treat the input silhouette as a rigid container. Fill it exactly. Do not add limbs sticking out if they are not in the reference (e.g. if one leg is tucked under and invisible, keep it invisible).
-2. **Fabric Tension:** Use the folds of the loose white tunic to show where the hidden limbs are pressing against the cloth, but do not expose them if they are covered.
+VISUAL RECONSTRUCTION:
+1. **Rigid Container:** Use the input silhouette as a strict mold. Do not add limbs where there are none. If a leg is tucked and invisible, keep it invisible.
+2. **Human Realism:** Render a REAL human face (eyes, nose, mouth) strictly inside the existing head angle. Do not turn the head; map the face onto the current head position.
+3. **Attire:** Modest white long-sleeved tunic and leggings. Use fabric folds to imply the body shape underneath.
 
-HUMAN REALISM (PRIORITY 2):
-1. **Face:** A real human face (eyes, nose, mouth) MUST be visible, but ONLY strictly within the head angle shown in the reference. Do not rotate the head to show the face if the reference looks down.
-2. **Skin:** Render realistic skin texture on hands and face.
-
-STYLE: 8k resolution, high-key studio lighting, seamless white background."""
+STYLE: Photorealistic, 8k, high-key studio lighting, seamless white background."""
     MAX_REFERENCE_SIDE = 2048
     MIN_SUBJECT_OCCUPANCY_RATIO = 0.45
     SUBJECT_CROP_MARGIN_RATIO = 0.20
