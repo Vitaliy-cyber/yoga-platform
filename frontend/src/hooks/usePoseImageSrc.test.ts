@@ -193,4 +193,20 @@ describe("usePoseImageSrc", () => {
     });
     expect(result.current.error).toBe(false);
   });
+
+  it("does not fall back to expired AWS presigned direct URL", async () => {
+    getSignedImageUrlMock.mockRejectedValueOnce(new Error("fail"));
+    const expiredPresigned =
+      "https://storage.railway.app/bucket/generated/img.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20240121T201641Z&X-Amz-Expires=604800&X-Amz-Signature=deadbeef";
+
+    const { result } = renderHook(() =>
+      usePoseImageSrc(expiredPresigned, 8, "photo")
+    );
+
+    await waitFor(() => {
+      expect(result.current.error).toBe(true);
+    });
+    expect(result.current.src).toBe("");
+    expect(getSignedImageUrlMock).toHaveBeenCalledTimes(1);
+  });
 });

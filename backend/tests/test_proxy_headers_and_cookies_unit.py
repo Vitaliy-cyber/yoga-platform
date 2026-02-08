@@ -10,6 +10,7 @@ from starlette.responses import Response
 from api.routes.poses import get_pose_image_signed_url
 from api.routes.auth import login as login_route
 from api.routes.auth import refresh_tokens as refresh_route
+from config import AppMode
 from models.pose import Pose
 from models.user import User
 from schemas.user import UserLogin
@@ -238,6 +239,55 @@ async def test_login_sets_none_samesite_for_cross_site_context(monkeypatch):
             "origin": "https://app.example.com",
             "sec-fetch-site": "cross-site",
         },
+    )
+    response = Response()
+
+    await login_route(UserLogin(token="test-auth-token"), request, response, db)
+
+    cookies = _get_set_cookie_headers(response)
+    assert any(c.startswith("refresh_token=") and "SameSite=none" in c and "Secure" in c for c in cookies)
+    assert any(c.startswith("csrf_token=") and "SameSite=none" in c and "Secure" in c for c in cookies)
+
+
+@pytest.mark.asyncio
+async def test_login_sets_none_samesite_in_prod_even_without_cross_site_headers(monkeypatch):
+    class _FakeTokenService:
+        def __init__(self, _db):
+            pass
+
+        async def create_tokens(self, **_kwargs):
+            return SimpleNamespace(
+                access_token="access",
+                refresh_token="refresh",
+            )
+
+    class _FakeAuditService:
+        def __init__(self, _db):
+            pass
+
+        async def log(self, **_kwargs):
+            return None
+
+    import api.routes.auth as auth_routes
+
+    monkeypatch.setattr(auth_routes, "TokenService", _FakeTokenService)
+    monkeypatch.setattr(auth_routes, "AuditService", _FakeAuditService)
+    monkeypatch.setattr(auth_routes.settings, "APP_MODE", AppMode.PROD)
+
+    user = User.create_with_token("test-auth-token")
+    user.id = 1
+    user.created_at = datetime.now(timezone.utc)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_FakeResult(user))
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+
+    request = _make_request(
+        scheme="https",
+        host="app.example.com:443",
+        path="/api/auth/login",
+        headers={"user-agent": "pytest"},
     )
     response = Response()
 

@@ -12,14 +12,54 @@ type CacheEntry = {
 
 const signedUrlCache = new Map<string, CacheEntry>();
 
+const getQueryParamInsensitive = (params: URLSearchParams, key: string): string | null => {
+  const expected = key.toLowerCase();
+  for (const [k, v] of params.entries()) {
+    if (k.toLowerCase() === expected) return v;
+  }
+  return null;
+};
+
+const parseAwsAmzDate = (raw: string): number | null => {
+  const match = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+  if (!match) return null;
+  const [, y, m, d, hh, mm, ss] = match;
+  const time = Date.UTC(
+    Number(y),
+    Number(m) - 1,
+    Number(d),
+    Number(hh),
+    Number(mm),
+    Number(ss)
+  );
+  return Number.isFinite(time) ? time : null;
+};
+
 const parseExpiresAt = (url: string): number | null => {
   try {
     const parsed = new URL(url, window.location.origin);
-    const expires = parsed.searchParams.get("expires");
-    if (!expires) return null;
-    const value = Number(expires);
-    if (!Number.isFinite(value)) return null;
-    return value * 1000;
+    const expires = getQueryParamInsensitive(parsed.searchParams, "expires");
+    if (expires) {
+      const value = Number(expires);
+      if (Number.isFinite(value)) {
+        return value * 1000;
+      }
+    }
+
+    // AWS-style presigned URL format:
+    // - X-Amz-Date=YYYYMMDDTHHMMSSZ
+    // - X-Amz-Expires=<seconds>
+    const amzDateRaw = getQueryParamInsensitive(parsed.searchParams, "X-Amz-Date");
+    const amzExpiresRaw = getQueryParamInsensitive(parsed.searchParams, "X-Amz-Expires");
+    if (amzDateRaw && amzExpiresRaw) {
+      const issuedAt = parseAwsAmzDate(amzDateRaw);
+      const expiresSeconds = Number(amzExpiresRaw);
+      if (issuedAt !== null && Number.isFinite(expiresSeconds)) {
+        return issuedAt + expiresSeconds * 1000;
+      }
+    }
+
+    return null;
   } catch {
     return null;
   }
@@ -42,12 +82,22 @@ const normalizeExternalImageUrl = (
   const trimmed = directPath.trim();
   if (!trimmed) return null;
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-    return upgradeToHttpsIfNeeded(trimmed);
+    const normalized = upgradeToHttpsIfNeeded(trimmed);
+    const expiresAt = parseExpiresAt(normalized);
+    if (expiresAt !== null && expiresAt - Date.now() <= CACHE_TTL_BUFFER_MS) {
+      return null;
+    }
+    return normalized;
   }
   if (trimmed.startsWith("//")) {
     const protocol =
       typeof window !== "undefined" ? window.location.protocol : "https:";
-    return upgradeToHttpsIfNeeded(`${protocol}${trimmed}`);
+    const normalized = upgradeToHttpsIfNeeded(`${protocol}${trimmed}`);
+    const expiresAt = parseExpiresAt(normalized);
+    if (expiresAt !== null && expiresAt - Date.now() <= CACHE_TTL_BUFFER_MS) {
+      return null;
+    }
+    return normalized;
   }
   if (trimmed.startsWith("/")) return null;
 
@@ -56,7 +106,12 @@ const normalizeExternalImageUrl = (
   const firstSegment = trimmed.split("/", 1)[0];
   const looksLikeHost = firstSegment.includes(".") && !firstSegment.includes(" ");
   if (looksLikeHost) {
-    return upgradeToHttpsIfNeeded(`https://${trimmed}`);
+    const normalized = upgradeToHttpsIfNeeded(`https://${trimmed}`);
+    const expiresAt = parseExpiresAt(normalized);
+    if (expiresAt !== null && expiresAt - Date.now() <= CACHE_TTL_BUFFER_MS) {
+      return null;
+    }
+    return normalized;
   }
 
   return null;

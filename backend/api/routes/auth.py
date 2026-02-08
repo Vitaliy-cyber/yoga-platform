@@ -177,6 +177,12 @@ def _cookie_security_params(request: Request) -> tuple[bool, str, str]:
     """
     Return (secure, refresh_samesite, csrf_samesite) for auth cookies.
     """
+    # Production deployments often run frontend and API on different hosts.
+    # To keep refresh/csrf cookies usable in those cross-site browser contexts,
+    # enforce `SameSite=None; Secure` in prod.
+    if settings.APP_MODE.value == "prod":
+        return True, "none", "none"
+
     request_scheme, _ = _effective_request_scheme_host(request)
     is_cross_site = _is_cross_site_cookie_context(request)
     secure = (
@@ -187,6 +193,47 @@ def _cookie_security_params(request: Request) -> tuple[bool, str, str]:
     if is_cross_site:
         return secure, "none", "none"
     return secure, "lax", "strict"
+
+
+def _delete_cookie_with_policy(
+    response: Response,
+    *,
+    key: str,
+    path: str,
+    secure: bool,
+    samesite: str,
+) -> None:
+    response.delete_cookie(
+        key=key,
+        path=path,
+        secure=secure,
+        samesite=samesite,
+    )
+
+
+def _clear_auth_cookies(response: Response, request: Request) -> None:
+    secure_cookie, refresh_samesite, csrf_samesite = _cookie_security_params(request)
+    _delete_cookie_with_policy(
+        response,
+        key="refresh_token",
+        path="/",
+        secure=secure_cookie,
+        samesite=refresh_samesite,
+    )
+    _delete_cookie_with_policy(
+        response,
+        key="refresh_token",
+        path="/api",
+        secure=secure_cookie,
+        samesite=refresh_samesite,
+    )
+    _delete_cookie_with_policy(
+        response,
+        key="csrf_token",
+        path="/",
+        secure=secure_cookie,
+        samesite=csrf_samesite,
+    )
 
 
 async def _get_valid_bearer_user_id(request: Request, db: AsyncSession) -> Optional[int]:
@@ -357,8 +404,14 @@ async def login(
 
             # Only mutate cookies after successful commit so we never hand out a refresh token
             # that was rolled back.
-            response.delete_cookie(key="refresh_token", path="/api")
             secure_cookie, refresh_samesite, csrf_samesite = _cookie_security_params(request)
+            _delete_cookie_with_policy(
+                response,
+                key="refresh_token",
+                path="/api",
+                secure=secure_cookie,
+                samesite=refresh_samesite,
+            )
             response.set_cookie(
                 key="refresh_token",
                 value=tokens.refresh_token,
@@ -563,11 +616,17 @@ async def refresh_tokens(
                 detail="Failed to refresh token",
             )
 
+        secure_cookie, refresh_samesite, csrf_samesite = _cookie_security_params(request)
         # Clear legacy cookie path to avoid duplicate refresh_token cookies (path=/api vs path=/)
-        response.delete_cookie(key="refresh_token", path="/api")
+        _delete_cookie_with_policy(
+            response,
+            key="refresh_token",
+            path="/api",
+            secure=secure_cookie,
+            samesite=refresh_samesite,
+        )
 
         # Update refresh token cookie
-        secure_cookie, refresh_samesite, csrf_samesite = _cookie_security_params(request)
         response.set_cookie(
             key="refresh_token",
             value=tokens.refresh_token,
@@ -603,9 +662,7 @@ async def refresh_tokens(
                 status_code=exc.status_code,
                 content={"detail": exc.detail},
             )
-            error_response.delete_cookie(key="refresh_token", path="/")
-            error_response.delete_cookie(key="refresh_token", path="/api")
-            error_response.delete_cookie(key="csrf_token", path="/")
+            _clear_auth_cookies(error_response, request)
             return error_response
         raise
     except Exception as e:
@@ -626,9 +683,7 @@ async def refresh_tokens(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={"detail": "Failed to refresh token"},
         )
-        error_response.delete_cookie(key="refresh_token", path="/")
-        error_response.delete_cookie(key="refresh_token", path="/api")
-        error_response.delete_cookie(key="csrf_token", path="/")
+        _clear_auth_cookies(error_response, request)
         return error_response
 
 
@@ -811,19 +866,8 @@ async def logout(
         user_agent=user_agent,
     )
 
-    # Clear the cookies
-    response.delete_cookie(
-        key="refresh_token",
-        path="/",
-    )
-    response.delete_cookie(
-        key="refresh_token",
-        path="/api",
-    )
-    response.delete_cookie(
-        key="csrf_token",
-        path="/",
-    )
+    # Clear cookies with the same policy as we use for issuing them.
+    _clear_auth_cookies(response, request)
 
     await db.commit()
     return {"message": "Successfully logged out"}
@@ -908,9 +952,7 @@ async def logout_all(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": "Not authenticated"},
             )
-            error_response.delete_cookie(key="refresh_token", path="/")
-            error_response.delete_cookie(key="refresh_token", path="/api")
-            error_response.delete_cookie(key="csrf_token", path="/")
+            _clear_auth_cookies(error_response, request)
             return error_response
         if refresh_token_user_id is not None and refresh_token_user_id != stored_user_id:
             logger.warning(
@@ -926,9 +968,7 @@ async def logout_all(
             status_code=status.HTTP_401_UNAUTHORIZED,
             content={"detail": "Not authenticated"},
         )
-        error_response.delete_cookie(key="refresh_token", path="/")
-        error_response.delete_cookie(key="refresh_token", path="/api")
-        error_response.delete_cookie(key="csrf_token", path="/")
+        _clear_auth_cookies(error_response, request)
         return error_response
 
     if requires_csrf:
@@ -949,9 +989,7 @@ async def logout_all(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         content={"detail": "Not authenticated"},
                     )
-                    error_response.delete_cookie(key="refresh_token", path="/")
-                    error_response.delete_cookie(key="refresh_token", path="/api")
-                    error_response.delete_cookie(key="csrf_token", path="/")
+                    _clear_auth_cookies(error_response, request)
                     return error_response
                 user_id = stored_user_id
                 requires_csrf = False
@@ -1002,19 +1040,8 @@ async def logout_all(
         metadata={"sessions_revoked": count},
     )
 
-    # Clear the cookies
-    response.delete_cookie(
-        key="refresh_token",
-        path="/",
-    )
-    response.delete_cookie(
-        key="refresh_token",
-        path="/api",
-    )
-    response.delete_cookie(
-        key="csrf_token",
-        path="/",
-    )
+    # Clear cookies with the same policy as we use for issuing them.
+    _clear_auth_cookies(response, request)
 
     await db.commit()
     return {"message": f"Successfully logged out from all {count} sessions"}
