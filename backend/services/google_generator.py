@@ -8,18 +8,18 @@ import logging
 import os
 import sys
 import time
-from importlib import metadata as importlib_metadata
-from hashlib import sha256
 from dataclasses import dataclass
+from hashlib import sha256
+from importlib import metadata as importlib_metadata
 from io import BytesIO
 from typing import Callable, Iterable, Optional
 
+from config import get_settings
 from PIL import Image, ImageOps
 
-from config import get_settings
+from services.generation_task_utils import clamp_activation_level
 from services.image_validation import normalize_image_mime_type, sniff_image_mime_type
 from services.pose_vision_describer import describe_pose_from_image
-from services.generation_task_utils import clamp_activation_level
 from services.storage import get_storage
 
 settings = get_settings()
@@ -40,6 +40,7 @@ def _single_line(text: str) -> str:
 @dataclass
 class AnalyzedMuscle:
     """Analyzed muscle with activation level"""
+
     name: str  # muscle name from database (e.g., 'quadriceps', 'hamstrings')
     activation_level: int  # 0-100
 
@@ -72,16 +73,20 @@ class GoogleGeminiGenerator:
     # Model for vision/analysis
     GEMINI_VISION_MODEL = "models/gemini-3-pro-preview"
     # Single-shot mode: one modality profile, one API call per generation stage.
-    IMAGE_MODALITY_PROFILES: tuple[list[str], ...] = (
-        ["TEXT", "IMAGE"],
-    )
+    IMAGE_MODALITY_PROFILES: tuple[list[str], ...] = (["TEXT", "IMAGE"],)
     IMAGE_ASPECT_RATIO = "1:1"
     IMAGE_SIZE = "1K"
     IMAGE_MAX_RETRIES = 3
     STUDIO_PHOTO_PROMPT = (
-        "Використовуючи задану позу на зображенні, відтвори її виконання в студії. "
-        "Поза має точно відповідати референсу. Білий фон, без декорацій і аксесуарів. "
-        "Білий одяг, м'яке студійне освітлення."
+        "SYSTEM: You are a professional studio photographer creating a high-quality reference photo."
+        "TASK: Create a photorealistic studio photograph of a woman based on the Visual Input provided."
+        "SUBJECT & ATTIRE:"
+        "- A woman wearing modest, all-white clothing: a white long-sleeved tunic, full-length white leggings, and a white fabric turban completely covering her hair."
+        "VISUAL INSTRUCTIONS:"
+        "1. Faithfully recreate the exact structural pose, silhouette form, and spatial orientation shown in the Input Image. Do not mirror or flip the pose."
+        "2. **CRITICAL POSE DETAIL:** Pay strict attention to limb placement. If a leg is tucked underneath the body and not clearly extending to the side in the Input reference, it must remain hidden underneath in the generated photo. Do not visually \"correct\" the pose by extending limbs that should be folded."
+        "3. Treat the Input Image's geometry as the primary authority for accuracy, overriding any standard pose assumptions."
+        "STYLE: High-key lighting, seamless white background, 8k resolution, elegant and respectful editorial style. No harsh shadows."
     )
     MAX_REFERENCE_SIDE = 2048
     MIN_SUBJECT_OCCUPANCY_RATIO = 0.45
@@ -204,11 +209,26 @@ class GoogleGeminiGenerator:
 
     # Valid muscle names from database
     VALID_MUSCLE_NAMES = [
-        "erector_spinae", "latissimus_dorsi", "trapezius", "rhomboids",
-        "rectus_abdominis", "obliques", "transverse_abdominis",
-        "quadriceps", "hamstrings", "gluteus_maximus", "gluteus_medius",
-        "calves", "hip_flexors", "deltoids", "rotator_cuff",
-        "biceps", "triceps", "forearms", "pectoralis", "serratus_anterior"
+        "erector_spinae",
+        "latissimus_dorsi",
+        "trapezius",
+        "rhomboids",
+        "rectus_abdominis",
+        "obliques",
+        "transverse_abdominis",
+        "quadriceps",
+        "hamstrings",
+        "gluteus_maximus",
+        "gluteus_medius",
+        "calves",
+        "hip_flexors",
+        "deltoids",
+        "rotator_cuff",
+        "biceps",
+        "triceps",
+        "forearms",
+        "pectoralis",
+        "serratus_anterior",
     ]
 
     async def _analyze_muscles_from_image(
@@ -220,6 +240,7 @@ class GoogleGeminiGenerator:
         """
         import asyncio
         import json
+
         from google.genai import types
 
         logger.debug("Analyzing active muscles from pose image...")
@@ -263,7 +284,9 @@ Important rules:
 
             # Clean up response - extract JSON if wrapped in markdown
             if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
+                response_text = (
+                    response_text.split("```json")[1].split("```")[0].strip()
+                )
             elif "```" in response_text:
                 response_text = response_text.split("```")[1].split("```")[0].strip()
 
@@ -281,7 +304,9 @@ Important rules:
                 if name in self.VALID_MUSCLE_NAMES:
                     # Clamp activation to 0-100
                     activation = clamp_activation_level(activation)
-                    analyzed_muscles.append(AnalyzedMuscle(name=name, activation_level=activation))
+                    analyzed_muscles.append(
+                        AnalyzedMuscle(name=name, activation_level=activation)
+                    )
                 else:
                     logger.warning(f"Unknown muscle name from AI: {name}")
 
@@ -289,7 +314,9 @@ Important rules:
             return analyzed_muscles
 
         except asyncio.TimeoutError:
-            logger.warning(f"Google API call timed out after {self.API_TIMEOUT_SECONDS}s")
+            logger.warning(
+                f"Google API call timed out after {self.API_TIMEOUT_SECONDS}s"
+            )
             return []
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse muscle analysis JSON: {e}")
@@ -370,16 +397,8 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         chroma = max_rgb - min_rgb
 
         nonwhite_mask = (r < 245) | (g < 245) | (b < 245)
-        red_mask = (
-            (r >= 70)
-            & ((r - np.maximum(g, b)) >= 25)
-            & (chroma >= 25)
-        )
-        blue_mask = (
-            (b >= 70)
-            & ((b - np.maximum(r, g)) >= 25)
-            & (chroma >= 25)
-        )
+        red_mask = (r >= 70) & ((r - np.maximum(g, b)) >= 25) & (chroma >= 25)
+        blue_mask = (b >= 70) & ((b - np.maximum(r, g)) >= 25) & (chroma >= 25)
         dark_mask = (r < 95) & (g < 95) & (b < 95)
 
         return {
@@ -493,7 +512,11 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
             config_with_sampling["system_instruction"] = system_instruction
 
         removable_sampling_keys = (
-            "system_instruction", "seed", "top_k", "top_p", "temperature",
+            "system_instruction",
+            "seed",
+            "top_k",
+            "top_p",
+            "temperature",
         )
         attempt_kwargs = dict(config_with_sampling)
         while True:
@@ -655,8 +678,9 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         hysteresis thresholding (manual Canny). Falls back to original image
         if edge detection fails.
         """
-        import numpy as np
         from collections import deque
+
+        import numpy as np
 
         try:
             with Image.open(BytesIO(image_bytes)) as img:
@@ -672,11 +696,11 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 padded = np.pad(gray_arr, ((0, 0), (2, 2)), mode="reflect")
                 blurred_h = np.zeros_like(gray_arr)
                 for k in range(5):
-                    blurred_h += padded[:, k:k + w] * k1d[k]
+                    blurred_h += padded[:, k : k + w] * k1d[k]
                 padded = np.pad(blurred_h, ((2, 2), (0, 0)), mode="reflect")
                 blurred = np.zeros_like(gray_arr)
                 for k in range(5):
-                    blurred += padded[k:k + h, :] * k1d[k]
+                    blurred += padded[k : k + h, :] * k1d[k]
 
                 # -- Sobel gradient --
                 sx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float64)
@@ -686,8 +710,8 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 gy = np.zeros_like(blurred)
                 for dy in range(3):
                     for dx in range(3):
-                        gx += pad_b[dy:dy + h, dx:dx + w] * sx[dy, dx]
-                        gy += pad_b[dy:dy + h, dx:dx + w] * sy[dy, dx]
+                        gx += pad_b[dy : dy + h, dx : dx + w] * sx[dy, dx]
+                        gy += pad_b[dy : dy + h, dx : dx + w] * sy[dy, dx]
 
                 magnitude = np.sqrt(gx * gx + gy * gy)
                 mag_max = magnitude.max()
@@ -711,7 +735,8 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 n2_0 = magnitude[1:-1, 2:]
                 interior[mask0] = np.where(
                     (mag_i[mask0] >= n1_0[mask0]) & (mag_i[mask0] >= n2_0[mask0]),
-                    mag_i[mask0], 0.0,
+                    mag_i[mask0],
+                    0.0,
                 )
 
                 mask45 = (ang_i >= 22.5) & (ang_i < 67.5)
@@ -719,7 +744,8 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 n2_45 = magnitude[0:-2, 2:]
                 interior[mask45] = np.where(
                     (mag_i[mask45] >= n1_45[mask45]) & (mag_i[mask45] >= n2_45[mask45]),
-                    mag_i[mask45], 0.0,
+                    mag_i[mask45],
+                    0.0,
                 )
 
                 mask90 = (ang_i >= 67.5) & (ang_i < 112.5)
@@ -727,15 +753,18 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 n2_90 = magnitude[2:, 1:-1]
                 interior[mask90] = np.where(
                     (mag_i[mask90] >= n1_90[mask90]) & (mag_i[mask90] >= n2_90[mask90]),
-                    mag_i[mask90], 0.0,
+                    mag_i[mask90],
+                    0.0,
                 )
 
                 mask135 = (ang_i >= 112.5) & (ang_i < 157.5)
                 n1_135 = magnitude[0:-2, 0:-2]
                 n2_135 = magnitude[2:, 2:]
                 interior[mask135] = np.where(
-                    (mag_i[mask135] >= n1_135[mask135]) & (mag_i[mask135] >= n2_135[mask135]),
-                    mag_i[mask135], 0.0,
+                    (mag_i[mask135] >= n1_135[mask135])
+                    & (mag_i[mask135] >= n2_135[mask135]),
+                    mag_i[mask135],
+                    0.0,
                 )
 
                 nms = np.zeros_like(magnitude)
@@ -819,6 +848,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         to ensure consistent pose/composition.
         """
         import asyncio
+
         from google.genai import types
         from google.genai.errors import ClientError
 
@@ -838,7 +868,9 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                         prepared_ref_mime_type,
                         original_size,
                         prepared_size,
-                    ) = self._prepare_reference_image(reference_image_bytes, ref_mime_type)
+                    ) = self._prepare_reference_image(
+                        reference_image_bytes, ref_mime_type
+                    )
                     logger.debug(
                         "Prepared reference image for Gemini: mime=%s original=%sx%s prepared=%sx%s",
                         prepared_ref_mime_type,
@@ -864,11 +896,13 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
             ]
             if include_pose_control:
                 try:
-                    control_bytes, control_mime_type = self._build_pose_control_reference(
-                        prepared_ref_bytes
+                    control_bytes, control_mime_type = (
+                        self._build_pose_control_reference(prepared_ref_bytes)
                     )
                     content_parts.append(
-                        types.Part.from_bytes(data=control_bytes, mime_type=control_mime_type)
+                        types.Part.from_bytes(
+                            data=control_bytes, mime_type=control_mime_type
+                        )
                     )
                     prompt = self._append_pose_control_instructions(prompt)
                 except Exception as e:
@@ -888,6 +922,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 for modalities in self.IMAGE_MODALITY_PROFILES:
                     config_seed = active_seed if allow_seed else None
                     try:
+
                         def _call_generate_content(
                             *,
                             _modalities=modalities,
@@ -900,7 +935,9 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                             if _seed is not None:
                                 config_kwargs["seed"] = _seed
                             if _system_instruction is not None:
-                                config_kwargs["system_instruction"] = _system_instruction
+                                config_kwargs["system_instruction"] = (
+                                    _system_instruction
+                                )
                             return self._client.models.generate_content(
                                 model=_model,
                                 contents=_contents,
@@ -1013,10 +1050,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
     @staticmethod
     def _is_seed_invalid_error(error: Exception) -> bool:
         message = str(error).lower()
-        return (
-            "invalid_argument" in message
-            and "generation_config.seed" in message
-        )
+        return "invalid_argument" in message and "generation_config.seed" in message
 
     @staticmethod
     def _iter_response_parts(response: object) -> Iterable[object]:
@@ -1054,7 +1088,9 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                     pass
 
             inline_data = getattr(part, "inline_data", None)
-            data = getattr(inline_data, "data", None) if inline_data is not None else None
+            data = (
+                getattr(inline_data, "data", None) if inline_data is not None else None
+            )
             if data is None:
                 continue
             try:
@@ -1110,7 +1146,9 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         Returns muscle bytes, analyzed muscles, and stage timings.
         """
 
-        await update_progress(visualization_progress, "Generating muscle visualization...")
+        await update_progress(
+            visualization_progress, "Generating muscle visualization..."
+        )
 
         muscle_prompt = self._build_muscle_prompt(additional_notes, attempt=0)
         t0 = time.monotonic()
@@ -1247,7 +1285,9 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
             ).hexdigest()
         if additional_notes and additional_notes.strip():
             source_seed_material = sha256(
-                f"{source_seed_material}|notes:{additional_notes.strip()}".encode("utf-8")
+                f"{source_seed_material}|notes:{additional_notes.strip()}".encode(
+                    "utf-8"
+                )
             ).hexdigest()
 
         # Step 3: Generate studio photo once (20%)
@@ -1265,7 +1305,9 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         )
         t_photo = time.monotonic() - t0
         if is_placeholder:
-            raise RuntimeError("Gemini failed to generate studio photo in single-shot mode.")
+            raise RuntimeError(
+                "Gemini failed to generate studio photo in single-shot mode."
+            )
 
         photo_bytes = self._image_to_bytes(photo_img)
         used_placeholders = used_placeholders or is_placeholder
@@ -1361,11 +1403,15 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         photo_img, is_placeholder = await self._generate_image(
             pose_description.strip(),
             max_retries=self.IMAGE_MAX_RETRIES,
-            generation_seed=self._seed_from_material(text_seed_material, "text-photo", 0),
+            generation_seed=self._seed_from_material(
+                text_seed_material, "text-photo", 0
+            ),
         )
         t_photo = time.monotonic() - t0
         if is_placeholder:
-            raise RuntimeError("Gemini failed to generate studio photo from text in single-shot mode.")
+            raise RuntimeError(
+                "Gemini failed to generate studio photo from text in single-shot mode."
+            )
         photo_bytes = self._image_to_bytes(photo_img)
         used_placeholders = used_placeholders or is_placeholder
         logger.info("Photo generated")
