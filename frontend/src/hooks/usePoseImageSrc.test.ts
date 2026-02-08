@@ -209,4 +209,18 @@ describe("usePoseImageSrc", () => {
     expect(result.current.src).toBe("");
     expect(getSignedImageUrlMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not treat filename-like storage keys as direct host URLs", async () => {
+    getSignedImageUrlMock.mockRejectedValueOnce(new Error("fail"));
+
+    const { result } = renderHook(() =>
+      usePoseImageSrc("tidy-lounge-cq3sc0j.photo.png", 9, "photo")
+    );
+
+    await waitFor(() => {
+      expect(result.current.error).toBe(true);
+    });
+    expect(result.current.src).toBe("");
+    expect(getSignedImageUrlMock).toHaveBeenCalledTimes(1);
+  });
 });

@@ -72,31 +72,32 @@ class GoogleGeminiGenerator:
     GEMINI_IMAGE_MODEL = "models/gemini-3-pro-image-preview"
     # Model for vision/analysis
     GEMINI_VISION_MODEL = "models/gemini-3-pro-preview"
-    # Single-shot mode: one modality profile, one API call per generation stage.
-    IMAGE_MODALITY_PROFILES: tuple[list[str], ...] = (["TEXT", "IMAGE"],)
+    # Primary + fallback modality profiles. Some API responses return text-only with
+    # ["TEXT", "IMAGE"]; ["IMAGE"] fallback improves reliability for image extraction.
+    IMAGE_MODALITY_PROFILES: tuple[list[str], ...] = (["TEXT", "IMAGE"], ["IMAGE"])
     IMAGE_ASPECT_RATIO = "1:1"
     IMAGE_SIZE = "1K"
     IMAGE_MAX_RETRIES = 3
-    STUDIO_PHOTO_PROMPT = (
-        "SYSTEM: You are a professional technical photographer creating a precise visual reference."
-        "TASK: Create a photorealistic studio photograph of a woman based on the Visual Input provided."
-        "SUBJECT & ATTIRE:"
-        "- Woman in modest, all-white clothing: white long-sleeved tunic, white leggings, white turban."
-        "- Clothing is loose; rely on fabric tension to find the form."
-        "HIERARCHICAL VISUAL RECONSTRUCTION (STEP-BY-STEP EXECUTION):"
-        "STEP 1: THE BOUNDING BOX (MACRO GEOMETRY) - CRITICAL"
-        "Before looking at limbs, define the overall shape \"container\" of the Reference Image."
-        "- **Height Check:** Is the total shape tall (standing) or short (sitting/crouching)? You MUST replicate this overall height ratio relative to the frame. Do not turn a low pose into a tall one."
-        "- **Width Check:** Is the shape narrow or sprawling? Replicate the total width."
-        "STEP 2: INTERNAL STRUCTURE (CLOTHING TENSION)"
-        "Since skin is covered, use the fabric as a guide."
-        "- **Trace folds & wrinkles:** Where the tunic is stretched tight, there is a joint (knee/elbow) pressing outwards. Where it drapes loosely, there is empty space underneath. Reconstruct the body based on these tension lines."
-        "STEP 3: FINE TUNING (NEGATIVE SPACE)"
-        "- Check the empty \"air holes\" between limbs and body. Match their shapes exactly to the reference."
-        "STEP 4: ORIENTATION LOCK"
-        "- Do not mirror or flip horizontally."
-        "STYLE: High-key lighting, seamless white background, 8k resolution, elegant, neutral technical style."
-    )
+    STUDIO_PHOTO_PROMPT = """SYSTEM: You are a Photorealistic Visual Reconstruction Engine.
+TASK: Generate a studio photograph of a real human subject in modest white attire, fitting them strictly into the Input geometry.
+
+HIERARCHICAL PROTOCOL (GEOMETRY IS SUPREME):
+
+PRIORITY 1: THE RIGID GEOMETRIC CONTAINER (DO NOT BREAK)
+1. The silhouette outline of the Input Image is an inviolable boundary. Treat it as a rigid container.
+2. The generated figure must fill this container exactly. No limbs can extend beyond it; no gaps can be created that aren't in the reference.
+3. Do not alter the pose, head angle, or spine curvature to make the subject look more comfortable or "human". The shape comes first.
+4. Orientation Lock: Do not mirror or flip horizontally.
+
+PRIORITY 2: HUMAN DETAIL & ATTIRE (MUST FIT PRIORITY 1)
+1. **Populate the container with a real human:** Within the strict confines of the established silhouette, render photorealistic human skin (face/hands) and fabric textures.
+2. **Face Rule:** Render facial features (eyes, nose, mouth) ONLY according to the head angle in the reference.
+   - If the head is turned away in the reference, keep it turned away (do not rotate it to show the face).
+   - If the head is tucked down, keep it tucked.
+   - Do not adjust the neck or head position to improve face visibility.
+3. **Attire:** Loose white long-sleeved tunic, leggings, white turban fully covering hair.
+
+STYLE: Photorealistic, 8k studio photograph, soft lighting, seamless white background."""
     MAX_REFERENCE_SIDE = 2048
     MIN_SUBJECT_OCCUPANCY_RATIO = 0.45
     SUBJECT_CROP_MARGIN_RATIO = 0.20
@@ -984,6 +985,15 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                     pil_image = self._extract_image_from_response(response)
                     if pil_image is not None:
                         return pil_image, False
+                    response_text = getattr(response, "text", None)
+                    if isinstance(response_text, str) and response_text.strip():
+                        logger.warning(
+                            "Gemini returned text without image (attempt %s/%s, modalities=%s): %s",
+                            attempt + 1,
+                            max_retries,
+                            modalities,
+                            _single_line(response_text)[:220],
+                        )
                     logger.warning(
                         "No image in Gemini response (attempt %s/%s, modalities=%s)",
                         attempt + 1,
@@ -1083,6 +1093,44 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 yield part
 
     @classmethod
+    def _decode_image_payload(cls, payload: object) -> Optional[bytes]:
+        if payload is None:
+            return None
+        if isinstance(payload, memoryview):
+            return payload.tobytes()
+        if isinstance(payload, (bytes, bytearray)):
+            return bytes(payload)
+        if isinstance(payload, str):
+            raw = payload.strip()
+            if not raw:
+                return None
+            import base64
+
+            # Defensive decode for SDK variants that return base64 with missing padding.
+            candidates = [raw]
+            padding_len = (-len(raw)) % 4
+            if padding_len:
+                candidates.append(raw + ("=" * padding_len))
+            for candidate in candidates:
+                try:
+                    return base64.b64decode(candidate, validate=False)
+                except Exception:
+                    continue
+        return None
+
+    @classmethod
+    def _open_image_payload(cls, payload: object) -> Optional[Image.Image]:
+        image_bytes = cls._decode_image_payload(payload)
+        if not image_bytes:
+            return None
+        try:
+            pil_image = Image.open(BytesIO(image_bytes))
+            pil_image.load()
+            return pil_image
+        except Exception:
+            return None
+
+    @classmethod
     def _extract_image_from_response(cls, response: object) -> Optional[Image.Image]:
         """Extract first inline image from Gemini response."""
         for part in cls._iter_response_parts(response):
@@ -1097,23 +1145,58 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                     pass
 
             inline_data = getattr(part, "inline_data", None)
-            data = (
-                getattr(inline_data, "data", None) if inline_data is not None else None
-            )
-            if data is None:
-                continue
-            try:
-                if isinstance(data, str):
-                    import base64
-
-                    image_bytes = base64.b64decode(data)
+            data = None
+            if inline_data is not None:
+                if isinstance(inline_data, dict):
+                    data = inline_data.get("data")
                 else:
-                    image_bytes = data
-                pil_image = Image.open(BytesIO(image_bytes))
-                pil_image.load()
+                    data = getattr(inline_data, "data", None)
+
+            pil_image = cls._open_image_payload(data)
+            if pil_image is not None:
                 return pil_image
-            except Exception:
-                continue
+
+            # Some SDK builds expose raw bytes directly on the part.
+            pil_image = cls._open_image_payload(getattr(part, "data", None))
+            if pil_image is not None:
+                return pil_image
+
+            # Generated-image APIs can nest bytes in part.image.*
+            nested_image = getattr(part, "image", None)
+            if nested_image is not None:
+                nested_as_image = getattr(nested_image, "as_image", None)
+                if callable(nested_as_image):
+                    try:
+                        image = nested_as_image()
+                        if isinstance(image, Image.Image):
+                            return image
+                    except Exception:
+                        pass
+                for attr in ("image_bytes", "data", "bytes"):
+                    pil_image = cls._open_image_payload(getattr(nested_image, attr, None))
+                    if pil_image is not None:
+                        return pil_image
+
+        # Additional SDK layout: response.generated_images[].image.image_bytes
+        generated_images = getattr(response, "generated_images", None)
+        if generated_images:
+            for generated in generated_images:
+                generated_image = getattr(generated, "image", None)
+                if generated_image is None:
+                    continue
+                generated_as_image = getattr(generated_image, "as_image", None)
+                if callable(generated_as_image):
+                    try:
+                        image = generated_as_image()
+                        if isinstance(image, Image.Image):
+                            return image
+                    except Exception:
+                        pass
+                for attr in ("image_bytes", "data", "bytes"):
+                    pil_image = cls._open_image_payload(getattr(generated_image, attr, None))
+                    if pil_image is not None:
+                        return pil_image
+
         return None
 
     @staticmethod

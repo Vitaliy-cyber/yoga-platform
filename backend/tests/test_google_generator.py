@@ -527,6 +527,70 @@ class TestGoogleGeminiGeneratorGenerateImage:
             GoogleGeminiGenerator._initialized = False
 
     @pytest.mark.asyncio
+    async def test_generate_image_falls_back_to_image_only_modalities(self):
+        with patch("services.google_generator.get_settings") as mock_settings:
+            settings = MagicMock()
+            settings.GOOGLE_API_KEY = "test-key"
+            mock_settings.return_value = settings
+
+            from services.google_generator import GoogleGeminiGenerator
+
+            GoogleGeminiGenerator._instance = None
+            GoogleGeminiGenerator._initialized = False
+
+            generator = GoogleGeminiGenerator()
+            generator._initialized = True
+
+            img = Image.new("RGB", (64, 64), "green")
+            img_buf = BytesIO()
+            img.save(img_buf, format="PNG")
+            image_bytes = img_buf.getvalue()
+
+            text_only_response = MagicMock()
+            text_only_response.parts = []
+            text_only_response.candidates = []
+            text_only_response.text = "Could not produce image in this modality."
+
+            image_part = MagicMock()
+            image_part.inline_data = MagicMock()
+            image_part.inline_data.data = image_bytes
+            image_response = MagicMock()
+            image_response.parts = [image_part]
+
+            mock_client = MagicMock()
+            mock_client.models.generate_content.side_effect = [
+                text_only_response,
+                image_response,
+            ]
+            generator._client = mock_client
+
+            seen_modalities: list[list[str]] = []
+
+            def build_config_side_effect(types_module, modalities, **kwargs):
+                seen_modalities.append(list(modalities))
+                return MagicMock()
+
+            with (
+                patch("google.genai.types"),
+                patch.object(
+                    GoogleGeminiGenerator,
+                    "_build_generation_config",
+                    side_effect=build_config_side_effect,
+                ),
+            ):
+                result_img, is_placeholder = await generator._generate_image(
+                    "test prompt", max_retries=1
+                )
+
+            assert isinstance(result_img, Image.Image)
+            assert is_placeholder is False
+            assert seen_modalities[0] == ["TEXT", "IMAGE"]
+            assert ["IMAGE"] in seen_modalities
+
+            GoogleGeminiGenerator._instance = None
+            GoogleGeminiGenerator._initialized = False
+
+    @pytest.mark.asyncio
     async def test_generate_image_with_reference(self):
         """Test image generation with reference image."""
         with patch("services.google_generator.get_settings") as mock_settings:
@@ -686,6 +750,31 @@ class TestGoogleGeminiGeneratorGenerateImage:
         response = MagicMock()
         response.parts = None
         response.candidates = [candidate]
+
+        extracted = GoogleGeminiGenerator._extract_image_from_response(response)
+        assert isinstance(extracted, Image.Image)
+
+    def test_extract_image_from_generated_images_layout(self):
+        """Test extraction from response.generated_images[].image.image_bytes layout."""
+        from services.google_generator import GoogleGeminiGenerator
+
+        GoogleGeminiGenerator._instance = None
+        GoogleGeminiGenerator._initialized = False
+
+        img = Image.new("RGB", (24, 24), "teal")
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        image_bytes = buffer.getvalue()
+
+        generated_image_obj = MagicMock()
+        generated_image_obj.image_bytes = image_bytes
+        generated_item = MagicMock()
+        generated_item.image = generated_image_obj
+
+        response = MagicMock()
+        response.parts = None
+        response.candidates = None
+        response.generated_images = [generated_item]
 
         extracted = GoogleGeminiGenerator._extract_image_from_response(response)
         assert isinstance(extracted, Image.Image)

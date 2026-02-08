@@ -75,6 +75,25 @@ const upgradeToHttpsIfNeeded = (url: string): string => {
   return url;
 };
 
+const canNormalizeLegacyHostPath = (raw: string): boolean => {
+  const firstSegment = raw.split("/", 1)[0];
+  if (!firstSegment.includes(".") || firstSegment.includes(" ")) {
+    return false;
+  }
+  if (!raw.includes("/")) {
+    return false;
+  }
+
+  // Keys like "abc123.photo.png" are storage object names, not valid hosts.
+  const fileLikeTlds = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg"]);
+  const tld = firstSegment.split(".").pop()?.toLowerCase() || "";
+  if (fileLikeTlds.has(tld)) {
+    return false;
+  }
+
+  return true;
+};
+
 const normalizeExternalImageUrl = (
   directPath?: string | null
 ): string | null => {
@@ -103,9 +122,7 @@ const normalizeExternalImageUrl = (
 
   // Handle legacy host/path values missing scheme, e.g.
   // "bucket.example.com/generated/pose.png"
-  const firstSegment = trimmed.split("/", 1)[0];
-  const looksLikeHost = firstSegment.includes(".") && !firstSegment.includes(" ");
-  if (looksLikeHost) {
+  if (canNormalizeLegacyHostPath(trimmed)) {
     const normalized = upgradeToHttpsIfNeeded(`https://${trimmed}`);
     const expiresAt = parseExpiresAt(normalized);
     if (expiresAt !== null && expiresAt - Date.now() <= CACHE_TTL_BUFFER_MS) {
@@ -153,7 +170,6 @@ export const usePoseImageSrc = (
     if (isLocalStoragePath(directPath)) return directPath || "";
     const cached = getCacheEntry(cacheKey);
     if (cached?.url) return cached.url;
-    if (normalizedDirectUrl) return normalizedDirectUrl;
     return "";
   });
   const [loading, setLoading] = useState(false);
@@ -187,8 +203,6 @@ export const usePoseImageSrc = (
       if (!force) {
         if (cached?.url) {
           setSrc((prev) => prev || cached.url);
-        } else if (normalizedDirectUrl) {
-          setSrc((prev) => prev || normalizedDirectUrl);
         }
       }
 
@@ -227,10 +241,6 @@ export const usePoseImageSrc = (
       setSrc(cached.url);
       setLoading(false);
       setError(false);
-      return;
-    }
-    if (normalizedDirectUrl) {
-      setSrc((prev) => prev || normalizedDirectUrl);
       return;
     }
     setSrc("");

@@ -252,8 +252,19 @@ class S3Storage:
 
         # Legacy production rows may contain host/path without a scheme.
         # Example: "bucket.example.com/generated/file.png"
+        #
+        # IMPORTANT: values like "abc123.photo.png" are object keys, not hosts.
+        # Treat as URL only when the value clearly looks like host/path.
         first_segment = value.split("/", 1)[0]
-        if "." in first_segment and " " not in first_segment and not value.startswith("/"):
+        file_like_tlds = {"png", "jpg", "jpeg", "webp", "gif", "svg"}
+        tld = first_segment.rsplit(".", 1)[-1].lower() if "." in first_segment else ""
+        if (
+            "." in first_segment
+            and " " not in first_segment
+            and "/" in value
+            and not value.startswith("/")
+            and tld not in file_like_tlds
+        ):
             return f"https://{value}"
         return value
 

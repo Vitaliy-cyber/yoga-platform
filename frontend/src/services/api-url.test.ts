@@ -67,4 +67,9 @@ describe('api URL normalization regressions', () => {
     const normalized = __test__.normalizeDirectImageUrl('//cdn.example.com/generated/photo.png');
     expect(normalized).toMatch(/^https?:\/\/cdn\.example\.com\/generated\/photo\.png$/);
   });
+
+  it('does not treat filename-like keys as host URLs', () => {
+    expect(__test__.normalizeDirectImageUrl('tidy-lounge-cq3sc0j_photo.png')).toBeNull();
+    expect(__test__.normalizeDirectImageUrl('abc123.photo.png')).toBeNull();
+  });
 });

@@ -68,6 +68,25 @@ const ensureHttpsIfNeeded = (url: string, pageProtocol: string = getPageProtocol
   return url;
 };
 
+const canNormalizeLegacyHostPath = (raw: string): boolean => {
+  const firstSegment = raw.split('/', 1)[0];
+  if (!firstSegment.includes('.') || firstSegment.includes(' ')) {
+    return false;
+  }
+  if (!raw.includes('/')) {
+    return false;
+  }
+
+  // Keys like "abc123.photo.png" are object names, not hostnames.
+  const fileLikeTlds = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg']);
+  const tld = firstSegment.split('.').pop()?.toLowerCase() || '';
+  if (fileLikeTlds.has(tld)) {
+    return false;
+  }
+
+  return true;
+};
+
 const normalizeDirectImageUrl = (directPath: string | null | undefined): string | null => {
   if (!directPath) return null;
   const trimmed = directPath.trim();
@@ -81,8 +100,7 @@ const normalizeDirectImageUrl = (directPath: string | null | undefined): string 
   }
   if (trimmed.startsWith('/')) return null;
   // Legacy rows may contain host/path without scheme.
-  const firstSegment = trimmed.split('/', 1)[0];
-  if (firstSegment.includes('.') && !firstSegment.includes(' ')) {
+  if (canNormalizeLegacyHostPath(trimmed)) {
     return ensureHttpsIfNeeded(`https://${trimmed}`);
   }
   return null;

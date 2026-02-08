@@ -414,3 +414,40 @@ class TestS3StorageEdgeCases:
                 )
 
                 S3Storage._instance = None
+
+    @pytest.mark.asyncio
+    async def test_download_bytes_treats_filename_like_value_as_s3_key(self):
+        """Values like '*.photo.png' are keys and must not be normalized as URLs."""
+        with patch("services.storage.get_settings") as mock_settings:
+            with patch("services.storage.boto3") as mock_boto3:
+                settings = MagicMock()
+                settings.STORAGE_BACKEND = "s3"
+                settings.S3_BUCKET = "test-bucket"
+                settings.S3_REGION = "us-east-1"
+                settings.S3_PREFIX = ""
+                settings.S3_ACCESS_KEY_ID = "key"
+                settings.S3_SECRET_ACCESS_KEY = "secret"
+                settings.S3_PUBLIC_URL = ""
+                settings.S3_ENDPOINT_URL = ""
+                settings.BUCKET_ENDPOINT = ""
+                mock_settings.return_value = settings
+
+                mock_client = MagicMock()
+                mock_client.get_object.return_value = {"Body": BytesIO(b"png-bytes")}
+                mock_boto3.client.return_value = mock_client
+
+                from services.storage import S3Storage
+
+                S3Storage._instance = None
+
+                storage = S3Storage()
+                key_like_value = "tidy-lounge-cq3sc0j.photo.png"
+                payload = await storage.download_bytes(key_like_value)
+
+                assert payload == b"png-bytes"
+                mock_client.get_object.assert_called_once_with(
+                    Bucket="test-bucket",
+                    Key=key_like_value,
+                )
+
+                S3Storage._instance = None
