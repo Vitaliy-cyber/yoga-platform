@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import axios from "axios";
 import { getSignedImageUrl } from "../services/api";
 import { logger } from "../lib/logger";
 
@@ -150,6 +151,15 @@ const getCacheEntry = (cacheKey: string): CacheEntry | undefined =>
 const isFreshCacheEntry = (entry: CacheEntry): boolean =>
   entry.expiresAt - Date.now() > CACHE_TTL_BUFFER_MS;
 
+const isApiLikeImageUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.pathname.startsWith("/api/");
+  } catch {
+    return false;
+  }
+};
+
 export const usePoseImageSrc = (
   directPath: string | null | undefined,
   poseId: number,
@@ -217,7 +227,9 @@ export const usePoseImageSrc = (
         setError(false);
       } catch (err) {
         logger.warn(`Failed to fetch signed image URL for pose ${poseId} (${imageType})`, err);
-        if (normalizedDirectUrl) {
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        const isAuthError = status === 401 || status === 403;
+        if (normalizedDirectUrl && !isAuthError && !isApiLikeImageUrl(normalizedDirectUrl)) {
           // If signed-url fetch fails, prefer showing the direct URL instead of an error state.
           // This keeps the UI resilient when the signed-url endpoint is temporarily unavailable.
           setSrc(normalizedDirectUrl);

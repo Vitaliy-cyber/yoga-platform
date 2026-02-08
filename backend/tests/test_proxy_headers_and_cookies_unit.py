@@ -1,4 +1,5 @@
 import urllib.parse
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -10,6 +11,7 @@ from starlette.responses import Response
 from api.routes.poses import get_pose_image_signed_url
 from api.routes.auth import login as login_route
 from api.routes.auth import refresh_tokens as refresh_route
+from api.routes.auth import get_me as get_me_route
 from config import AppMode
 from models.pose import Pose
 from models.user import User
@@ -57,6 +59,13 @@ def _get_set_cookie_headers(response: Response) -> list[str]:
         for (k, v) in response.raw_headers
         if k.lower() == b"set-cookie"
     ]
+
+
+def _extract_max_age(cookie_header: str) -> int | None:
+    match = re.search(r"Max-Age=(\d+)", cookie_header)
+    if not match:
+        return None
+    return int(match.group(1))
 
 
 @pytest.mark.asyncio
@@ -195,6 +204,13 @@ async def test_login_sets_refresh_cookie_on_root_path_and_clears_legacy_api_path
     # 3) Same-site defaults in same-origin context
     assert any(c.startswith("refresh_token=") and "SameSite=lax" in c for c in cookies)
     assert any(c.startswith("csrf_token=") and "SameSite=strict" in c for c in cookies)
+    refresh_cookie = next(
+        c
+        for c in cookies
+        if c.startswith("refresh_token=") and "Path=/" in c and "Max-Age=0" not in c
+    )
+    csrf_cookie = next(c for c in cookies if c.startswith("csrf_token="))
+    assert _extract_max_age(csrf_cookie) == _extract_max_age(refresh_cookie)
 
 
 @pytest.mark.asyncio
@@ -352,3 +368,33 @@ async def test_refresh_sets_refresh_cookie_on_root_path_and_clears_legacy_api_pa
     assert any(c.startswith("refresh_token=") and "Path=/" in c and "Max-Age=0" not in c for c in cookies)
     assert any(c.startswith("refresh_token=") and "SameSite=lax" in c for c in cookies)
     assert any(c.startswith("csrf_token=") and "SameSite=strict" in c for c in cookies)
+    refresh_cookie = next(
+        c
+        for c in cookies
+        if c.startswith("refresh_token=") and "Path=/" in c and "Max-Age=0" not in c
+    )
+    csrf_cookie = next(c for c in cookies if c.startswith("csrf_token="))
+    assert _extract_max_age(csrf_cookie) == _extract_max_age(refresh_cookie)
+
+
+@pytest.mark.asyncio
+async def test_get_me_reissues_csrf_cookie_when_missing():
+    request = _make_request(
+        scheme="https",
+        host="app.example.com:443",
+        path="/api/auth/me",
+    )
+    response = Response()
+
+    current_user = User.create_with_token("test-auth-token")
+    current_user.id = 42
+    current_user.created_at = datetime.now(timezone.utc)
+
+    payload = await get_me_route(request=request, response=response, current_user=current_user)
+    assert payload.id == current_user.id
+
+    cookies = _get_set_cookie_headers(response)
+    csrf_cookie = next(c for c in cookies if c.startswith("csrf_token="))
+    assert "Path=/" in csrf_cookie
+    assert "SameSite=strict" in csrf_cookie
+    assert (_extract_max_age(csrf_cookie) or 0) > 3600

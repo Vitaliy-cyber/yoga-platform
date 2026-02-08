@@ -362,9 +362,28 @@ const refreshAccessToken = async (): Promise<string | null> => {
   // Create a new refresh promise
   refreshPromise = (async () => {
     try {
-      const csrfToken = getCsrfToken();
       const existingAccessToken = getAuthToken();
       const inMemoryRefreshToken = useAuthStore.getState().refreshToken;
+      let csrfToken = getCsrfToken();
+
+      // Self-heal CSRF cookie when access token is still valid but csrf_token expired/missing.
+      // Use raw axios (not `api`) to avoid interceptor recursion during refresh flow.
+      if (!csrfToken && existingAccessToken) {
+        try {
+          await axios.get<User>(
+            `${API_BASE_URL}${API_V1_PREFIX}/auth/me`,
+            {
+              withCredentials: true,
+              headers: {
+                Authorization: `Bearer ${existingAccessToken}`,
+              },
+            }
+          );
+          csrfToken = getCsrfToken();
+        } catch {
+          // Best-effort bootstrap only; refresh request will continue.
+        }
+      }
       const refreshHeaders: Record<string, string> = {};
       if (csrfToken) {
         refreshHeaders["X-CSRF-Token"] = csrfToken;

@@ -223,4 +223,21 @@ describe("usePoseImageSrc", () => {
     expect(result.current.src).toBe("");
     expect(getSignedImageUrlMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not fall back to direct URL on auth errors from signed-url endpoint", async () => {
+    getSignedImageUrlMock.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 403 },
+      message: "Forbidden",
+    });
+
+    const { result } = renderHook(() =>
+      usePoseImageSrc("https://cdn.example.com/generated/protected.png", 10, "photo")
+    );
+
+    await waitFor(() => {
+      expect(result.current.error).toBe(true);
+    });
+    expect(result.current.src).toBe("");
+  });
 });

@@ -36,6 +36,7 @@ from services.auth import (
 settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+AUTH_COOKIE_MAX_AGE = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
 
 
 # Background task for periodic token cleanup
@@ -429,7 +430,7 @@ async def login(
                 httponly=False,  # JavaScript needs to read this
                 secure=secure_cookie,
                 samesite=csrf_samesite,
-                max_age=3600,  # 1 hour
+                max_age=AUTH_COOKIE_MAX_AGE,
                 path="/",
             )
 
@@ -661,7 +662,7 @@ async def refresh_tokens(
             httponly=False,
             secure=secure_cookie,
             samesite=csrf_samesite,
-            max_age=3600,
+            max_age=AUTH_COOKIE_MAX_AGE,
             path="/",
         )
 
@@ -1200,8 +1201,26 @@ async def revoke_session(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
+async def get_me(
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+):
     """Get current authenticated user info."""
+    csrf_cookie = request.cookies.get("csrf_token")
+    csrf_valid = bool(csrf_cookie and verify_csrf_token(csrf_cookie, current_user.id))
+    if not csrf_valid:
+        secure_cookie, _, csrf_samesite = _cookie_security_params(request)
+        csrf_token = generate_csrf_token(current_user.id)
+        response.set_cookie(
+            key="csrf_token",
+            value=csrf_token,
+            httponly=False,
+            secure=secure_cookie,
+            samesite=csrf_samesite,
+            max_age=AUTH_COOKIE_MAX_AGE,
+            path="/",
+        )
     return UserResponse.model_validate(current_user)
 
 
