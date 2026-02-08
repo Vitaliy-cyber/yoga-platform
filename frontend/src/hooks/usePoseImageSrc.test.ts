@@ -167,4 +167,30 @@ describe("usePoseImageSrc", () => {
     });
     expect(result.current.error).toBe(false);
   });
+
+  it("normalizes host-style direct paths missing scheme", async () => {
+    getSignedImageUrlMock.mockRejectedValueOnce(new Error("fail"));
+
+    const { result } = renderHook(() =>
+      usePoseImageSrc("bucket.example.com/generated/image.png", 6, "photo")
+    );
+
+    await waitFor(() => {
+      expect(result.current.src).toBe("https://bucket.example.com/generated/image.png");
+    });
+    expect(result.current.error).toBe(false);
+  });
+
+  it("normalizes protocol-relative paths", async () => {
+    getSignedImageUrlMock.mockRejectedValueOnce(new Error("fail"));
+
+    const { result } = renderHook(() =>
+      usePoseImageSrc("//cdn.example.com/generated/image.png", 7, "photo")
+    );
+
+    await waitFor(() => {
+      expect(result.current.src).toMatch(/^https?:\/\/cdn\.example\.com\/generated\/image\.png$/);
+    });
+    expect(result.current.error).toBe(false);
+  });
 });

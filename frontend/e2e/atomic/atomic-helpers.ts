@@ -30,7 +30,9 @@ export async function gotoWithRetry(
         msg.includes("ERR_CONNECTION_REFUSED") ||
         msg.includes("NS_ERROR_CONNECTION_REFUSED") ||
         msg.toLowerCase().includes("connection refused");
-      if (!isConnRefused) throw err;
+      const isNavigationTimeout =
+        msg.includes("Timeout") && msg.toLowerCase().includes("page.goto");
+      if (!isConnRefused && !isNavigationTimeout) throw err;
       // eslint-disable-next-line no-await-in-loop
       await page.waitForTimeout(250);
     }

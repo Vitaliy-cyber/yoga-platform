@@ -309,6 +309,8 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
   const { t } = useI18n();
   const colors = POSE_COLORS[colorIndex % POSE_COLORS.length];
   const [showMuscleLayer, setShowMuscleLayer] = useState(false);
+  const photoRetryKeyRef = useRef<string | null>(null);
+  const muscleRetryKeyRef = useRef<string | null>(null);
 
   const hasPhoto = Boolean(pose.photo_path);
   const hasMuscleLayer = Boolean(pose.muscle_layer_path);
@@ -344,7 +346,19 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
               className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ease-out will-change-[opacity] ${
                 showMuscleImage ? "opacity-0" : "opacity-100"
               }`}
-              onError={() => void refreshPhoto(true)}
+              onLoad={() => {
+                photoRetryKeyRef.current = null;
+              }}
+              onError={() =>
+                void (() => {
+                  const retryKey = `${photoSrc || ""}:${pose.version || 0}`;
+                  if (photoRetryKeyRef.current === retryKey) {
+                    return;
+                  }
+                  photoRetryKeyRef.current = retryKey;
+                  return refreshPhoto(true);
+                })()
+              }
             />
             {hasMuscleLayer && (
               <img
@@ -353,7 +367,19 @@ const PoseComparisonCard: React.FC<PoseComparisonCardProps> = ({
                 className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ease-out will-change-[opacity] ${
                   showMuscleImage ? "opacity-100" : "opacity-0"
                 }`}
-                onError={() => void refreshMuscle(true)}
+                onLoad={() => {
+                  muscleRetryKeyRef.current = null;
+                }}
+                onError={() =>
+                  void (() => {
+                    const retryKey = `${muscleSrc || ""}:${pose.version || 0}`;
+                    if (muscleRetryKeyRef.current === retryKey) {
+                      return;
+                    }
+                    muscleRetryKeyRef.current = retryKey;
+                    return refreshMuscle(true);
+                  })()
+                }
               />
             )}
             {showMuscleLoading && (

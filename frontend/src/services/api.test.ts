@@ -249,6 +249,60 @@ describe("API Services", () => {
   });
 
   describe("generateApi", () => {
+    it("generateFromPose forwards generate_muscles=false", async () => {
+      const payload = {
+        task_id: "task-no-muscles",
+        status: "pending",
+        progress: 0,
+        status_message: "In queue...",
+        error_message: null,
+        photo_url: null,
+        muscles_url: null,
+        quota_warning: false,
+        analyzed_muscles: null,
+      };
+      axiosMock.post.mockResolvedValueOnce({ data: payload });
+
+      const response = await generateApi.generateFromPose(42, "keep shoulders down", false);
+
+      expect(response).toEqual(payload);
+      expect(axiosMock.post).toHaveBeenCalledWith(
+        "/api/v1/generate/from-pose/42",
+        {
+          additional_notes: "keep shoulders down",
+          generate_muscles: false,
+        }
+      );
+    });
+
+    it("generate sends generate_muscles flag via FormData", async () => {
+      const payload = {
+        task_id: "task-formdata",
+        status: "pending",
+        progress: 0,
+        status_message: "In queue...",
+        error_message: null,
+        photo_url: null,
+        muscles_url: null,
+        quota_warning: false,
+        analyzed_muscles: null,
+      };
+      axiosMock.post.mockResolvedValueOnce({ data: payload });
+
+      const file = new File(["fake-png"], "schema.png", { type: "image/png" });
+      const response = await generateApi.generate(file, "minimal prompt", false);
+
+      expect(response).toEqual(payload);
+      expect(axiosMock.post).toHaveBeenCalledTimes(1);
+      const [url, body] = axiosMock.post.mock.calls[0];
+      expect(url).toBe("/api/v1/generate");
+      expect(body).toBeInstanceOf(FormData);
+      const formData = body as FormData;
+      expect(formData.get("generate_muscles")).toBe("false");
+      expect(formData.get("additional_notes")).toBe("minimal prompt");
+      expect(formData.get("schema_file")).toBe(file);
+    });
+
     it("getStatus returns generation status", async () => {
       const payload = {
         task_id: "test-task-123",

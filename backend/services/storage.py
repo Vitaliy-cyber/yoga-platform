@@ -4,6 +4,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional, Protocol
+from urllib.parse import urlparse
 
 from config import get_settings
 logger = logging.getLogger(__name__)
@@ -175,10 +176,21 @@ class S3Storage:
 
         # Get endpoint URL (for Railway, R2, MinIO etc.)
         endpoint_url = _string_setting("S3_ENDPOINT_URL") or _string_setting("BUCKET_ENDPOINT")
-        self.endpoint_url = endpoint_url or None
+        self.endpoint_url = self._normalize_optional_url(endpoint_url)
         # Public URL for presigned URLs (MinIO in Docker: internal URL != public URL)
         public_url = _string_setting("S3_PUBLIC_URL")
-        self.public_url = public_url or None
+        self.public_url = self._normalize_optional_url(public_url)
+
+        if endpoint_url and self.endpoint_url and endpoint_url != self.endpoint_url:
+            logger.warning(
+                "S3 endpoint URL is missing scheme; normalizing to %s",
+                self.endpoint_url,
+            )
+        if public_url and self.public_url and public_url != self.public_url:
+            logger.warning(
+                "S3 public URL is missing scheme; normalizing to %s",
+                self.public_url,
+            )
 
         if self.public_url:
             self.public_base_url = self.public_url.rstrip("/")
@@ -216,6 +228,34 @@ class S3Storage:
         if self.prefix:
             return f"{self.prefix}/{key}"
         return key
+
+    @staticmethod
+    def _normalize_optional_url(raw: str) -> Optional[str]:
+        value = (raw or "").strip()
+        if not value:
+            return None
+        if value.startswith(("http://", "https://")):
+            return value.rstrip("/")
+        if value.startswith("//"):
+            return f"https:{value}".rstrip("/")
+        return f"https://{value}".rstrip("/")
+
+    @staticmethod
+    def _normalize_url_candidate(url_or_path: str) -> str:
+        value = (url_or_path or "").strip()
+        if not value:
+            return value
+        if value.startswith(("http://", "https://")):
+            return value
+        if value.startswith("//"):
+            return f"https:{value}"
+
+        # Legacy production rows may contain host/path without a scheme.
+        # Example: "bucket.example.com/generated/file.png"
+        first_segment = value.split("/", 1)[0]
+        if "." in first_segment and " " not in first_segment and not value.startswith("/"):
+            return f"https://{value}"
+        return value
 
     def _build_public_url(self, key: str) -> str:
         s3_key = key.lstrip("/")
@@ -289,11 +329,11 @@ class S3Storage:
 
     async def download_bytes(self, url_or_path: str) -> bytes:
         """Download file from S3."""
-        import urllib.parse
+        normalized_source = self._normalize_url_candidate(url_or_path)
 
-        # If it's a presigned URL, extract the key
-        if url_or_path.startswith("http"):
-            parsed = urllib.parse.urlparse(url_or_path)
+        # If it's a URL, extract the key from URL path.
+        if normalized_source.startswith("http"):
+            parsed = urlparse(normalized_source)
             # Extract key from path, removing bucket name if present
             path = parsed.path.lstrip("/")
             if path.startswith(self.bucket + "/"):
@@ -301,7 +341,10 @@ class S3Storage:
             s3_key = path
         else:
             # It's a path/key
-            s3_key = self._build_key(url_or_path)
+            s3_key = self._build_key(normalized_source)
+
+        if not s3_key:
+            raise ValueError("Invalid S3 key/path")
 
         try:
             logger.info("Downloading from S3: bucket=%s, key=%s", self.bucket, s3_key)

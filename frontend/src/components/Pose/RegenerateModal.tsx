@@ -36,6 +36,7 @@ export const RegenerateModal: React.FC<RegenerateModalProps> = ({
   const [localError, setLocalError] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const handledAppliedAtRef = useRef<number | null>(null);
+  const currentImageRetryKeyRef = useRef<string | null>(null);
   const { t } = useI18n();
 
   const startFromPose = useGenerationStore((state) => state.startFromPose);
@@ -318,7 +319,19 @@ export const RegenerateModal: React.FC<RegenerateModalProps> = ({
                       src={currentImageSrc}
                       alt={isShowingMuscles ? t("regenerate.alt_muscle_image") : t("regenerate.alt_photo_image")}
                       className="w-full h-full object-contain rounded-lg"
-                      onError={() => void refreshCurrentImage(true)}
+                      onLoad={() => {
+                        currentImageRetryKeyRef.current = null;
+                      }}
+                      onError={() =>
+                        void (() => {
+                          const retryKey = `${currentImageSrc || ""}:${pose.version || 0}:${currentImageType}`;
+                          if (currentImageRetryKeyRef.current === retryKey) {
+                            return;
+                          }
+                          currentImageRetryKeyRef.current = retryKey;
+                          return refreshCurrentImage(true);
+                        })()
+                      }
                     />
                   </div>
                 </div>

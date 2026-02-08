@@ -1177,9 +1177,8 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 e,
             )
 
-        # Step 2: Single-shot deterministic setup (10%)
-        await update_progress(10, "Preparing deterministic single-shot generation...")
-        await update_progress(15, "Applying fixed studio prompt...")
+        # Keep progress messaging simple and user-focused to avoid confusing
+        # "analysis/preparation" wording in the UI.
         photo_prompt = self.STUDIO_PHOTO_PROMPT
         logger.debug("Pose prompt source: fixed studio template")
 

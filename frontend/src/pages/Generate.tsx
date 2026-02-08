@@ -323,7 +323,7 @@ ${t("generate.describe_example")}`}
                   </div>
                 </div>
 
-                <label className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl cursor-pointer hover:bg-stone-100 transition-colors">
+                <div className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl">
                   <Activity className="w-5 h-5 text-stone-600" />
                   <div className="flex-1">
                     <p className="font-medium text-stone-800">
@@ -336,10 +336,11 @@ ${t("generate.describe_example")}`}
                   <Checkbox
                     checked={generateMuscles}
                     onCheckedChange={(checked) =>
-                      setGenerateMuscles(checked as boolean)
+                      setGenerateMuscles(checked === true)
                     }
+                    data-testid="generate-muscles-toggle"
                   />
-                </label>
+                </div>
               </div>
             </div>
 

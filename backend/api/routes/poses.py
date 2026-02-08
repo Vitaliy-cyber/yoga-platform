@@ -1207,6 +1207,9 @@ async def apply_generation_to_pose(
     task_muscles_url = task.muscles_url
     task_additional_notes = task.additional_notes or ""
     task_analyzed_muscles_json = task.analyzed_muscles_json
+    muscles_generation_disabled = (
+        task_muscles_url is None and task_analyzed_muscles_json is None
+    )
 
     muscles_data_for_apply = parse_analyzed_muscles_json(task_analyzed_muscles_json)
     if muscles_data_for_apply:
@@ -1239,13 +1242,22 @@ async def apply_generation_to_pose(
         will_change_photo = bool(
             task_photo_url and task_photo_url != pose_to_update.photo_path
         )
-        will_change_muscle_layer = bool(
-            task_muscles_url and task_muscles_url != pose_to_update.muscle_layer_path
+        will_change_muscle_layer = (
+            bool(pose_to_update.muscle_layer_path)
+            if muscles_generation_disabled
+            else bool(
+                task_muscles_url and task_muscles_url != pose_to_update.muscle_layer_path
+            )
         )
 
         planned_pose_muscles: list[PoseMuscle] | None = None
         will_change_muscles = False
-        if muscles_data_for_apply is not None:
+        if muscles_generation_disabled:
+            # Respect explicit "generate_muscles=false": clear old muscle layer + analysis
+            # so stale outputs are never shown as if they were newly generated.
+            planned_pose_muscles = []
+            will_change_muscles = bool(pose_to_update.pose_muscles)
+        elif muscles_data_for_apply is not None:
             try:
                 muscle_names = [
                     str(m.get("name", "")).lower()
@@ -1342,12 +1354,18 @@ async def apply_generation_to_pose(
                 logger.info(
                     f"Applied muscle layer to pose {pose_id}: {task_muscles_url[:50]}..."
                 )
+            elif muscles_generation_disabled and pose_to_update.muscle_layer_path:
+                pose_to_update.muscle_layer_path = None
+                logger.info(
+                    f"Cleared muscle layer for pose {pose_id} (muscles generation disabled)"
+                )
 
             # Update muscle associations (only if we found at least one known muscle and the set changes).
             if will_change_muscles and planned_pose_muscles is not None:
                 logger.info(f"Applying analyzed muscles to pose {pose_id}")
                 pose_to_update.pose_muscles.clear()
-                db.add_all(planned_pose_muscles)
+                if planned_pose_muscles:
+                    db.add_all(planned_pose_muscles)
                 pose_to_update.pose_muscles = planned_pose_muscles
                 logger.info(
                     f"Creating {len(planned_pose_muscles)} PoseMuscle associations for pose {pose_id}"

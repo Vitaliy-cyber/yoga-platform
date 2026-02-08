@@ -28,8 +28,39 @@ const parseExpiresAt = (url: string): number | null => {
 const isLocalStoragePath = (directPath?: string | null): boolean =>
   Boolean(directPath && directPath.startsWith("/storage/"));
 
-const isHttpUrl = (directPath?: string | null): boolean =>
-  Boolean(directPath && (directPath.startsWith("http://") || directPath.startsWith("https://")));
+const upgradeToHttpsIfNeeded = (url: string): string => {
+  if (typeof window !== "undefined" && window.location.protocol === "https:" && url.startsWith("http://")) {
+    return url.replace(/^http:\/\//, "https://");
+  }
+  return url;
+};
+
+const normalizeExternalImageUrl = (
+  directPath?: string | null
+): string | null => {
+  if (!directPath) return null;
+  const trimmed = directPath.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return upgradeToHttpsIfNeeded(trimmed);
+  }
+  if (trimmed.startsWith("//")) {
+    const protocol =
+      typeof window !== "undefined" ? window.location.protocol : "https:";
+    return upgradeToHttpsIfNeeded(`${protocol}${trimmed}`);
+  }
+  if (trimmed.startsWith("/")) return null;
+
+  // Handle legacy host/path values missing scheme, e.g.
+  // "bucket.example.com/generated/pose.png"
+  const firstSegment = trimmed.split("/", 1)[0];
+  const looksLikeHost = firstSegment.includes(".") && !firstSegment.includes(" ");
+  if (looksLikeHost) {
+    return upgradeToHttpsIfNeeded(`https://${trimmed}`);
+  }
+
+  return null;
+};
 
 const buildCacheKey = (
   poseId: number,
@@ -54,16 +85,20 @@ export const usePoseImageSrc = (
   options: { enabled?: boolean; version?: number } = {}
 ) => {
   const enabled = options.enabled ?? true;
+  const normalizedDirectUrl = useMemo(
+    () => normalizeExternalImageUrl(directPath),
+    [directPath]
+  );
   const cacheKey = useMemo(
-    () => buildCacheKey(poseId, imageType, directPath, options.version),
-    [directPath, imageType, options.version, poseId]
+    () => buildCacheKey(poseId, imageType, normalizedDirectUrl ?? directPath, options.version),
+    [directPath, imageType, normalizedDirectUrl, options.version, poseId]
   );
   const [src, setSrc] = useState<string>(() => {
     if (!enabled) return "";
     if (isLocalStoragePath(directPath)) return directPath || "";
     const cached = getCacheEntry(cacheKey);
     if (cached?.url) return cached.url;
-    if (isHttpUrl(directPath)) return directPath || "";
+    if (normalizedDirectUrl) return normalizedDirectUrl;
     return "";
   });
   const [loading, setLoading] = useState(false);
@@ -97,8 +132,8 @@ export const usePoseImageSrc = (
       if (!force) {
         if (cached?.url) {
           setSrc((prev) => prev || cached.url);
-        } else if (isHttpUrl(directPath)) {
-          setSrc((prev) => prev || directPath || "");
+        } else if (normalizedDirectUrl) {
+          setSrc((prev) => prev || normalizedDirectUrl);
         }
       }
 
@@ -113,10 +148,10 @@ export const usePoseImageSrc = (
         setError(false);
       } catch (err) {
         logger.warn(`Failed to fetch signed image URL for pose ${poseId} (${imageType})`, err);
-        if (isHttpUrl(directPath)) {
+        if (normalizedDirectUrl) {
           // If signed-url fetch fails, prefer showing the direct URL instead of an error state.
           // This keeps the UI resilient when the signed-url endpoint is temporarily unavailable.
-          setSrc(directPath || "");
+          setSrc(normalizedDirectUrl);
           setError(false);
           return;
         }
@@ -125,7 +160,7 @@ export const usePoseImageSrc = (
         setLoading(false);
       }
     },
-    [cacheKey, directPath, enabled, imageType, poseId]
+    [cacheKey, directPath, enabled, imageType, normalizedDirectUrl, poseId]
   );
 
   useEffect(() => {
@@ -139,12 +174,12 @@ export const usePoseImageSrc = (
       setError(false);
       return;
     }
-    if (isHttpUrl(directPath)) {
-      setSrc((prev) => prev || directPath || "");
+    if (normalizedDirectUrl) {
+      setSrc((prev) => prev || normalizedDirectUrl);
       return;
     }
     setSrc("");
-  }, [cacheKey, directPath, enabled]);
+  }, [cacheKey, directPath, enabled, normalizedDirectUrl]);
 
   useEffect(() => {
     if (!enabled) {

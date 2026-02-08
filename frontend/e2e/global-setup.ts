@@ -338,8 +338,9 @@ async function globalSetup(): Promise<void> {
 
     // 3. Create deterministic core E2E data (category + 2 poses + sequence)
     console.log("\nStep 3: Creating core E2E seed data...");
+    // Keep schema seed image at 64x64 to satisfy backend minimum upload constraints.
     const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAJ0lEQVR42u3BAQ0AAADCoPdPbQ43oAAAAAAAAAAAAAAAAAAAAIB3A0BAAAGveg7oAAAAAElFTkSuQmCC";
     const pngBytes = Buffer.from(pngBase64, "base64");
     console.log(
       "\nStep 3b: Ensuring cached images exist (generate only if missing; never delete)...",

@@ -68,6 +68,26 @@ const ensureHttpsIfNeeded = (url: string, pageProtocol: string = getPageProtocol
   return url;
 };
 
+const normalizeDirectImageUrl = (directPath: string | null | undefined): string | null => {
+  if (!directPath) return null;
+  const trimmed = directPath.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return ensureHttpsIfNeeded(trimmed);
+  }
+  if (trimmed.startsWith('//')) {
+    const protocol = getPageProtocol();
+    return ensureHttpsIfNeeded(`${protocol}${trimmed}`);
+  }
+  if (trimmed.startsWith('/')) return null;
+  // Legacy rows may contain host/path without scheme.
+  const firstSegment = trimmed.split('/', 1)[0];
+  if (firstSegment.includes('.') && !firstSegment.includes(' ')) {
+    return ensureHttpsIfNeeded(`https://${trimmed}`);
+  }
+  return null;
+};
+
 const normalizeApiBaseUrl = (
   raw: string,
   opts: { pageOrigin?: string; pageProtocol?: string } = {}
@@ -156,9 +176,9 @@ export const getImageUrl = (
   if (directPath && directPath.startsWith('/storage/')) {
     return directPath;
   }
-  // If we have a direct URL (e.g., S3 presigned URL), use it
-  if (directPath && (directPath.startsWith('http://') || directPath.startsWith('https://'))) {
-    return ensureHttpsIfNeeded(directPath);
+  const normalizedDirect = normalizeDirectImageUrl(directPath);
+  if (normalizedDirect) {
+    return normalizedDirect;
   }
   // Fallback to proxy endpoint (requires auth - may not work for <img> tags)
   return getImageProxyUrl(poseId, imageType);
@@ -247,6 +267,7 @@ export const getSignedImageUrl = async (
 // Test-only exports (kept under a stable name to avoid accidental production usage)
 export const __test__ = {
   ensureHttpsIfNeeded,
+  normalizeDirectImageUrl,
   normalizeApiBaseUrl,
 };
 
@@ -325,6 +346,7 @@ const refreshAccessToken = async (): Promise<string | null> => {
     try {
       const csrfToken = getCsrfToken();
       const existingAccessToken = getAuthToken();
+      const inMemoryRefreshToken = useAuthStore.getState().refreshToken;
       const refreshHeaders: Record<string, string> = {};
       if (csrfToken) {
         refreshHeaders["X-CSRF-Token"] = csrfToken;
@@ -334,22 +356,26 @@ const refreshAccessToken = async (): Promise<string | null> => {
         refreshHeaders.Authorization = `Bearer ${existingAccessToken}`;
       }
 
-      // SECURITY: Don't send refresh_token in body - it's in httpOnly cookie
-      // The server will read it from the cookie
+      // Prefer httpOnly cookie refresh in browser flows.
+      // Fallback to in-memory refresh token when cookie context is blocked/misconfigured
+      // (e.g. SameSite issues across origins). Token is never persisted to localStorage.
+      const refreshBody = inMemoryRefreshToken
+        ? { refresh_token: inMemoryRefreshToken }
+        : {};
       const response = await axios.post<TokenPairResponse>(
         `${API_BASE_URL}${API_V1_PREFIX}/auth/refresh`,
-        {}, // Empty body - token comes from cookie
+        refreshBody,
         {
           withCredentials: true,
           headers: refreshHeaders,
         }
       );
 
-      const { access_token, expires_in, user } = response.data;
+      const { access_token, refresh_token, expires_in, user } = response.data;
 
-      // Update store with new tokens
-      // Note: refresh_token is NOT stored in the store (XSS protection)
-      useAuthStore.getState().setAuth(user, access_token, undefined, expires_in);
+      // Update store with rotated tokens.
+      // refresh_token is held in-memory only (not persisted) as a resilience fallback.
+      useAuthStore.getState().setAuth(user, access_token, refresh_token, expires_in);
 
       return access_token;
     } catch (error) {

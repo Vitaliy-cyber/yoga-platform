@@ -30,6 +30,8 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
   const [activeOverlay, setActiveOverlay] = useState<"photo" | "muscles">("photo");
   const [overlayOpacity, setOverlayOpacity] = useState(DEFAULT_OVERLAY_OPACITY);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [photoRetryKey, setPhotoRetryKey] = useState<string | null>(null);
+  const [muscleRetryKey, setMuscleRetryKey] = useState<string | null>(null);
   const { t } = useI18n();
   const addToast = useAppStore((state) => state.addToast);
   const overlayLabel = activeOverlay === "photo" ? t("pose.viewer.photo") : t("pose.viewer.muscles");
@@ -163,7 +165,17 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                     animate="animate"
                     exit="exit"
                     transition={smoothTransition}
-                    onError={() => void refreshPhoto(true)}
+                    onLoad={() => setPhotoRetryKey(null)}
+                    onError={() =>
+                      void (() => {
+                        const retryKey = `${photoSrc || ""}:${pose.version || 0}`;
+                        if (photoRetryKey === retryKey) {
+                          return;
+                        }
+                        setPhotoRetryKey(retryKey);
+                        return refreshPhoto(true);
+                      })()
+                    }
                   />
                 </AnimatePresence>
 
@@ -175,7 +187,17 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
                       alt={`${pose.name} - ${overlayLabel}`}
                       className="absolute inset-0 m-auto max-w-full max-h-full object-contain pointer-events-none transition-opacity duration-200 ease-out will-change-[opacity]"
                       style={{ opacity: overlayOpacity, transform: "translateZ(0)" }}
-                      onError={() => void refreshMuscle(true)}
+                      onLoad={() => setMuscleRetryKey(null)}
+                      onError={() =>
+                        void (() => {
+                          const retryKey = `${muscleSrc || ""}:${pose.version || 0}`;
+                          if (muscleRetryKey === retryKey) {
+                            return;
+                          }
+                          setMuscleRetryKey(retryKey);
+                          return refreshMuscle(true);
+                        })()
+                      }
                     />
                   )}
                 </AnimatePresence>

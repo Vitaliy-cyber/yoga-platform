@@ -56,5 +56,15 @@ describe('api URL normalization regressions', () => {
       'http://cdn.example.com/img.png'
     );
   });
-});
 
+  it('normalizes host-only image URL values', () => {
+    expect(__test__.normalizeDirectImageUrl('cdn.example.com/generated/photo.png')).toBe(
+      'https://cdn.example.com/generated/photo.png'
+    );
+  });
+
+  it('normalizes protocol-relative image URL values', () => {
+    const normalized = __test__.normalizeDirectImageUrl('//cdn.example.com/generated/photo.png');
+    expect(normalized).toMatch(/^https?:\/\/cdn\.example\.com\/generated\/photo\.png$/);
+  });
+});

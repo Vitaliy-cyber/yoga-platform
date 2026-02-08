@@ -279,6 +279,8 @@ const PoseDetailContent: React.FC = () => {
   const muscleWidgetProgressTimerRef = useRef<number | null>(null);
   const muscleWidgetAutoDismissTimerRef = useRef<number | null>(null);
   const muscleWidgetExitTimerRef = useRef<number | null>(null);
+  const activeImageRetryKeyRef = useRef<string | null>(null);
+  const schemaImageRetryKeyRef = useRef<string | null>(null);
 
   const appCategories = useAppStore((state) => state.categories);
   const setAppCategories = useAppStore((state) => state.setCategories);
@@ -1345,11 +1347,21 @@ const PoseDetailContent: React.FC = () => {
                       alt={pose.name}
                       className="w-full h-full object-contain"
                       data-testid="pose-active-image"
+                      onLoad={() => {
+                        activeImageRetryKeyRef.current = null;
+                      }}
                       onError={() =>
                         void (
-                          activeTab === "muscles"
-                            ? refreshMuscleLayerImage(true)
-                            : refreshStudioImage(true)
+                          (() => {
+                            const retryKey = `${activeTab}:${activeImageSrc || ""}:${pose.version || 0}`;
+                            if (activeImageRetryKeyRef.current === retryKey) {
+                              return;
+                            }
+                            activeImageRetryKeyRef.current = retryKey;
+                            return activeTab === "muscles"
+                              ? refreshMuscleLayerImage(true)
+                              : refreshStudioImage(true);
+                          })()
                         )
                       }
                     />
@@ -1387,7 +1399,19 @@ const PoseDetailContent: React.FC = () => {
                     alt={t("pose.file_alt")}
                     className="w-full h-full object-contain"
                     data-testid="pose-schema-image"
-                    onError={() => void refreshSchemaImage(true)}
+                    onLoad={() => {
+                      schemaImageRetryKeyRef.current = null;
+                    }}
+                    onError={() =>
+                      void (() => {
+                        const retryKey = `${schemaImageSrc || ""}:${pose.version || 0}`;
+                        if (schemaImageRetryKeyRef.current === retryKey) {
+                          return;
+                        }
+                        schemaImageRetryKeyRef.current = retryKey;
+                        return refreshSchemaImage(true);
+                      })()
+                    }
                   />
                 </div>
               </div>

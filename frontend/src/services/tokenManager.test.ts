@@ -14,6 +14,7 @@ const setAuthState = (overrides: Partial<ReturnType<typeof useAuthStore.getState
   useAuthStore.setState({
     user: { id: 1, name: "Test", created_at: "", last_login: "" },
     accessToken: "token",
+    refreshToken: null,
     tokenExpiresAt: Date.now() + 3_600_000,
     isAuthenticated: true,
     isLoading: false,
@@ -107,6 +108,34 @@ describe("TokenManager", () => {
 
     expect(result).toBe(true);
     expect(useAuthStore.getState().accessToken).toBe("new-token");
+  });
+
+  it("sends in-memory refresh token in refresh body and stores rotated token", async () => {
+    let observedBody: unknown = null;
+
+    server.use(
+      http.post("http://localhost:3000/api/v1/auth/refresh", async ({ request }) => {
+        observedBody = await request.json();
+        return HttpResponse.json({
+          access_token: "new-token",
+          refresh_token: "rotated-refresh-token",
+          expires_in: 300,
+          user: { id: 1, name: "Test" },
+        });
+      })
+    );
+
+    setAuthState({
+      tokenExpiresAt: Date.now() - 1_000,
+      refreshToken: "in-memory-refresh-token",
+    });
+
+    const manager = TokenManager.getInstance();
+    const result = await manager.silentRefresh();
+
+    expect(result).toBe(true);
+    expect(observedBody).toEqual({ refresh_token: "in-memory-refresh-token" });
+    expect(useAuthStore.getState().refreshToken).toBe("rotated-refresh-token");
   });
 
   it("returns false on refresh 400 without throwing", async () => {

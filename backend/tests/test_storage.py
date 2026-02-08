@@ -346,3 +346,71 @@ class TestS3StorageEdgeCases:
                 assert key == "uploads/a1b2c3d4-e5f6-7890-abcd-ef1234567890.png"
 
                 S3Storage._instance = None
+
+    def test_public_url_without_scheme_is_normalized(self):
+        """Public URL host-only values must be upgraded to https://."""
+        with patch("services.storage.get_settings") as mock_settings:
+            with patch("services.storage.boto3") as mock_boto3:
+                settings = MagicMock()
+                settings.STORAGE_BACKEND = "s3"
+                settings.S3_BUCKET = "test-bucket"
+                settings.S3_REGION = "us-east-1"
+                settings.S3_PREFIX = ""
+                settings.S3_ACCESS_KEY_ID = "key"
+                settings.S3_SECRET_ACCESS_KEY = "secret"
+                settings.S3_PUBLIC_URL = "cdn.example.com"
+                settings.S3_ENDPOINT_URL = "objects.example.com"
+                settings.BUCKET_ENDPOINT = ""
+                mock_settings.return_value = settings
+
+                mock_client = MagicMock()
+                mock_boto3.client.return_value = mock_client
+
+                from services.storage import S3Storage
+
+                S3Storage._instance = None
+
+                storage = S3Storage()
+
+                assert storage.public_url == "https://cdn.example.com"
+                assert storage.public_base_url == "https://cdn.example.com"
+                assert storage.endpoint_url == "https://objects.example.com"
+                assert mock_boto3.client.call_args.kwargs["endpoint_url"] == "https://objects.example.com"
+
+                S3Storage._instance = None
+
+    @pytest.mark.asyncio
+    async def test_download_bytes_supports_host_only_legacy_urls(self):
+        """Legacy host/path values without scheme should still resolve object key."""
+        with patch("services.storage.get_settings") as mock_settings:
+            with patch("services.storage.boto3") as mock_boto3:
+                settings = MagicMock()
+                settings.STORAGE_BACKEND = "s3"
+                settings.S3_BUCKET = "test-bucket"
+                settings.S3_REGION = "us-east-1"
+                settings.S3_PREFIX = ""
+                settings.S3_ACCESS_KEY_ID = "key"
+                settings.S3_SECRET_ACCESS_KEY = "secret"
+                settings.S3_PUBLIC_URL = ""
+                settings.S3_ENDPOINT_URL = ""
+                settings.BUCKET_ENDPOINT = ""
+                mock_settings.return_value = settings
+
+                mock_client = MagicMock()
+                mock_client.get_object.return_value = {"Body": BytesIO(b"png-bytes")}
+                mock_boto3.client.return_value = mock_client
+
+                from services.storage import S3Storage
+
+                S3Storage._instance = None
+
+                storage = S3Storage()
+                payload = await storage.download_bytes("cdn.example.com/generated/file.png")
+
+                assert payload == b"png-bytes"
+                mock_client.get_object.assert_called_once_with(
+                    Bucket="test-bucket",
+                    Key="generated/file.png",
+                )
+
+                S3Storage._instance = None

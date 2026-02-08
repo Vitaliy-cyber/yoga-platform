@@ -903,10 +903,6 @@ const translations = {
     ua: "Червоний: основні м'язи (70%+) • Оранжевий: допоміжні (40-69%) • Сірий: стабілізуючі (<40%)",
   },
   // Generation steps
-  "generate.step_analyzing": {
-    en: "Preparing pose",
-    ua: "Підготовка пози",
-  },
   "generate.step_photo": {
     en: "Generating photo",
     ua: "Генерація фото",
