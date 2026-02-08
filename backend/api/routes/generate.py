@@ -127,6 +127,33 @@ def _ensure_ai_generation_configured() -> None:
         )
 
 
+def _generation_context_fingerprint(
+    *,
+    task_id: str,
+    mime_type: str,
+    image_bytes_len: int,
+    generate_muscles: bool,
+    additional_notes: Optional[str],
+    pose_description: Optional[str],
+) -> str:
+    settings = config.get_settings()
+    db_scheme = (settings.DATABASE_URL or "").split(":", 1)[0] or "unknown"
+    notes_len = len((additional_notes or "").strip())
+    pose_desc_len = len((pose_description or "").strip())
+    return (
+        f"task_id={task_id} "
+        f"mode={settings.APP_MODE.value} "
+        f"storage={settings.STORAGE_BACKEND} "
+        f"db={db_scheme} "
+        f"mime={mime_type} "
+        f"image_bytes={image_bytes_len} "
+        f"generate_muscles={int(generate_muscles)} "
+        f"notes_len={notes_len} "
+        f"pose_description_len={pose_desc_len} "
+        f"e2e_fast_ai={int(os.getenv('E2E_FAST_AI') == '1')}"
+    )
+
+
 async def _create_pending_generation_task(
     db: AsyncSession,
     *,
@@ -328,6 +355,18 @@ async def run_generation(
     1. Studio photo (realistic render from schema)
     2. Body paint muscles visualization
     """
+    logger.info(
+        "Generation context: %s",
+        _generation_context_fingerprint(
+            task_id=task_id,
+            mime_type=mime_type,
+            image_bytes_len=len(image_bytes or b""),
+            generate_muscles=generate_muscles,
+            additional_notes=additional_notes,
+            pose_description=pose_description,
+        ),
+    )
+
     async def build_output(progress_callback: ProgressCallback) -> GenerateOutput:
         async def fast_placeholder_generation() -> GenerateOutput:
             import binascii
@@ -384,6 +423,10 @@ async def run_generation(
             return photo_png, muscles_png, True, json.dumps(analyzed)
 
         if os.getenv("E2E_FAST_AI") == "1":
+            logger.warning(
+                "E2E_FAST_AI is enabled; returning deterministic placeholder images (task_id=%s)",
+                task_id,
+            )
             return await fast_placeholder_generation()
 
         from services.google_generator import GoogleGeminiGenerator

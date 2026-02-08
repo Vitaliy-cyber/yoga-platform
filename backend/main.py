@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import asyncio
+from importlib import metadata as importlib_metadata
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -33,6 +34,31 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _package_version(pkg_name: str) -> str:
+    try:
+        return importlib_metadata.version(pkg_name)
+    except Exception:
+        return "unknown"
+
+
+def _runtime_fingerprint() -> str:
+    db_scheme = (settings.DATABASE_URL or "").split(":", 1)[0] or "unknown"
+    return (
+        f"mode={settings.APP_MODE.value} "
+        f"storage={settings.STORAGE_BACKEND} "
+        f"db={db_scheme} "
+        f"bootstrap_schema={int(settings.runtime_schema_bootstrap_enabled)} "
+        f"google_api_key={int(bool(settings.GOOGLE_API_KEY))} "
+        f"e2e_fast_ai={int(os.getenv('E2E_FAST_AI') == '1')} "
+        f"disable_rate_limit={int(os.getenv('DISABLE_RATE_LIMIT') == '1')} "
+        f"log_level={settings.LOG_LEVEL} "
+        f"google_genai={_package_version('google-genai')} "
+        f"fastapi={_package_version('fastapi')} "
+        f"httpx={_package_version('httpx')} "
+        f"pillow={_package_version('pillow')}"
+    )
 
 
 class _NoiseFilter(logging.Filter):
@@ -92,6 +118,7 @@ async def lifespan(app: FastAPI):
         logger.debug(f"Storage backend: {settings.STORAGE_BACKEND}")
     else:
         logger.info(f"Storage backend: {settings.STORAGE_BACKEND}")
+    logger.info("Runtime fingerprint: %s", _runtime_fingerprint())
 
     # Start periodic auth token cleanup task (skip during pytest).
     if "pytest" not in sys.modules:

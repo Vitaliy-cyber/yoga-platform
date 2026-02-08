@@ -5,8 +5,10 @@ Uses Google's Gemini API for image generation and analysis.
 """
 
 import logging
+import os
 import sys
 import time
+from importlib import metadata as importlib_metadata
 from hashlib import sha256
 from dataclasses import dataclass
 from io import BytesIO
@@ -22,6 +24,13 @@ from services.storage import get_storage
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+def _package_version(pkg_name: str) -> str:
+    try:
+        return importlib_metadata.version(pkg_name)
+    except Exception:
+        return "unknown"
 
 
 @dataclass
@@ -1179,8 +1188,30 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
 
         # Keep progress messaging simple and user-focused to avoid confusing
         # "analysis/preparation" wording in the UI.
+        prompt_source = "fixed_studio_template"
+        vision_prompt_enabled = False
         photo_prompt = self.STUDIO_PHOTO_PROMPT
-        logger.debug("Pose prompt source: fixed studio template")
+        logger.info(
+            "Generator fingerprint (from image): task_id=%s image_model=%s vision_model=%s "
+            "image_size=%s aspect_ratio=%s retries=%d temp=%.2f top_p=%.2f top_k=%d "
+            "prompt_source=%s vision_prompt_enabled=%d pose_description_len=%d notes_len=%d "
+            "e2e_fast_ai=%d google_genai=%s",
+            task_id,
+            self.GEMINI_IMAGE_MODEL,
+            self.GEMINI_VISION_MODEL,
+            self.IMAGE_SIZE,
+            self.IMAGE_ASPECT_RATIO,
+            self.IMAGE_MAX_RETRIES,
+            self.IMAGE_TEMPERATURE,
+            self.IMAGE_TOP_P,
+            self.IMAGE_TOP_K,
+            prompt_source,
+            int(vision_prompt_enabled),
+            len((pose_description or "").strip()),
+            len((additional_notes or "").strip()),
+            int(os.getenv("E2E_FAST_AI") == "1"),
+            _package_version("google-genai"),
+        )
 
         source_seed_material = sha256(reference_bytes_for_model).hexdigest()
         if photo_prompt:
