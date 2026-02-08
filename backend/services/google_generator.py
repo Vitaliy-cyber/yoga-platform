@@ -33,6 +33,10 @@ def _package_version(pkg_name: str) -> str:
         return "unknown"
 
 
+def _single_line(text: str) -> str:
+    return " ".join((text or "").split())
+
+
 @dataclass
 class AnalyzedMuscle:
     """Analyzed muscle with activation level"""
@@ -158,6 +162,22 @@ class GoogleGeminiGenerator:
 
             self._client = genai.Client(api_key=settings.GOOGLE_API_KEY)
             self._initialized = True
+            prompt_source = "fixed_studio_template"
+            vision_prompt_enabled = False
+            logger.info(
+                "Generator config: image_model=%s vision_model=%s image_size=%s aspect_ratio=%s "
+                "temp=%.2f top_p=%.2f top_k=%d prompt_source=%s analyzer_active=%d studio_prompt=%s",
+                self.GEMINI_IMAGE_MODEL,
+                self.GEMINI_VISION_MODEL,
+                self.IMAGE_SIZE,
+                self.IMAGE_ASPECT_RATIO,
+                self.IMAGE_TEMPERATURE,
+                self.IMAGE_TOP_P,
+                self.IMAGE_TOP_K,
+                prompt_source,
+                int(vision_prompt_enabled),
+                _single_line(self.STUDIO_PHOTO_PROMPT),
+            )
             logger.debug("Google Gemini Generator initialized successfully!")
         except Exception as e:
             logger.error(f"Failed to initialize Google Gemini: {e}")
@@ -1211,6 +1231,13 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
             len((additional_notes or "").strip()),
             int(os.getenv("E2E_FAST_AI") == "1"),
             _package_version("google-genai"),
+        )
+        logger.info(
+            "Studio generation prompt: task_id=%s analyzer_active=%d prompt_len=%d prompt=%s",
+            task_id,
+            int(vision_prompt_enabled),
+            len(photo_prompt or ""),
+            _single_line(photo_prompt or ""),
         )
 
         source_seed_material = sha256(reference_bytes_for_model).hexdigest()
