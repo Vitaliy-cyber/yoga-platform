@@ -554,6 +554,14 @@ async def refresh_tokens(
         )
         if requires_csrf:
             if not csrf_header:
+                logger.warning(
+                    "Refresh forbidden: missing CSRF header (cookie_refresh=%s body_refresh=%s cookie_invalid=%s bearer_match=%s ip=%s)",
+                    bool(refresh_token_cookie),
+                    bool(body_refresh_token),
+                    bool(cookie_invalid),
+                    bool(bearer_matches_refresh),
+                    ip_address,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="CSRF token missing. Include X-CSRF-Token header.",
@@ -572,7 +580,15 @@ async def refresh_tokens(
                     detail="Invalid or expired refresh token",
                 )
             if not verify_csrf_token(csrf_header, refresh_user_id):
-                logger.warning(f"CSRF token verification failed for user {refresh_user_id}")
+                logger.warning(
+                    "Refresh forbidden: invalid CSRF token (user_id=%s cookie_refresh=%s body_refresh=%s cookie_invalid=%s bearer_match=%s ip=%s)",
+                    refresh_user_id,
+                    bool(refresh_token_cookie),
+                    bool(body_refresh_token),
+                    bool(cookie_invalid),
+                    bool(bearer_matches_refresh),
+                    ip_address,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Invalid CSRF token",

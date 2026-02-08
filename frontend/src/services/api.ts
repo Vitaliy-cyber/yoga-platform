@@ -379,16 +379,31 @@ const refreshAccessToken = async (): Promise<string | null> => {
 
       return access_token;
     } catch (error) {
-      // Only logout on actual auth errors (401, 403)
+      // Only logout on hard auth failures (401).
+      // 403 during refresh is often CSRF/cookie-context related and should not
+      // immediately destroy local auth state.
       // Do NOT logout on rate limiting (429), network errors, or other transient failures
       // TokenManager's retry logic will handle transient failures
       if (axios.isAxiosError(error)) {
         const status = error.response?.status;
+        const detail = (() => {
+          const data = error.response?.data as unknown;
+          if (data && typeof data === 'object' && 'detail' in (data as Record<string, unknown>)) {
+            const value = (data as Record<string, unknown>).detail;
+            return typeof value === 'string' ? value : null;
+          }
+          return null;
+        })();
 
-        if (status === 401 || status === 403) {
-          // Real auth failure - refresh token is invalid/expired
-          logger.warn('Token refresh failed with auth error, logging out');
+        if (status === 401) {
+          // Hard auth failure - refresh token is invalid/expired/revoked.
+          logger.warn('Token refresh failed with 401 auth error, logging out');
           useAuthStore.getState().logout();
+          return null;
+        }
+
+        if (status === 403) {
+          logger.warn(`Token refresh forbidden (403): ${detail ?? 'no detail'}`);
           return null;
         }
 
