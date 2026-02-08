@@ -78,15 +78,23 @@ class GoogleGeminiGenerator:
     IMAGE_SIZE = "1K"
     IMAGE_MAX_RETRIES = 3
     STUDIO_PHOTO_PROMPT = (
-        "SYSTEM: You are a professional studio photographer creating a high-quality reference photo."
+        "SYSTEM: You are a professional technical photographer creating a precise visual reference."
         "TASK: Create a photorealistic studio photograph of a woman based on the Visual Input provided."
         "SUBJECT & ATTIRE:"
-        "- A woman wearing modest, all-white clothing: a white long-sleeved tunic, full-length white leggings, and a white fabric turban completely covering her hair."
-        "VISUAL INSTRUCTIONS (STRICT ADHERENCE):"
-        "1. **Treat the Input Image as a rigid visual stencil.** Your goal is to fill this exact shape with photorealistic detail. Do not alter the outer boundary of the silhouette."
-        "2. **Silhouette Integrity Rule:** If a limb is folded inward and does not stick out from the main body shape in the Input reference, it MUST NOT stick out in your generation. Do not \"invent\" limbs extending into the negative space if they are not there in the reference."
-        "3. **Orientation Lock:** Replicate the pose exactly as seen, without mirroring or flipping horizontally. The left side of the reference must remain the left side of the generation."
-        "STYLE: High-key lighting, seamless white background, 8k resolution, elegant and respectful editorial style. No harsh shadows."
+        "- A woman in modest, all-white clothing: white long-sleeved tunic, white leggings, white turban covering hair."
+        "- Clothing is loose but implies the underlying form."
+        "UNIVERSAL GEOMETRY LOGIC (APPLY TO ANY POSE):"
+        "1. **THE \"AIR GAP\" RULE (Elevation Check):** Look at the space between the subject's hips and the floor/heels."
+        "- If there is NO gap (hips resting on heels/floor), generate the subject GROUNDED (do not lift hips)."
+        "- If there IS a gap (hips in the air/standing), preserve that EXACT vertical distance."
+        "2. **THE \"SILHOUETTE ENVELOPE\" (Compact vs. Extended):**"
+        "- If the input pose is \"closed\" (limbs tucked, rounded spine), keep the output shape compact. Do not open it up."
+        "- If the input pose is \"open\" (limbs stretched, straight spine), keep it extended."
+        "3. **LIMB MATCHING:**"
+        "- If a limb is not clearly visible extending outwards, it is TUCKED/FOLDED. Do not invent extended limbs that are not shown."
+        "- Match the bend of elbows and knees exactly as seen (e.g., if elbows are on the floor, keep them on the floor)."
+        "4. **ORIENTATION:** Do not mirror or flip."
+        "STYLE: High-key lighting, seamless white background, 8k resolution, elegant, neutral technical style."
     )
     MAX_REFERENCE_SIDE = 2048
     MIN_SUBJECT_OCCUPANCY_RATIO = 0.45
