@@ -1,0 +1,49 @@
+{
+  "cookies": [
+    {
+      "name": "refresh_token",
+      "value": "\"\"",
+      "domain": "127.0.0.1",
+      "path": "/api",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "refresh_token",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiZXhwIjoxNzcxMTQ5NjQwLCJpYXQiOjE3NzA1NDQ4NDAsImlzcyI6InlvZ2EtcGxhdGZvcm0iLCJhdWQiOiJ5b2dhLXBsYXRmb3JtLXVzZXJzIiwianRpIjoiNDFhNTU5YTYtOGY0OS00M2NiLWJkMzEtMjRiMjA4ZmZkOWQ2IiwidHlwZSI6InJlZnJlc2gifQ.DRbJ0tCN7f7Kq92XVffwOuk-o_0az_5lIOziv1LNGlg",
+      "domain": "127.0.0.1",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "csrf_token",
+      "value": "MToxNzcwNTQ4NDQwOlByUFBhTndDYXdmZVFpNVQ6NGJjMzFhY2E3MjQ3OGY1MzU2ZmM0MTc4NjRmNDg4MTAyZWNiYzU2ZjdkZmMzYzBiMzRjMzAwZWFlNjAyYmRiYg",
+      "domain": "127.0.0.1",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Strict"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "http://127.0.0.1:3000",
+      "localStorage": [
+        {
+          "name": "yoga_auth_token",
+          "value": "{\"state\":{\"user\":{\"id\":1,\"name\":null,\"created_at\":\"2026-02-08T09:52:27\",\"last_login\":\"2026-02-08T10:00:40.916428\"},\"accessToken\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiZXhwIjoxNzcwNTQ4NDQwLCJpYXQiOjE3NzA1NDQ4NDAsImlzcyI6InlvZ2EtcGxhdGZvcm0iLCJhdWQiOiJ5b2dhLXBsYXRmb3JtLXVzZXJzIiwianRpIjoiMzVjZjM0YTEtYzU3ZS00MjU1LWIwNWYtMmRjYmY3NGMwZmRiIiwidHlwZSI6ImFjY2VzcyIsInRva2VuIjoiZTJlLXRlc3QtdG9rZW4tcGxheXdyaWdodC0yMDI0In0.yDTQyK9x2Em0n8cm3BrT_jsl0tHp2whGHXssoKhCSg4\",\"tokenExpiresAt\":1770548440939},\"version\":0}"
+        },
+        {
+          "name": "yoga-platform-theme",
+          "value": "light"
+        }
+      ]
+    }
+  ]
+}
