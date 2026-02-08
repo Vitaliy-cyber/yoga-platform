@@ -17,15 +17,20 @@ from pathlib import Path
 class Colors:
     """ANSI colors for terminal"""
 
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
-    RED = "\033[91m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    BLUE = "\033[94m"
-    CYAN = "\033[96m"
-    WHITE = "\033[97m"
+    _ENABLED = (
+        sys.stdout.isatty()
+        and os.getenv("NO_COLOR") is None
+        and os.getenv("YOGA_CLI_NO_COLOR", "0") != "1"
+    )
+    RESET = "\033[0m" if _ENABLED else ""
+    BOLD = "\033[1m" if _ENABLED else ""
+    DIM = "\033[2m" if _ENABLED else ""
+    RED = "\033[91m" if _ENABLED else ""
+    GREEN = "\033[92m" if _ENABLED else ""
+    YELLOW = "\033[93m" if _ENABLED else ""
+    BLUE = "\033[94m" if _ENABLED else ""
+    CYAN = "\033[96m" if _ENABLED else ""
+    WHITE = "\033[97m" if _ENABLED else ""
 
 
 def info(msg):
@@ -272,7 +277,6 @@ DATABASE_URL=sqlite+aiosqlite:///./yoga_platform.db
 SECRET_KEY={generated_secret}
 # Add your Gemini API key to enable AI generation
 GOOGLE_API_KEY=
-USE_GOOGLE_AI=true
 """
         env_file.write_text(env_content)
         success("Configuration file created")
@@ -313,6 +317,25 @@ USE_GOOGLE_AI=true
 
     def _stream_output(self, process, prefix, color):
         """Stream process output"""
+        noisy_backend_markers = (
+            "inference_feedback_manager.cc:114",
+            "landmark_projection_calculator.cc:78",
+            "All log messages before absl::InitializeLog() is called",
+        )
+        noisy_backend_prefixes = (
+            "INFO:     Will watch for changes in these directories:",
+            "INFO:     Uvicorn running on ",
+            "INFO:     Started reloader process ",
+            "INFO:     Started server process ",
+            "INFO:     Waiting for application startup.",
+            "INFO:     Application startup complete.",
+            "INFO:     Waiting for application shutdown.",
+            "INFO:     Application shutdown complete.",
+            "INFO:     Finished server process ",
+            "INFO:     connection open",
+            "INFO:     connection closed",
+            "WARNING:  WatchFiles detected changes in ",
+        )
         if process.stdout:
             for line in iter(process.stdout.readline, b""):
                 if self._shutdown_requested:
@@ -320,6 +343,22 @@ USE_GOOGLE_AI=true
                 try:
                     decoded = line.decode("utf-8", errors="replace").rstrip()
                     if decoded:
+                        if prefix == "BACKEND" and any(
+                            marker in decoded for marker in noisy_backend_markers
+                        ):
+                            continue
+                        if prefix == "BACKEND" and decoded.startswith(noisy_backend_prefixes):
+                            continue
+                        if (
+                            prefix == "BACKEND"
+                            and decoded.startswith("INFO:     127.0.0.1:")
+                            and (
+                                '"/storage/' in decoded
+                                or '"/api/v1/generate/status/' in decoded
+                                or '"/api/generate/status/' in decoded
+                            )
+                        ):
+                            continue
                         print(f"{color}[{prefix}]{Colors.RESET} {decoded}")
                 except Exception:
                     pass
@@ -370,7 +409,6 @@ USE_GOOGLE_AI=true
             cwd=self.frontend_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            env={**os.environ, "FORCE_COLOR": "1"},
         )
 
         frontend_thread = threading.Thread(
@@ -395,11 +433,20 @@ USE_GOOGLE_AI=true
                 "--reload",
                 "--port",
                 "8000",
+                "--no-use-colors",
+                "--log-level",
+                "warning",
             ],
             cwd=self.backend_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            env={**os.environ, "FORCE_COLOR": "1"},
+            env={
+                **os.environ,
+                "NO_COLOR": "1",
+                "TF_CPP_MIN_LOG_LEVEL": "2",
+                "GLOG_minloglevel": "2",
+                "ABSL_LOGGING_MIN_LOG_LEVEL": "2",
+            },
         )
 
         # Stream backend in main thread
@@ -430,10 +477,20 @@ USE_GOOGLE_AI=true
                 "--reload",
                 "--port",
                 "8000",
+                "--no-use-colors",
+                "--log-level",
+                "warning",
             ],
             cwd=self.backend_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            env={
+                **os.environ,
+                "NO_COLOR": "1",
+                "TF_CPP_MIN_LOG_LEVEL": "2",
+                "GLOG_minloglevel": "2",
+                "ABSL_LOGGING_MIN_LOG_LEVEL": "2",
+            },
         )
 
         self._stream_output(self.backend_process, "BACKEND", Colors.GREEN)

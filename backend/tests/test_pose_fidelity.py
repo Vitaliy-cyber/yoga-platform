@@ -60,10 +60,10 @@ def test_pose_fidelity_unavailable_detector_returns_non_performed_result():
 def test_pose_fidelity_defaults_are_strictened_for_pose_lock():
     evaluator = PoseFidelityEvaluator(extractor=_StubExtractor({}, available=False))
 
-    assert evaluator.score_threshold == 0.86
-    assert evaluator.max_joint_delta_degrees == 14.0
+    assert evaluator.score_threshold == 0.80
+    assert evaluator.max_joint_delta_degrees == 20.0
     assert evaluator.min_visibility == 0.45
-    assert evaluator.min_joint_matches == 6
+    assert evaluator.min_joint_matches == 8
 
 
 def test_mediapipe_extractor_gracefully_disables_when_solutions_api_missing(monkeypatch):
@@ -121,6 +121,30 @@ def test_pose_fidelity_detects_matching_pose_as_pass():
     assert result.pose_score >= 0.75
     assert result.max_joint_delta <= 25.0
     assert result.compared_joints >= 6
+
+
+def test_pose_fidelity_accepts_best_mirrored_candidate():
+    source = _base_landmarks()
+    source["left_wrist"] = (0.22, 0.46, 0.99)
+    source["right_wrist"] = (0.78, 0.66, 0.99)
+    source["left_ankle"] = (0.38, 0.90, 0.99)
+    source["right_ankle"] = (0.62, 0.96, 0.99)
+
+    generated = {k: (1.0 - v[0], v[1], v[2]) for k, v in source.items()}
+
+    evaluator = PoseFidelityEvaluator(
+        extractor=_StubExtractor({b"source": source, b"generated": generated}),
+        score_threshold=0.70,
+        max_joint_delta_degrees=25.0,
+        min_joint_matches=6,
+    )
+    result = evaluator.evaluate(b"source", b"generated")
+
+    assert result.validation_performed is True
+    assert result.passed is True
+    assert result.failure_reason is None
+    assert result.pose_score >= 0.70
+    assert result.mirror_suspected is False
 
 
 def test_pose_fidelity_rejects_large_joint_deviation():

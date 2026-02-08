@@ -8,7 +8,6 @@ import type {
   PoseListItem,
   PoseCreate,
   PoseUpdate,
-  LayerType,
   GenerateStatus,
   GenerateResponse,
   ApiError,
@@ -132,20 +131,6 @@ describe('Type definitions', () => {
       }
       expect(update.name).toBe('Updated Name')
     })
-  })
-
-  describe('LayerType', () => {
-    it('accepts photo value', () => {
-      const layer: LayerType = 'photo'
-      expect(layer).toBe('photo')
-    })
-
-    it('accepts muscles value', () => {
-      const layer: LayerType = 'muscles'
-      expect(layer).toBe('muscles')
-    })
-
-
   })
 
   describe('GenerateStatus', () => {

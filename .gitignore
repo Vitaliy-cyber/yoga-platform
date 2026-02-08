@@ -46,6 +46,8 @@ storage/layers/*
 backend/storage/
 backend/*.db
 backend/*.db.*
+backend/*.db-*
+backend/.tmp/
 
 # AI models (large files)
 ai/models/*
@@ -79,3 +81,4 @@ nginx/ssl/*
 # Database
 *.db
 *.sqlite3
+*.db-*

@@ -28,12 +28,12 @@ Usage (frontend):
     };
 """
 
+import asyncio
 import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import get_settings
 from db.database import AsyncSessionLocal
@@ -41,6 +41,11 @@ from models.generation_task import GenerationTask
 from models.user import User
 from services.auth import decode_token, is_token_blacklisted
 from services.error_sanitizer import sanitize_public_error_message
+from services.generation_task_utils import (
+    clamp_progress,
+    normalize_generate_status,
+    parse_analyzed_muscles_json,
+)
 from services.websocket_manager import (
     ConnectionManager,
     ProgressUpdate,
@@ -122,28 +127,9 @@ async def get_task_current_status(task_id: str, user_id: int) -> Optional[Progre
         if task is None:
             return None
 
-        # Parse analyzed muscles from JSON
-        analyzed_muscles = None
-        if task.analyzed_muscles_json:
-            import json
-            try:
-                analyzed_muscles = json.loads(task.analyzed_muscles_json)
-            except json.JSONDecodeError:
-                pass
-
-        progress = task.progress or 0
-        try:
-            progress_int = int(progress)
-        except Exception:
-            progress_int = 0
-        if progress_int < 0:
-            progress_int = 0
-        if progress_int > 100:
-            progress_int = 100
-
-        status_value = task.status or "failed"
-        if status_value not in ("pending", "processing", "completed", "failed"):
-            status_value = "failed"
+        analyzed_muscles = parse_analyzed_muscles_json(task.analyzed_muscles_json)
+        progress_int = clamp_progress(task.progress or 0)
+        status_value = normalize_generate_status(task.status, default="failed")
 
         return ProgressUpdate(
             task_id=task_id,
@@ -228,15 +214,16 @@ async def websocket_generation_status(
 
     try:
         # Send current task status immediately after connection
+        terminal_status_sent = False
         current_status = await get_task_current_status(task_id, user.id)
         if current_status:
             import json
             await websocket.send_text(json.dumps(current_status.to_dict()))
 
-            # If task is already completed or failed, close the connection
+            # For terminal tasks, let the client close first. Immediate server-side
+            # close can trigger reconnect loops in some proxy/browser combinations.
             if current_status.status in ("completed", "failed"):
-                await websocket.close(code=1000, reason=f"Task {current_status.status}")
-                return
+                terminal_status_sent = True
 
         # Keep connection alive and handle client messages
         while True:
@@ -244,16 +231,28 @@ async def websocket_generation_status(
                 # Wait for client messages (ping/pong, or close)
                 # We don't expect meaningful messages from client, but need to keep
                 # the connection alive and detect disconnects
-                data = await websocket.receive_text()
+                if terminal_status_sent:
+                    # Terminal task: short grace window for client-side close.
+                    data = await asyncio.wait_for(websocket.receive_text(), timeout=5)
+                else:
+                    data = await websocket.receive_text()
 
                 # Client can send "ping" for keep-alive
                 if data == "ping":
                     await websocket.send_text('{"type": "pong"}')
 
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.close(code=1000, reason="Terminal status delivered")
+                except Exception:
+                    pass
+                break
             except WebSocketDisconnect:
-                logger.info(f"WebSocket disconnected by client: user={user.id}, task={task_id}")
+                logger.debug(f"WebSocket disconnected by client: user={user.id}, task={task_id}")
                 break
 
+    except WebSocketDisconnect:
+        logger.debug(f"WebSocket disconnected: user={user.id}, task={task_id}")
     except Exception as e:
         logger.error(
             "WebSocket error: user=%s, task=%s, error_type=%s, error=%s",

@@ -10,7 +10,6 @@ import logging
 import asyncio
 import random
 import time
-import unicodedata
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List, Optional, Literal
@@ -34,8 +33,9 @@ from schemas.export import (
     MuscleExport,
     PoseExport,
 )
-from schemas.category import _strip_invisible_edges
+from schemas.validators import strip_invisible_edges
 from services.auth import get_current_user
+from services.csv_security import escape_muscle_name_for_csv, sanitize_csv_field
 from services.pdf_generator import PosePDFGenerator
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ def _safe_export_text(
         return None if empty_to_none else default
     if not isinstance(value, str):
         value = str(value)
-    normalized = _strip_invisible_edges(value)
+    normalized = strip_invisible_edges(value)
     if not normalized:
         return None if empty_to_none else default
     normalized = _utf8_safe_text(normalized)
@@ -137,85 +137,6 @@ def _check_backup_rate_limit(user_id: int) -> bool:
     # Record this request
     timestamps.append(current_time)
     return True
-
-
-# CSV Injection protection characters (formula triggers)
-CSV_INJECTION_CHARS = ("=", "+", "-", "@")
-
-
-def sanitize_csv_field(value: Optional[str]) -> str:
-    """
-    Sanitize a field for CSV export to prevent formula injection attacks.
-
-    Excel, Google Sheets, and other spreadsheet applications can execute
-    formulas when a cell starts with certain characters (=, +, -, @, etc.).
-    This can lead to arbitrary command execution or data exfiltration.
-
-    Mitigation: Prefix dangerous values with a single quote, which forces
-    the spreadsheet application to treat the content as text.
-    """
-    if value is None:
-        return ""
-
-    # Convert to string
-    str_value = str(value)
-
-    # Normalize control characters so CSV rows stay single-line and parseable.
-    # Replace all ASCII control chars (Cc) with spaces to avoid embedded
-    # nulls and other invisible bytes that can break CSV consumers.
-    normalized = "".join(
-        " "
-        if unicodedata.category(ch) in ("Cc", "Zl", "Zp")
-        else ch
-        for ch in str_value
-    )
-
-    # Check if value starts with (or effectively starts with) injection characters.
-    # Some spreadsheet apps treat leading whitespace or format chars (e.g. BOM,
-    # zero-width spaces) as ignorable, so "\ufeff=1+1" can still be a formula.
-    idx = 0
-    while idx < len(normalized):
-        ch = normalized[idx]
-        if ch.isspace() or unicodedata.category(ch) == "Cf":
-            idx += 1
-            continue
-        break
-    if idx < len(normalized):
-        first = normalized[idx]
-        if first in CSV_INJECTION_CHARS:
-            return "'" + normalized
-        # Preserve leading apostrophes that precede formula triggers so imports
-        # can round-trip without losing the original apostrophe.
-        if first == "'":
-            j = idx + 1
-            while j < len(normalized):
-                ch = normalized[j]
-                if ch.isspace() or unicodedata.category(ch) == "Cf":
-                    j += 1
-                    continue
-                break
-            if j < len(normalized) and normalized[j] in CSV_INJECTION_CHARS:
-                return "'" + normalized
-
-    return normalized
-
-
-def escape_muscle_name_for_csv(value: Optional[str]) -> str:
-    """
-    Escape muscle names for the compact CSV muscles field.
-
-    The muscles field uses a custom format: "name:level,name:level".
-    To preserve commas/colons/backslashes inside names, escape them with
-    a backslash. This keeps the export backward-compatible while allowing
-    lossless round-trips.
-    """
-    sanitized = sanitize_csv_field(value)
-    # Escape backslash first to avoid double-escaping
-    return (
-        sanitized.replace("\\", "\\\\")
-        .replace(",", "\\,")
-        .replace(":", "\\:")
-    )
 
 
 def build_pose_export(pose: Pose) -> PoseExport:

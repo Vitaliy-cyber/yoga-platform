@@ -9,7 +9,7 @@ import type { Pose } from "../../types";
 import { getSignedImageUrl } from "../../services/api";
 import { useI18n } from "../../i18n";
 import { logger } from "../../lib/logger";
-import { generationSteps, getStepState } from "./generation-steps";
+import { getGenerationSteps, getStepState } from "./generation-steps";
 import { usePoseImageSrc } from "../../hooks/usePoseImageSrc";
 import { useAuthStore } from "../../store/useAuthStore";
 import {
@@ -59,6 +59,8 @@ export const RegenerateModal: React.FC<RegenerateModalProps> = ({
   const progress = generationTask?.progress ?? 0;
   const statusMessage = generationTask?.statusMessage;
   const taskError = generationTask?.errorMessage;
+  const taskGenerateMuscles = generationTask?.generateMuscles ?? true;
+  const generationSteps = getGenerationSteps(taskGenerateMuscles);
 
   // Track if generation is fully complete (100%)
   const isComplete = progress >= 100;
@@ -377,7 +379,7 @@ export const RegenerateModal: React.FC<RegenerateModalProps> = ({
             <div className="space-y-3">
               {generationSteps.map((step, index) => {
                 const Icon = step.icon;
-                const stepState = getStepState(index, progress, isComplete);
+                const stepState = getStepState(generationSteps, index, progress, isComplete);
                 const isActive = stepState === "active";
                 const isStepComplete = stepState === "complete";
                 const isPending = stepState === "pending";

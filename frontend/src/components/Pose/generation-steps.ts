@@ -1,35 +1,48 @@
-import { Lightbulb, Camera, Activity, Search } from "lucide-react";
+import { Camera, Activity, Search } from "lucide-react";
 
 /**
  * Generation progress steps used by both GenerateModal and RegenerateModal.
  * Backend progress values (from google_generator.py):
- * - 5% - Preparing pose
- * - 25% - Generating photo (starts)
- * - 55% - Generating muscles (starts)
+ * - 20% - Generating photo (starts)
+ * - 50% - Generating muscles (starts)
  * - 85% - Analyzing active muscles
  * - 100% - Completed
  */
-export const generationSteps = [
-  { id: "analyzing", labelKey: "generate.step_analyzing", icon: Lightbulb, progressThreshold: 5 },
-  { id: "generating_photo", labelKey: "generate.step_photo", icon: Camera, progressThreshold: 25 },
-  { id: "generating_muscles", labelKey: "generate.step_muscles", icon: Activity, progressThreshold: 55 },
+const baseGenerationSteps = [
+  { id: "generating_photo", labelKey: "generate.step_photo", icon: Camera, progressThreshold: 20 },
+  { id: "generating_muscles", labelKey: "generate.step_muscles", icon: Activity, progressThreshold: 50 },
   { id: "analyzing_muscles", labelKey: "generate.step_analyzing_muscles", icon: Search, progressThreshold: 85 },
 ] as const;
 
-export type GenerationStep = typeof generationSteps[number];
+export type GenerationStep = (typeof baseGenerationSteps)[number];
 
 export type StepState = "complete" | "active" | "pending";
 
+export const getGenerationSteps = (generateMuscles: boolean): readonly GenerationStep[] =>
+  generateMuscles
+    ? baseGenerationSteps
+    : baseGenerationSteps.filter((step) => step.id === "generating_photo");
+
 /**
  * Determine which step state based on progress.
+ * @param steps - Visible generation steps for the current task
  * @param stepIndex - Index of the step in the generationSteps array
  * @param progress - Current progress percentage (0-100)
  * @param isComplete - Whether the entire generation is complete
  * @returns The state of the step: "complete", "active", or "pending"
  */
-export function getStepState(stepIndex: number, progress: number, isComplete: boolean): StepState {
-  const step = generationSteps[stepIndex];
-  const nextStep = generationSteps[stepIndex + 1];
+export function getStepState(
+  steps: readonly GenerationStep[],
+  stepIndex: number,
+  progress: number,
+  isComplete: boolean
+): StepState {
+  const step = steps[stepIndex];
+  const nextStep = steps[stepIndex + 1];
+
+  if (!step) {
+    return "pending";
+  }
 
   if (isComplete) {
     return "complete";

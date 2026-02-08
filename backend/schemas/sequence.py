@@ -1,22 +1,12 @@
 """Pydantic schemas for sequences."""
 
-import re
 from datetime import datetime
 from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from models.sequence import DifficultyLevel
-from .validators import ensure_utf8_encodable
-
-
-# HTML tag stripping pattern for XSS prevention
-HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
-
-
-def strip_html_tags(text: str) -> str:
-    """Strip HTML tags from text to prevent XSS attacks."""
-    return HTML_TAG_PATTERN.sub("", text)
+from .validators import normalize_optional_text, normalize_required_text
 
 
 # ============== SequencePose Schemas ==============
@@ -31,16 +21,7 @@ class SequencePoseBase(BaseModel):
     @field_validator("transition_note", mode="before")
     @classmethod
     def normalize_transition_note(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            # Strip HTML tags first to prevent XSS, then normalize whitespace
-            sanitized = strip_html_tags(value)
-            normalized = sanitized.strip()
-            if not normalized:
-                return None
-            return ensure_utf8_encodable(normalized)
-        return value
+        return normalize_optional_text(value, strip_html=True)
 
 
 class SequencePoseCreate(SequencePoseBase):
@@ -56,16 +37,7 @@ class SequencePoseUpdate(BaseModel):
     @field_validator("transition_note", mode="before")
     @classmethod
     def normalize_transition_note(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            # Strip HTML tags first to prevent XSS, then normalize whitespace
-            sanitized = strip_html_tags(value)
-            normalized = sanitized.strip()
-            if not normalized:
-                return None
-            return ensure_utf8_encodable(normalized)
-        return value
+        return normalize_optional_text(value, strip_html=True)
 
 
 class SequencePoseResponse(BaseModel):
@@ -95,24 +67,12 @@ class SequenceBase(BaseModel):
     @field_validator("name", mode="before")
     @classmethod
     def normalize_name(cls, value: str) -> str:
-        if isinstance(value, str):
-            normalized = value.strip()
-            if not normalized:
-                raise ValueError("Name cannot be blank")
-            return ensure_utf8_encodable(normalized)
-        return value
+        return normalize_required_text(value, field_name="Name")
 
     @field_validator("description", mode="before")
     @classmethod
     def normalize_description(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            normalized = value.strip()
-            if not normalized:
-                return None
-            return ensure_utf8_encodable(normalized)
-        return value
+        return normalize_optional_text(value)
 
 
 class SequenceCreate(SequenceBase):
@@ -129,26 +89,12 @@ class SequenceUpdate(BaseModel):
     @field_validator("name", mode="before")
     @classmethod
     def normalize_name(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            normalized = value.strip()
-            if not normalized:
-                raise ValueError("Name cannot be blank")
-            return ensure_utf8_encodable(normalized)
-        return value
+        return normalize_required_text(value, field_name="Name")
 
     @field_validator("description", mode="before")
     @classmethod
     def normalize_description(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        if isinstance(value, str):
-            normalized = value.strip()
-            if not normalized:
-                return None
-            return ensure_utf8_encodable(normalized)
-        return value
+        return normalize_optional_text(value)
 
 
 class SequenceResponse(SequenceBase):

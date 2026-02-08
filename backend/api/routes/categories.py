@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from models.category import Category
 from models.pose import Pose
 from models.user import User
-from schemas.category import CategoryCreate, CategoryResponse, CategoryUpdate, _strip_invisible_edges
+from schemas.category import CategoryCreate, CategoryResponse, CategoryUpdate
+from schemas.validators import strip_invisible_edges
 from services.auth import get_current_user
 from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 def _safe_category_name(value: object) -> str:
     if not isinstance(value, str):
         return "<invalid>"
-    normalized = _strip_invisible_edges(value)
+    normalized = strip_invisible_edges(value)
     if not normalized:
         return "<invalid>"
     try:
@@ -34,7 +35,7 @@ def _safe_category_description(value: object) -> str | None:
         return None
     if not isinstance(value, str):
         value = str(value)
-    normalized = _strip_invisible_edges(value)
+    normalized = strip_invisible_edges(value)
     if not normalized:
         return None
     try:
@@ -66,7 +67,7 @@ async def _category_name_exists_casefold(
     for existing in result.scalars():
         if not isinstance(existing, str):
             continue
-        normalized = _strip_invisible_edges(existing)
+        normalized = strip_invisible_edges(existing)
         if normalized and normalized.casefold() == target:
             return True
     return False

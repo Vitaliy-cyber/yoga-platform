@@ -125,8 +125,6 @@ def mock_settings():
         settings.S3_ACCESS_KEY_ID = "test-key"
         settings.S3_SECRET_ACCESS_KEY = "test-secret"
         settings.GOOGLE_API_KEY = "test-api-key"
-        settings.ENABLE_AI_GENERATION = True
-        settings.USE_GOOGLE_AI = True
         settings.CORS_ORIGINS = ["http://localhost:3000"]
         settings.CORS_ALLOWED_ORIGINS = ""
         mock.return_value = settings
@@ -150,16 +148,16 @@ def mock_s3_storage():
 
 @pytest.fixture
 def mock_s3_storage_for_routes():
-    """Mock S3Storage at route level."""
+    """Mock storage at route level."""
     with patch("api.routes.poses.S3Storage") as MockStorage:
         mock_instance = MagicMock()
         mock_instance.upload_bytes = AsyncMock(
             return_value="https://test-bucket.s3.amazonaws.com/test/file.png"
         )
+        mock_instance.download_bytes = AsyncMock(return_value=b"fake-image-bytes")
         MockStorage.get_instance.return_value = mock_instance
 
-        with patch("api.routes.generate.S3Storage") as MockStorageGen:
-            MockStorageGen.get_instance.return_value = mock_instance
+        with patch("api.routes.generate.get_storage", return_value=mock_instance):
             yield mock_instance
 
 

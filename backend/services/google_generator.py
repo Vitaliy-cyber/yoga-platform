@@ -6,17 +6,18 @@ Uses Google's Gemini API for image generation and analysis.
 
 import logging
 import sys
+import time
 from hashlib import sha256
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Callable, Iterable, Optional
 
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageOps
 
 from config import get_settings
 from services.image_validation import normalize_image_mime_type, sniff_image_mime_type
-from services.pose_fidelity import PoseFidelityEvaluator
 from services.pose_vision_describer import describe_pose_from_image
+from services.generation_task_utils import clamp_activation_level
 from services.storage import get_storage
 
 settings = get_settings()
@@ -57,38 +58,27 @@ class GoogleGeminiGenerator:
     GEMINI_IMAGE_MODEL = "models/gemini-3-pro-image-preview"
     # Model for vision/analysis
     GEMINI_VISION_MODEL = "models/gemini-3-pro-preview"
-    # Prefer mixed response first (matches AI Studio defaults), then strict image-only.
+    # Single-shot mode: one modality profile, one API call per generation stage.
     IMAGE_MODALITY_PROFILES: tuple[list[str], ...] = (
         ["TEXT", "IMAGE"],
-        ["IMAGE"],
     )
     IMAGE_ASPECT_RATIO = "1:1"
-    IMAGE_SIZE = "2K"
+    IMAGE_SIZE = "1K"
+    IMAGE_MAX_RETRIES = 3
+    STUDIO_PHOTO_PROMPT = (
+        "Використовуючи задану позу на зображенні, відтвори її виконання в студії. "
+        "Поза має точно відповідати референсу. Білий фон, без декорацій і аксесуарів. "
+        "Білий одяг, м'яке студійне освітлення."
+    )
     MAX_REFERENCE_SIDE = 2048
     MIN_SUBJECT_OCCUPANCY_RATIO = 0.45
     SUBJECT_CROP_MARGIN_RATIO = 0.20
     POSE_CONTROL_EDGE_THRESHOLD = 28
     # Low-stochasticity baseline for better pose stability in image generation.
-    IMAGE_TEMPERATURE = 0.8
-    IMAGE_TOP_P = 0.85
-    IMAGE_TOP_K = 40
-    MAX_PHOTO_ATTEMPTS = 3
+    IMAGE_TEMPERATURE = 0.4
+    IMAGE_TOP_P = 0.90
+    IMAGE_TOP_K = 32
     ALLOWED_REFERENCE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
-
-    POSE_SYSTEM_INSTRUCTION = (
-        "You are an expert yoga photography studio specializing in anatomically "
-        "precise pose reproduction. Given a reference pose diagram, you generate "
-        "studio-quality photographs that faithfully replicate every joint angle, "
-        "limb direction, and body orientation visible in the reference. "
-        "Maintain strict visual consistency for the character across all "
-        "generations: the subject is always the same fit young woman with a "
-        "calm demeanor, dressed entirely in a clean, monochromatic white "
-        "outfit. Her attire consists of a white fitted t-shirt, white yoga "
-        "leggings, and a white head-wrap, devoid of any logos, patterns, or "
-        "contrasting colors. Her physical features, skin tone, and styling "
-        "must remain identical in every image to ensure character continuity "
-        "throughout the series."
-    )
 
     @staticmethod
     def _normalize_reference_mime_type(mime_type: str) -> str:
@@ -97,22 +87,15 @@ class GoogleGeminiGenerator:
             return normalized
         return "image/png"
 
-    def _get_pose_fidelity_evaluator(self) -> PoseFidelityEvaluator:
-        evaluator = getattr(self, "_pose_fidelity_evaluator", None)
-        if evaluator is None:
-            evaluator = PoseFidelityEvaluator()
-            self._pose_fidelity_evaluator = evaluator
-        return evaluator
-
     @staticmethod
     def _seed_from_task(task_id: str, stage: str, attempt: int) -> int:
         """
-        Produce deterministic but stage/attempt-specific seed to reduce random drift
-        while keeping retries exploratory across attempts.
+        Produce deterministic stage/attempt-specific seed from task_id.
+
+        Kept for compatibility with tests and call sites that still rely on
+        task-based determinism.
         """
         digest = sha256(f"{task_id}:{stage}:{attempt}".encode("utf-8")).digest()
-        # Gemini expects INT32-compatible seed values.
-        # Keep deterministic mapping while constraining to 0..2_147_483_647.
         return int.from_bytes(digest[:4], byteorder="big", signed=False) & 0x7FFFFFFF
 
     @staticmethod
@@ -152,7 +135,7 @@ class GoogleGeminiGenerator:
         if self._initialized:
             return
 
-        logger.info("Initializing Google Gemini Generator...")
+        logger.debug("Initializing Google Gemini Generator...")
 
         if not self.is_available():
             raise RuntimeError(
@@ -166,7 +149,7 @@ class GoogleGeminiGenerator:
 
             self._client = genai.Client(api_key=settings.GOOGLE_API_KEY)
             self._initialized = True
-            logger.info("Google Gemini Generator initialized successfully!")
+            logger.debug("Google Gemini Generator initialized successfully!")
         except Exception as e:
             logger.error(f"Failed to initialize Google Gemini: {e}")
             raise
@@ -210,7 +193,7 @@ class GoogleGeminiGenerator:
         import json
         from google.genai import types
 
-        logger.info("Analyzing active muscles from pose image...")
+        logger.debug("Analyzing active muscles from pose image...")
 
         if self._client is None:
             raise RuntimeError("Google Gemini client not initialized")
@@ -255,7 +238,7 @@ Important rules:
             elif "```" in response_text:
                 response_text = response_text.split("```")[1].split("```")[0].strip()
 
-            logger.info(f"Muscle analysis response: {response_text[:200]}")
+            logger.debug(f"Muscle analysis response: {response_text[:200]}")
 
             # Parse JSON
             muscles_data = json.loads(response_text)
@@ -268,12 +251,12 @@ Important rules:
                 # Validate muscle name
                 if name in self.VALID_MUSCLE_NAMES:
                     # Clamp activation to 0-100
-                    activation = max(0, min(100, int(activation)))
+                    activation = clamp_activation_level(activation)
                     analyzed_muscles.append(AnalyzedMuscle(name=name, activation_level=activation))
                 else:
                     logger.warning(f"Unknown muscle name from AI: {name}")
 
-            logger.info(f"Analyzed {len(analyzed_muscles)} active muscles")
+            logger.debug(f"Analyzed {len(analyzed_muscles)} active muscles")
             return analyzed_muscles
 
         except asyncio.TimeoutError:
@@ -285,55 +268,6 @@ Important rules:
         except Exception as e:
             logger.warning(f"Failed to analyze muscles: {e}")
             return []
-
-    def _build_photo_prompt(
-        self,
-        pose_description: Optional[str],
-        additional_notes: Optional[str],
-        *,
-        attempt: int = 0,
-    ) -> str:
-        prompt = (
-            "A single practitioner holds the exact yoga pose depicted in the "
-            "reference image, photographed in a professional studio setting. "
-            "Soft, even lighting wraps around the body from above and slightly "
-            "in front, casting gentle shadows that reveal the contours of each "
-            "muscle group. The practitioner wears a light-colored yoga outfit "
-            "that contrasts cleanly against a neutral seamless backdrop, "
-            "allowing every limb angle and joint position to read clearly in "
-            "the frame."
-        )
-
-        if pose_description and pose_description.strip():
-            prompt += (
-                f" {pose_description.strip()}"
-                " The body mirrors the reference diagram precisely, preserving "
-                "every bend, extension, and rotation visible in the original."
-            )
-        else:
-            prompt += (
-                " The body replicates the reference diagram exactly, "
-                "maintaining the same limb placement, joint bend angles, "
-                "torso orientation, and camera viewpoint."
-            )
-
-        prompt += (
-            " Natural body proportions ground the image in realism while "
-            "the camera captures the full figure centered in a square "
-            "composition with no cropping of extremities."
-        )
-
-        if attempt >= 1:
-            prompt += (
-                " Pay meticulous attention to matching every joint angle, "
-                "limb direction, and the overall body silhouette against "
-                "the reference so the pose is an exact geometric replica."
-            )
-
-        if additional_notes and additional_notes.strip():
-            prompt += f" {additional_notes.strip()}"
-
-        return prompt
 
     def _build_muscle_prompt(
         self, additional_notes: Optional[str], attempt: int
@@ -827,7 +761,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
     @staticmethod
     def _append_pose_control_instructions(prompt: str) -> str:
         return (
-            f"{prompt} Accompanying the original pose diagram is a derived "
+            f"{prompt} Image #2 is a pose-control guide. Accompanying the original pose diagram is a derived "
             "edge map that traces the body contours, internal joint structure, "
             "and limb boundaries against a clean white background. Use both "
             "references together to anchor the body shape, aligning every "
@@ -840,7 +774,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         prompt: str,
         reference_image_bytes: Optional[bytes] = None,
         reference_mime_type: Optional[str] = None,
-        max_retries: int = 3,
+        max_retries: int = 1,
         *,
         reference_already_prepared: bool = False,
         include_pose_control: bool = False,
@@ -859,7 +793,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         from google.genai import types
         from google.genai.errors import ClientError
 
-        logger.info(f"Generating image: {prompt[:80]}...")
+        logger.debug(f"Generating image: {prompt[:80]}...")
 
         # Prepare contents - either just prompt or prompt + reference image
         if reference_image_bytes:
@@ -876,7 +810,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                         original_size,
                         prepared_size,
                     ) = self._prepare_reference_image(reference_image_bytes, ref_mime_type)
-                    logger.info(
+                    logger.debug(
                         "Prepared reference image for Gemini: mime=%s original=%sx%s prepared=%sx%s",
                         prepared_ref_mime_type,
                         original_size[0],
@@ -933,12 +867,18 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                             _model=self.GEMINI_IMAGE_MODEL,
                             _system_instruction=system_instruction,
                         ):
+                            config_kwargs: dict[str, object] = {}
+                            if _seed is not None:
+                                config_kwargs["seed"] = _seed
+                            if _system_instruction is not None:
+                                config_kwargs["system_instruction"] = _system_instruction
                             return self._client.models.generate_content(
                                 model=_model,
                                 contents=_contents,
                                 config=self._build_generation_config(
-                                    types, _modalities, seed=_seed,
-                                    system_instruction=_system_instruction,
+                                    types,
+                                    _modalities,
+                                    **config_kwargs,
                                 ),
                             )
 
@@ -1020,6 +960,17 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
 
             except Exception as e:
                 logger.warning(f"Image generation error: {e}")
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    logger.warning(
+                        "Retrying after unexpected generation error in %ss "
+                        "(attempt %s/%s)",
+                        wait_time,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
                 break
 
         # Fallback: create placeholder image
@@ -1097,6 +1048,70 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         image.save(buffer, format=format)
         return buffer.getvalue()
 
+    async def _describe_pose_geometry(self, image_bytes: bytes, mime_type: str) -> str:
+        """
+        Build a dense text description of pose geometry from reference image.
+
+        This gives photo generation a semantic scaffold (text) in addition to
+        the visual scaffold (reference image + pose-control edge map).
+        """
+        if not image_bytes or self._client is None:
+            return ""
+        safe_mime_type = self._normalize_reference_mime_type(mime_type or "image/png")
+        return await describe_pose_from_image(
+            client=self._client,
+            image_bytes=image_bytes,
+            mime_type=safe_mime_type,
+        )
+
+    async def _generate_muscles_and_analysis(
+        self,
+        *,
+        photo_bytes: bytes,
+        additional_notes: Optional[str],
+        seed_material: str,
+        seed_stage: str,
+        analysis_context: str,
+        visualization_progress: int,
+        placeholder_error_message: str,
+        update_progress: Callable[[int, str], object],
+    ) -> tuple[bytes, list[AnalyzedMuscle], float, float]:
+        """
+        Generate muscle layer from photo and analyze active muscles.
+        Returns muscle bytes, analyzed muscles, and stage timings.
+        """
+
+        await update_progress(visualization_progress, "Generating muscle visualization...")
+
+        muscle_prompt = self._build_muscle_prompt(additional_notes, attempt=0)
+        t0 = time.monotonic()
+        muscle_img, is_placeholder = await self._generate_image(
+            muscle_prompt,
+            reference_image_bytes=photo_bytes,
+            reference_mime_type="image/png",
+            max_retries=self.IMAGE_MAX_RETRIES,
+            include_pose_control=False,
+            generation_seed=self._seed_from_material(seed_material, seed_stage, 0),
+        )
+        t_muscles = time.monotonic() - t0
+        if is_placeholder:
+            raise RuntimeError(placeholder_error_message)
+
+        muscle_bytes = self._image_to_bytes(muscle_img)
+        logger.info("Muscles generated")
+
+        await update_progress(85, "Analyzing active muscles...")
+        t0 = time.monotonic()
+        analyzed_muscles = await self._analyze_muscles_from_image(
+            photo_bytes, "image/png", analysis_context
+        )
+        t_muscle_analysis = time.monotonic() - t0
+        logger.info(
+            "Muscle analysis complete: %d muscles identified", len(analyzed_muscles)
+        )
+
+        return muscle_bytes, analyzed_muscles, t_muscles, t_muscle_analysis
+
     async def generate_all_from_image(
         self,
         image_bytes: bytes,
@@ -1105,6 +1120,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         progress_callback: Optional[Callable] = None,
         additional_notes: Optional[str] = None,
         pose_description: Optional[str] = None,
+        generate_muscles: bool = True,
     ) -> GenerationResult:
         """
         Generate 2 images from uploaded schema image.
@@ -1123,8 +1139,14 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 if hasattr(result, "__await__"):
                     await result
 
-        # Step 1: Prepare (5%)
-        await update_progress(5, "Preparing pose...")
+        t_start = time.monotonic()
+        t_vision = 0.0
+        t_photo = 0.0
+        t_muscles = 0.0
+        t_muscle_analysis = 0.0
+
+        # Step 1: Initial progress (5%)
+        await update_progress(5, "Starting generation...")
 
         used_placeholders = False
         reference_bytes_for_model = image_bytes
@@ -1141,8 +1163,8 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
             reference_bytes_for_model = prepared_ref_bytes
             reference_mime_for_model = prepared_ref_mime
             reference_is_prepared = True
-            logger.info(
-                "Prepared source image once for generation/fidelity: mime=%s original=%sx%s prepared=%sx%s",
+            logger.debug(
+                "Prepared source image once for generation: mime=%s original=%sx%s prepared=%sx%s",
                 prepared_ref_mime,
                 original_size[0],
                 original_size[1],
@@ -1155,179 +1177,77 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 e,
             )
 
-        # Step 2: Describe pose via Gemini Vision (10%)
-        await update_progress(10, "Analyzing pose with vision model...")
-
-        vision_description = await describe_pose_from_image(
-            self._client, reference_bytes_for_model, reference_mime_for_model
-        )
-        if vision_description:
-            if pose_description and pose_description.strip():
-                pose_description = f"{pose_description.strip()}\n\n{vision_description}"
-            else:
-                pose_description = vision_description
+        # Step 2: Single-shot deterministic setup (10%)
+        await update_progress(10, "Preparing deterministic single-shot generation...")
+        await update_progress(15, "Applying fixed studio prompt...")
+        photo_prompt = self.STUDIO_PHOTO_PROMPT
+        logger.debug("Pose prompt source: fixed studio template")
 
         source_seed_material = sha256(reference_bytes_for_model).hexdigest()
-        if pose_description and pose_description.strip():
+        if photo_prompt:
             source_seed_material = sha256(
-                f"{source_seed_material}|pose:{pose_description.strip()}".encode("utf-8")
+                f"{source_seed_material}|prompt:{photo_prompt}".encode("utf-8")
             ).hexdigest()
         if additional_notes and additional_notes.strip():
             source_seed_material = sha256(
                 f"{source_seed_material}|notes:{additional_notes.strip()}".encode("utf-8")
             ).hexdigest()
 
-        # Step 3: Generate studio photo with fidelity retry loop (20%)
+        # Step 3: Generate studio photo once (20%)
         await update_progress(20, "Generating studio photo...")
 
-        best_photo_img: Optional[Image.Image] = None
-        best_photo_score = -1.0
-        photo_is_placeholder = False
+        t0 = time.monotonic()
+        photo_img, is_placeholder = await self._generate_image(
+            photo_prompt,
+            reference_image_bytes=reference_bytes_for_model,
+            reference_mime_type=reference_mime_for_model,
+            max_retries=self.IMAGE_MAX_RETRIES,
+            reference_already_prepared=reference_is_prepared,
+            include_pose_control=False,
+            generation_seed=self._seed_from_material(source_seed_material, "photo", 0),
+        )
+        t_photo = time.monotonic() - t0
+        if is_placeholder:
+            raise RuntimeError("Gemini failed to generate studio photo in single-shot mode.")
 
-        for attempt in range(self.MAX_PHOTO_ATTEMPTS):
-            photo_prompt = self._build_photo_prompt(
-                pose_description, additional_notes, attempt=attempt
-            )
-            photo_img, is_placeholder = await self._generate_image(
-                photo_prompt,
-                reference_image_bytes=reference_bytes_for_model,
-                reference_mime_type=reference_mime_for_model,
-                reference_already_prepared=reference_is_prepared,
-                include_pose_control=True,
-                generation_seed=self._seed_from_material(
-                    source_seed_material, "photo", attempt
-                ),
-                system_instruction=self.POSE_SYSTEM_INSTRUCTION,
-            )
-            if is_placeholder:
-                raise RuntimeError("Gemini failed to generate studio photo after retries.")
-
-            candidate_bytes = self._image_to_bytes(photo_img)
-
-            # Persist every attempt to disk for later review
-            try:
-                storage = get_storage()
-                attempt_key = f"generated/{task_id}_photo_attempt{attempt + 1}.png"
-                await storage.upload_bytes(candidate_bytes, attempt_key, "image/png")
-                logger.info("Saved fidelity attempt %d to %s", attempt + 1, attempt_key)
-            except Exception as exc:
-                logger.warning("Failed to save fidelity attempt %d: %s", attempt + 1, exc)
-
-            # Evaluate pose fidelity against the reference
-            try:
-                evaluator = self._get_pose_fidelity_evaluator()
-                fidelity = evaluator.evaluate(reference_bytes_for_model, candidate_bytes)
-                score = fidelity.pose_score
-
-                if best_photo_img is None or score > best_photo_score:
-                    best_photo_img = photo_img
-                    best_photo_score = score
-                    photo_is_placeholder = is_placeholder
-
-                if fidelity.passed:
-                    logger.info(
-                        "Photo fidelity passed on attempt %d/%d (score=%.3f)",
-                        attempt + 1,
-                        self.MAX_PHOTO_ATTEMPTS,
-                        score,
-                    )
-                    break
-
-                logger.info(
-                    "Photo fidelity check did not pass (attempt %d/%d, score=%.3f, reason=%s)",
-                    attempt + 1,
-                    self.MAX_PHOTO_ATTEMPTS,
-                    score,
-                    fidelity.failure_reason,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Pose fidelity evaluation failed on attempt %d/%d: %s; accepting result",
-                    attempt + 1,
-                    self.MAX_PHOTO_ATTEMPTS,
-                    exc,
-                )
-                if best_photo_img is None:
-                    best_photo_img = photo_img
-                    photo_is_placeholder = is_placeholder
-                break
-
-        photo_img = best_photo_img
-        is_placeholder = photo_is_placeholder
         photo_bytes = self._image_to_bytes(photo_img)
         used_placeholders = used_placeholders or is_placeholder
 
         logger.info("Photo generated")
 
-        # Step 4: Generate body paint muscle visualization (50%)
-        # Use generated photo as reference to keep photo + muscle output aligned.
-        await update_progress(50, "Generating muscle visualization...")
-
-        muscle_img = None
-        best_muscle_img: Optional[Image.Image] = None
-        best_muscle_metrics: Optional[dict[str, float]] = None
-        best_muscle_score = -1.0
-        is_placeholder = False
-        for attempt in range(3):
-            muscle_prompt = self._build_muscle_prompt(additional_notes, attempt)
-            muscle_img, is_placeholder = await self._generate_image(
-                muscle_prompt,
-                reference_image_bytes=photo_bytes,
-                reference_mime_type="image/png",
-                include_pose_control=True,
-                generation_seed=self._seed_from_material(
-                    source_seed_material, "muscles", attempt
+        muscle_bytes = b""
+        analyzed_muscles: list[AnalyzedMuscle] | None = None
+        if generate_muscles:
+            # Step 4/5: Generate body paint muscle visualization and active muscles analysis.
+            # Use generated photo as reference to keep photo + muscle output aligned.
+            (
+                muscle_bytes,
+                analyzed_muscles,
+                t_muscles,
+                t_muscle_analysis,
+            ) = await self._generate_muscles_and_analysis(
+                photo_bytes=photo_bytes,
+                additional_notes=additional_notes,
+                seed_material=source_seed_material,
+                seed_stage="muscles",
+                analysis_context="Yoga pose (use image as source of truth)",
+                visualization_progress=50,
+                placeholder_error_message=(
+                    "Gemini failed to generate muscle visualization in single-shot mode."
                 ),
+                update_progress=update_progress,
             )
-            if is_placeholder:
-                raise RuntimeError(
-                    "Gemini failed to generate muscle visualization after retries."
-                )
-
-            # Persist every muscle attempt to disk for later review
-            try:
-                storage = get_storage()
-                muscle_candidate_bytes = self._image_to_bytes(muscle_img)
-                attempt_key = f"generated/{task_id}_muscles_attempt{attempt + 1}.png"
-                await storage.upload_bytes(muscle_candidate_bytes, attempt_key, "image/png")
-                logger.info("Saved muscle attempt %d to %s", attempt + 1, attempt_key)
-            except Exception as exc:
-                logger.warning("Failed to save muscle attempt %d: %s", attempt + 1, exc)
-
-            metrics = self._muscle_image_metrics(muscle_img)
-            score = self._muscle_quality_score(metrics)
-            if best_muscle_img is None or score > best_muscle_score:
-                best_muscle_img = muscle_img
-                best_muscle_metrics = metrics
-                best_muscle_score = score
-            if self._is_good_muscle_metrics(metrics):
-                break
-            logger.info(
-                f"Muscle image quality check failed (attempt {attempt + 1}/3): {metrics}"
-            )
-        if not is_placeholder and best_muscle_img is not None:
-            if muscle_img is None:
-                muscle_img = best_muscle_img
-            else:
-                final_metrics = self._muscle_image_metrics(muscle_img)
-                if not self._is_good_muscle_metrics(final_metrics):
-                    muscle_img = best_muscle_img
-                    logger.info(
-                        "Using best available muscle image after retries: %s",
-                        best_muscle_metrics,
-                    )
-        muscle_bytes = self._image_to_bytes(muscle_img)
-        used_placeholders = used_placeholders or is_placeholder
-        logger.info("Muscles generated")
-
-        # Step 5: Analyze which muscles are active in this pose (85%)
-        await update_progress(85, "Analyzing active muscles...")
-        analyzed_muscles = await self._analyze_muscles_from_image(
-            photo_bytes, "image/png", "Yoga pose (use image as source of truth)"
-        )
-        logger.info(f"Muscle analysis complete: {len(analyzed_muscles)} muscles identified")
 
         await update_progress(100, "Completed!")
+        total = time.monotonic() - t_start
+        logger.info(
+            "Generation timing (from image, s): total=%.2f vision=%.2f photo=%.2f muscles=%.2f analysis=%.2f",
+            total,
+            t_vision,
+            t_photo,
+            t_muscles,
+            t_muscle_analysis,
+        )
 
         return GenerationResult(
             photo_bytes=photo_bytes,
@@ -1342,6 +1262,7 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         task_id: str,
         progress_callback: Optional[Callable] = None,
         additional_notes: Optional[str] = None,
+        generate_muscles: bool = True,
     ) -> GenerationResult:
         """
         Generate 2 images from text description.
@@ -1361,6 +1282,10 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                 if hasattr(result, "__await__"):
                     await result
 
+        t_start = time.monotonic()
+        t_photo = 0.0
+        t_muscles = 0.0
+        t_muscle_analysis = 0.0
         used_placeholders = False
 
         # Step 1: Initial progress (5%)
@@ -1375,84 +1300,50 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
             )
         ).hexdigest()
 
+        t0 = time.monotonic()
         photo_img, is_placeholder = await self._generate_image(
-            self._build_photo_prompt(pose_description, additional_notes),
+            pose_description.strip(),
+            max_retries=self.IMAGE_MAX_RETRIES,
             generation_seed=self._seed_from_material(text_seed_material, "text-photo", 0),
-            system_instruction=self.POSE_SYSTEM_INSTRUCTION,
         )
+        t_photo = time.monotonic() - t0
         if is_placeholder:
-            raise RuntimeError("Gemini failed to generate studio photo from text.")
+            raise RuntimeError("Gemini failed to generate studio photo from text in single-shot mode.")
         photo_bytes = self._image_to_bytes(photo_img)
         used_placeholders = used_placeholders or is_placeholder
         logger.info("Photo generated")
 
-        # Step 3: Generate muscle visualization (55%)
-        await update_progress(55, "Generating muscle visualization...")
-
-        muscle_img = None
-        best_muscle_img: Optional[Image.Image] = None
-        best_muscle_metrics: Optional[dict[str, float]] = None
-        best_muscle_score = -1.0
-        is_placeholder = False
-        for attempt in range(3):
-            muscle_prompt = self._build_muscle_prompt(additional_notes, attempt)
-            muscle_img, is_placeholder = await self._generate_image(
-                muscle_prompt,
-                reference_image_bytes=photo_bytes,
-                reference_mime_type="image/png",
-                generation_seed=self._seed_from_material(
-                    text_seed_material, "text-muscles", attempt
+        muscle_bytes = b""
+        analyzed_muscles: list[AnalyzedMuscle] | None = None
+        if generate_muscles:
+            # Step 3/4: Generate muscle visualization and active muscles analysis.
+            (
+                muscle_bytes,
+                analyzed_muscles,
+                t_muscles,
+                t_muscle_analysis,
+            ) = await self._generate_muscles_and_analysis(
+                photo_bytes=photo_bytes,
+                additional_notes=additional_notes,
+                seed_material=text_seed_material,
+                seed_stage="text-muscles",
+                analysis_context=pose_description,
+                visualization_progress=55,
+                placeholder_error_message=(
+                    "Gemini failed to generate muscle visualization from text in single-shot mode."
                 ),
+                update_progress=update_progress,
             )
-            if is_placeholder:
-                raise RuntimeError(
-                    "Gemini failed to generate muscle visualization from text."
-                )
-
-            # Persist every muscle attempt to disk for later review
-            try:
-                storage = get_storage()
-                muscle_candidate_bytes = self._image_to_bytes(muscle_img)
-                attempt_key = f"generated/{task_id}_muscles_attempt{attempt + 1}.png"
-                await storage.upload_bytes(muscle_candidate_bytes, attempt_key, "image/png")
-                logger.info("Saved muscle attempt %d to %s", attempt + 1, attempt_key)
-            except Exception as exc:
-                logger.warning("Failed to save muscle attempt %d: %s", attempt + 1, exc)
-
-            metrics = self._muscle_image_metrics(muscle_img)
-            score = self._muscle_quality_score(metrics)
-            if best_muscle_img is None or score > best_muscle_score:
-                best_muscle_img = muscle_img
-                best_muscle_metrics = metrics
-                best_muscle_score = score
-            if self._is_good_muscle_metrics(metrics):
-                break
-            logger.info(
-                f"Muscle image quality check failed (attempt {attempt + 1}/3): {metrics}"
-            )
-        if not is_placeholder and best_muscle_img is not None:
-            if muscle_img is None:
-                muscle_img = best_muscle_img
-            else:
-                final_metrics = self._muscle_image_metrics(muscle_img)
-                if not self._is_good_muscle_metrics(final_metrics):
-                    muscle_img = best_muscle_img
-                    logger.info(
-                        "Using best available muscle image after retries: %s",
-                        best_muscle_metrics,
-                    )
-        muscle_bytes = self._image_to_bytes(muscle_img)
-        used_placeholders = used_placeholders or is_placeholder
-        logger.info("Muscles generated")
-
-        # Step 4: Analyze which muscles are active in this pose (85%)
-        await update_progress(85, "Analyzing active muscles...")
-        analyzed_muscles = await self._analyze_muscles_from_image(
-            photo_bytes, "image/png", pose_description
-        )
-        logger.info(f"Muscle analysis complete: {len(analyzed_muscles)} muscles identified")
 
         await update_progress(100, "Completed!")
+        total = time.monotonic() - t_start
+        logger.info(
+            "Generation timing (from text, s): total=%.2f photo=%.2f muscles=%.2f analysis=%.2f",
+            total,
+            t_photo,
+            t_muscles,
+            t_muscle_analysis,
+        )
 
         return GenerationResult(
             photo_bytes=photo_bytes,

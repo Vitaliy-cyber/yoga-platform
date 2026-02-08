@@ -16,7 +16,7 @@ from .export import (
     PoseCSVRow,
     PoseExport,
 )
-from .generate import GenerateRequest, GenerateResponse, GenerateStatus
+from .generate import GenerateResponse, GenerateStatus
 from .muscle import MuscleBase, MuscleCreate, MuscleResponse, PoseMuscleResponse
 from .pose import PaginatedPoseResponse, PoseBase, PoseCreate, PoseListResponse, PoseResponse, PoseUpdate
 from .sequence import (
@@ -80,7 +80,6 @@ __all__ = [
     "PoseResponse",
     "PoseListResponse",
     # Generate
-    "GenerateRequest",
     "GenerateResponse",
     "GenerateStatus",
     "PaginatedSequenceResponse",

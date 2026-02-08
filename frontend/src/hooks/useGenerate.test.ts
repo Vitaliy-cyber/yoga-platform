@@ -129,7 +129,11 @@ describe('useGenerate', () => {
       })
 
       expect(mockGenerateApi.generate).toHaveBeenCalledTimes(1)
-      expect(mockGenerateApi.generate).toHaveBeenCalledWith(mockFile, undefined)
+      expect(mockGenerateApi.generate).toHaveBeenCalledWith(
+        mockFile,
+        undefined,
+        true,
+      )
     })
 
     it('calls API with file and additionalNotes when provided', async () => {
@@ -142,7 +146,11 @@ describe('useGenerate', () => {
       })
 
       expect(mockGenerateApi.generate).toHaveBeenCalledTimes(1)
-      expect(mockGenerateApi.generate).toHaveBeenCalledWith(mockFile, additionalNotes)
+      expect(mockGenerateApi.generate).toHaveBeenCalledWith(
+        mockFile,
+        additionalNotes,
+        true,
+      )
     })
 
     it('calls API with empty string additionalNotes when provided as empty', async () => {
@@ -153,7 +161,22 @@ describe('useGenerate', () => {
         await result.current.generate(mockFile, '')
       })
 
-      expect(mockGenerateApi.generate).toHaveBeenCalledWith(mockFile, '')
+      expect(mockGenerateApi.generate).toHaveBeenCalledWith(mockFile, '', true)
+    })
+
+    it('forwards generateMuscles=false to API', async () => {
+      const { result } = renderHook(() => useGenerate())
+      const mockFile = new File(['test'], 'test.png', { type: 'image/png' })
+
+      await act(async () => {
+        await result.current.generate(mockFile, undefined, false)
+      })
+
+      expect(mockGenerateApi.generate).toHaveBeenCalledWith(
+        mockFile,
+        undefined,
+        false,
+      )
     })
 
     it('sets isGenerating to true when generation starts', async () => {
@@ -179,7 +202,11 @@ describe('useGenerate', () => {
       })
 
       expect(mockGenerateApi.generateFromPose).toHaveBeenCalledTimes(1)
-      expect(mockGenerateApi.generateFromPose).toHaveBeenCalledWith(42, undefined)
+      expect(mockGenerateApi.generateFromPose).toHaveBeenCalledWith(
+        42,
+        undefined,
+        true,
+      )
     })
 
     it('calls API with poseId and additionalNotes when provided', async () => {
@@ -191,7 +218,11 @@ describe('useGenerate', () => {
       })
 
       expect(mockGenerateApi.generateFromPose).toHaveBeenCalledTimes(1)
-      expect(mockGenerateApi.generateFromPose).toHaveBeenCalledWith(42, additionalNotes)
+      expect(mockGenerateApi.generateFromPose).toHaveBeenCalledWith(
+        42,
+        additionalNotes,
+        true,
+      )
     })
   })
 
@@ -205,7 +236,11 @@ describe('useGenerate', () => {
       })
 
       expect(mockGenerateApi.generateFromText).toHaveBeenCalledTimes(1)
-      expect(mockGenerateApi.generateFromText).toHaveBeenCalledWith(description, undefined)
+      expect(mockGenerateApi.generateFromText).toHaveBeenCalledWith(
+        description,
+        undefined,
+        true,
+      )
     })
 
     it('calls API with description and additionalNotes when provided', async () => {
@@ -218,7 +253,11 @@ describe('useGenerate', () => {
       })
 
       expect(mockGenerateApi.generateFromText).toHaveBeenCalledTimes(1)
-      expect(mockGenerateApi.generateFromText).toHaveBeenCalledWith(description, additionalNotes)
+      expect(mockGenerateApi.generateFromText).toHaveBeenCalledWith(
+        description,
+        additionalNotes,
+        true,
+      )
     })
   })
 
@@ -337,6 +376,105 @@ describe('useGenerate', () => {
     expect(result.current.status).toBe('completed')
     expect(result.current.isGenerating).toBe(false)
     expect(result.current.photoUrl).toBe('/storage/generated/photo.png')
+  })
+
+  it('falls back to polling when WebSocket closes with code 1000', async () => {
+    const sockets: MockWebSocket[] = []
+    class OpenThenCloseWebSocket extends MockWebSocket {
+      constructor() {
+        super()
+        sockets.push(this)
+        setTimeout(() => this.onopen?.(), 0)
+        setTimeout(() => this.onclose?.({ code: 1000 }), 10)
+      }
+    }
+
+    vi.stubGlobal('WebSocket', OpenThenCloseWebSocket)
+
+    const { result } = renderHook(() => useGenerate())
+    const mockFile = new File(['test'], 'test.png', { type: 'image/png' })
+
+    mockGenerateApi.getStatus.mockResolvedValueOnce({
+      task_id: 'test-task-123',
+      status: 'completed',
+      progress: 100,
+      status_message: 'Completed!',
+      error_message: null,
+      photo_url: '/storage/generated/photo.png',
+      muscles_url: '/storage/generated/muscles.png',
+      quota_warning: false,
+      analyzed_muscles: null,
+    })
+
+    await act(async () => {
+      await result.current.generate(mockFile)
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2600)
+    })
+
+    expect(mockGenerateApi.getStatus).toHaveBeenCalled()
+    expect(result.current.status).toBe('completed')
+    expect(result.current.isGenerating).toBe(false)
+  })
+
+  it('falls back to polling when WebSocket sends only initial status update', async () => {
+    const sockets: MockWebSocket[] = []
+    class AutoOpenWithInitialStatusWebSocket extends MockWebSocket {
+      constructor() {
+        super()
+        sockets.push(this)
+        setTimeout(() => {
+          this.onopen?.()
+          setTimeout(() => {
+            this.onmessage?.({
+              data: JSON.stringify({
+                type: 'progress_update',
+                task_id: 'test-task-123',
+                status: 'processing',
+                progress: 0,
+                status_message: 'Initializing...',
+              }),
+            })
+          }, 1)
+        }, 0)
+      }
+    }
+
+    vi.stubGlobal('WebSocket', AutoOpenWithInitialStatusWebSocket)
+
+    const { result } = renderHook(() => useGenerate())
+    const mockFile = new File(['test'], 'test.png', { type: 'image/png' })
+
+    mockGenerateApi.getStatus.mockResolvedValueOnce({
+      task_id: 'test-task-123',
+      status: 'completed',
+      progress: 100,
+      status_message: 'Completed!',
+      error_message: null,
+      photo_url: '/storage/generated/photo.png',
+      muscles_url: '/storage/generated/muscles.png',
+      quota_warning: false,
+      analyzed_muscles: null,
+    })
+
+    await act(async () => {
+      await result.current.generate(mockFile)
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    expect(sockets.length).toBeGreaterThan(0)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000)
+    })
+
+    expect(mockGenerateApi.getStatus).toHaveBeenCalled()
+    expect(result.current.status).toBe('completed')
+    expect(result.current.progress).toBe(100)
   })
 
   describe('task ID handling', () => {

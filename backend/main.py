@@ -1,8 +1,14 @@
 import logging
+import os
 import sys
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
+
+# Reduce noisy TensorFlow/MediaPipe runtime logs from native backends.
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("GLOG_minloglevel", "2")
+os.environ.setdefault("ABSL_LOGGING_MIN_LOG_LEVEL", "2")
 
 from api.routes import analytics, auth, categories, compare, export, generate, import_, muscles, poses, sequences, versions, websocket
 from fastapi import APIRouter
@@ -28,9 +34,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+class _NoiseFilter(logging.Filter):
+    """Drop known ultra-noisy third-party lines that add no debugging value."""
+
+    _blocked_substrings = (
+        "AFC is enabled with max remote calls",
+        "HTTP Request: POST https://generativelanguage.googleapis.com",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not any(token in message for token in self._blocked_substrings)
+
+
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_NoiseFilter())
+
 # Заглушити шумні логгери
 logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+logging.getLogger("absl").setLevel(logging.ERROR)
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+logging.getLogger("mediapipe").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("google").setLevel(logging.WARNING)
+logging.getLogger("google.genai").setLevel(logging.WARNING)
+# In DEV we already have structured request logs via middleware.
+# Silence duplicated per-request uvicorn access lines.
+if settings.APP_MODE == AppMode.DEV:
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 
 
 @asynccontextmanager
@@ -38,7 +73,10 @@ async def lifespan(app: FastAPI):
     """Lifecycle events - startup та shutdown"""
 
     # === STARTUP ===
-    logger.info(f"Starting Yoga Platform in {settings.APP_MODE.value} mode...")
+    if settings.APP_MODE == AppMode.DEV:
+        logger.debug(f"Starting Yoga Platform in {settings.APP_MODE.value} mode...")
+    else:
+        logger.info(f"Starting Yoga Platform in {settings.APP_MODE.value} mode...")
 
     # Попередження про небезпечний SECRET_KEY в production
     if (
@@ -49,9 +87,11 @@ async def lifespan(app: FastAPI):
 
     # Ініціалізація бази даних
     await init_db()
-    logger.info("Database initialized")
 
-    logger.info(f"Storage backend: {settings.STORAGE_BACKEND}")
+    if settings.APP_MODE == AppMode.DEV:
+        logger.debug(f"Storage backend: {settings.STORAGE_BACKEND}")
+    else:
+        logger.info(f"Storage backend: {settings.STORAGE_BACKEND}")
 
     # Start periodic auth token cleanup task (skip during pytest).
     if "pytest" not in sys.modules:
@@ -63,7 +103,6 @@ async def lifespan(app: FastAPI):
             from services.google_generator import GoogleGeminiGenerator
 
             GoogleGeminiGenerator.get_instance()
-            logger.info("Google Gemini AI Generator initialized")
         else:
             logger.warning("No GOOGLE_API_KEY configured. Set it in .env")
     except Exception as e:
@@ -75,7 +114,10 @@ async def lifespan(app: FastAPI):
     # === SHUTDOWN ===
     if "pytest" not in sys.modules:
         auth.stop_cleanup_task()
-    logger.info("Shutting down Yoga Platform...")
+    if settings.APP_MODE == AppMode.DEV:
+        logger.debug("Shutting down Yoga Platform...")
+    else:
+        logger.info("Shutting down Yoga Platform...")
 
 
 # Створення FastAPI додатку

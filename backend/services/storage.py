@@ -49,7 +49,7 @@ class LocalStorage:
         # Base directory for uploads (relative to backend folder)
         self.base_dir = Path(__file__).parent.parent / "storage"
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("Local storage initialized at %s", self.base_dir)
+        logger.debug("Local storage initialized at %s", self.base_dir)
 
     def _validate_within_base_dir(self, file_path: Path) -> None:
         base_dir_resolved = self.base_dir.resolve()
@@ -70,7 +70,7 @@ class LocalStorage:
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_bytes(data)
 
-        logger.info("Saved file locally: %s", file_path)
+        logger.debug("Saved file locally: %s", file_path)
         # Return relative URL that will be served by FastAPI
         return f"/storage/{key}"
 

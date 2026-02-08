@@ -86,8 +86,6 @@ export interface PoseUpdate extends Partial<PoseCreate> {
 }
 
 // Типи для генерації
-export type LayerType = 'photo' | 'muscles';
-
 export type GenerateStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface AnalyzedMuscle {
@@ -123,6 +121,7 @@ export interface BackgroundGenerationTask {
   poseId: number;
   poseName: string;
   mode: GenerationMode;
+  generateMuscles?: boolean;
   status: GenerateStatus;
   progress: number;
   statusMessage: string | null;
@@ -158,12 +157,6 @@ export interface LoginRequest {
   token: string;
 }
 
-export interface TokenResponse {
-  access_token: string;
-  token_type: string;
-  user: User;
-}
-
 // Extended token response with refresh token
 export interface TokenPairResponse {
   access_token: string;
@@ -171,21 +164,6 @@ export interface TokenPairResponse {
   token_type: string;
   expires_in: number;  // Access token expiration in seconds
   user: User;
-}
-
-// Session types for session management
-export interface Session {
-  id: number;
-  device_info: string | null;
-  ip_address: string | null;
-  created_at: string;
-  last_used_at: string | null;
-  is_current: boolean;
-}
-
-export interface SessionListResponse {
-  sessions: Session[];
-  total: number;
 }
 
 // Rate limit error response
@@ -490,12 +468,6 @@ export interface BackupData {
   metadata: BackupMetadata;
   categories: CategoryExport[];
   poses: PoseExport[];
-}
-
-export interface ImportOptions {
-  duplicate_handling: DuplicateHandling;
-  import_categories: boolean;
-  import_poses: boolean;
 }
 
 export interface ImportItemResult {

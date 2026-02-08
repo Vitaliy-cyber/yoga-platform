@@ -61,7 +61,6 @@ services:
       - APP_MODE=dev
       - DATABASE_URL=postgresql://yoga_user:yoga_pass@db:5432/yoga_db
       - SECRET_KEY=dev-secret-key-change-me
-      - ENABLE_AI_GENERATION=${ENABLE_AI_GENERATION:-true}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       # S3/MinIO configuration (identical to prod setup)
       - STORAGE_BACKEND=s3
@@ -73,7 +72,6 @@ services:
       - S3_PUBLIC_URL=http://localhost:9000
     volumes:
       - ./backend:/app
-      - ./ai/models:/app/ai/models
     ports:
       - "8000:8000"
     depends_on:

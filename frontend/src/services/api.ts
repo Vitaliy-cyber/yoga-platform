@@ -34,7 +34,6 @@ import type {
   SequencePoseCreate,
   SequencePoseUpdate,
   SequenceUpdate,
-  SessionListResponse,
   TokenPairResponse,
   User,
   UserUpdate,
@@ -165,6 +164,57 @@ export const getImageUrl = (
   return getImageProxyUrl(poseId, imageType);
 };
 
+type TransientRetryError = Error & {
+  isRateLimited?: boolean;
+  retryAfter?: number;
+  status?: number;
+};
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+const getTransientStatusCode = (error: unknown): number | undefined => {
+  const anyErr = error as TransientRetryError;
+  if (axios.isAxiosError(error)) {
+    return error.response?.status;
+  }
+  return anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
+};
+
+const getTransientRetryDelayMs = (error: unknown, attempt: number): number => {
+  const anyErr = error as TransientRetryError;
+  const statusCode = getTransientStatusCode(error);
+  const retryAfterMs =
+    statusCode === 429 &&
+    anyErr?.isRateLimited &&
+    typeof anyErr.retryAfter === "number"
+      ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
+      : null;
+  const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
+  return Math.min(retryAfterMs ?? backoffMs, 10_000);
+};
+
+const withTransientRetry = async <T>(
+  operation: () => Promise<T>,
+  maxAttempts: number = 5
+): Promise<T> => {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const statusCode = getTransientStatusCode(error);
+      const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
+      if (!isTransient || attempt >= maxAttempts - 1) {
+        throw error;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(getTransientRetryDelayMs(error, attempt));
+    }
+  }
+
+  throw new Error("Transient retry loop exhausted");
+};
+
 /**
  * Fetch a signed URL for an image that can be used in <img> tags.
  * The signed URL includes HMAC signature and expiration, not the actual JWT token.
@@ -178,44 +228,20 @@ export const getSignedImageUrl = async (
   imageType: 'schema' | 'photo' | 'muscle_layer' | 'skeleton_layer',
   options: { allowProxyFallback?: boolean } = {}
 ): Promise<string> => {
-  const maxAttempts = 5;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try {
-      const response = await api.get<{ signed_url: string }>(
+  try {
+    const response = await withTransientRetry(() =>
+      api.get<{ signed_url: string }>(
         `${API_V1_PREFIX}/poses/${poseId}/image/${imageType}/signed-url`
-      );
-      return ensureHttpsIfNeeded(response.data.signed_url);
-    } catch (error) {
-      const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
-      const statusCode = axios.isAxiosError(error)
-        ? error.response?.status
-        : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
-      const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
-
-      if (isTransient && attempt < maxAttempts - 1) {
-        const retryAfterMs =
-          statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
-            ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
-            : null;
-        const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
-        const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
-        // eslint-disable-next-line no-await-in-loop
-        await new Promise((r) => setTimeout(r, delayMs));
-        continue;
-      }
-
-      logger.warn(`Failed to get signed URL for pose ${poseId} ${imageType}:`, error);
-      if (options.allowProxyFallback) {
-        return getImageProxyUrl(poseId, imageType);
-      }
-      throw error;
+      )
+    );
+    return ensureHttpsIfNeeded(response.data.signed_url);
+  } catch (error) {
+    logger.warn(`Failed to get signed URL for pose ${poseId} ${imageType}:`, error);
+    if (options.allowProxyFallback) {
+      return getImageProxyUrl(poseId, imageType);
     }
+    throw error;
   }
-  // Unreachable, but TS wants a return.
-  if (options.allowProxyFallback) {
-    return getImageProxyUrl(poseId, imageType);
-  }
-  throw new Error("Failed to get signed image URL");
 };
 
 // Test-only exports (kept under a stable name to avoid accidental production usage)
@@ -970,6 +996,60 @@ const createAbortError = (): Error => {
   return abortError;
 };
 
+const inFlightRequests = new Map<string, Promise<unknown>>();
+
+const coalesceInFlight = <T>(
+  key: string,
+  factory: () => Promise<T>,
+): Promise<T> => {
+  const existing = inFlightRequests.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  const requestPromise = factory().finally(() => {
+    if (inFlightRequests.get(key) === requestPromise) {
+      inFlightRequests.delete(key);
+    }
+  });
+
+  inFlightRequests.set(key, requestPromise as Promise<unknown>);
+  return requestPromise;
+};
+
+const waitForPromiseWithAbort = <T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> => {
+  if (!signal) {
+    return promise;
+  }
+
+  if (signal.aborted) {
+    return Promise.reject(createAbortError());
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(createAbortError());
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+};
+
 // Error handling helper
 const handleError = (error: AxiosError<ApiError>): never => {
   if (isAbortRequestError(error)) {
@@ -1064,8 +1144,16 @@ const handleBlobError = async (error: AxiosError): Promise<never> => {
 export const categoriesApi = {
   getAll: async (signal?: AbortSignal): Promise<Category[]> => {
     try {
-      const response = await api.get<Category[]>(`${API_V1_PREFIX}/categories`, { signal });
-      return response.data;
+      const requestPromise = coalesceInFlight<Category[]>(
+        "categories:getAll",
+        async () => {
+          const response = await api.get<Category[]>(`${API_V1_PREFIX}/categories`, {
+            signal: undefined,
+          });
+          return response.data;
+        },
+      );
+      return await waitForPromiseWithAbort(requestPromise, signal);
     } catch (error) {
       if (isAbortRequestError(error)) {
         throw createAbortError();
@@ -1185,11 +1273,20 @@ export const posesApi = {
     }
   },
 
-  getById: async (id: number): Promise<Pose> => {
+  getById: async (id: number, signal?: AbortSignal): Promise<Pose> => {
     try {
-      const response = await api.get<Pose>(`${API_V1_PREFIX}/poses/${id}`);
-      return response.data;
+      const requestPromise = coalesceInFlight<Pose>(
+        `poses:getById:${id}`,
+        async () => {
+          const response = await api.get<Pose>(`${API_V1_PREFIX}/poses/${id}`);
+          return response.data;
+        },
+      );
+      return await waitForPromiseWithAbort(requestPromise, signal);
     } catch (error) {
+      if (isAbortRequestError(error)) {
+        throw createAbortError();
+      }
       throw handleError(error as AxiosError<ApiError>);
     }
   },
@@ -1278,40 +1375,26 @@ export const generateApi = {
    * Генерація зображень з схеми пози
    * Пайплайн: Схема → Фото → М'язи
    */
-  generate: async (file: File, additionalNotes?: string): Promise<GenerateResponse> => {
-    const maxAttempts = 5;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      try {
-        const formData = new FormData();
-        formData.append('schema_file', file);
-        if (additionalNotes?.trim()) {
-          formData.append('additional_notes', additionalNotes);
-        }
-
-        const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData);
-        return response.data;
-      } catch (error) {
-        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
-        const statusCode = axios.isAxiosError(error)
-          ? error.response?.status
-          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
-        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
-        if (isTransient && attempt < maxAttempts - 1) {
-          const retryAfterMs =
-            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
-              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
-              : null;
-          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
-          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise((r) => setTimeout(r, delayMs));
-          continue;
-        }
-        throw handleError(error as AxiosError<ApiError>);
+  generate: async (
+    file: File,
+    additionalNotes?: string,
+    generateMuscles: boolean = true
+  ): Promise<GenerateResponse> => {
+    try {
+      const formData = new FormData();
+      formData.append('schema_file', file);
+      formData.append('generate_muscles', String(Boolean(generateMuscles)));
+      if (additionalNotes?.trim()) {
+        formData.append('additional_notes', additionalNotes);
       }
+
+      const response = await withTransientRetry(() =>
+        api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData)
+      );
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
     }
-    // Unreachable, but TS wants a return.
-    throw new Error("Failed to start generation");
   },
 
   /**
@@ -1322,124 +1405,84 @@ export const generateApi = {
     schemaFile?: File;
     referencePhoto: File;
     additionalNotes?: string;
+    generateMuscles?: boolean;
   }): Promise<GenerateResponse> => {
-    const maxAttempts = 5;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      try {
-        const formData = new FormData();
+    try {
+      const formData = new FormData();
 
-        // Primary source - use schema if available, otherwise reference photo.
-        // NOTE: Backend currently accepts only `schema_file` (+ optional `additional_notes`).
-        // We intentionally do NOT upload `reference_photo` to avoid unnecessary payload
-        // (and potential 413 / proxy body-size limits) until the backend supports it.
-        if (options.schemaFile) {
-          formData.append('schema_file', options.schemaFile);
-        } else {
-          // No schema - use reference photo as schema
-          formData.append('schema_file', options.referencePhoto);
-        }
-
-        if (options.additionalNotes?.trim()) {
-          formData.append('additional_notes', options.additionalNotes);
-        }
-
-        const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData);
-        return response.data;
-      } catch (error) {
-        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
-        const statusCode = axios.isAxiosError(error)
-          ? error.response?.status
-          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
-        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
-        if (isTransient && attempt < maxAttempts - 1) {
-          const retryAfterMs =
-            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
-              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
-              : null;
-          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
-          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise((r) => setTimeout(r, delayMs));
-          continue;
-        }
-        throw handleError(error as AxiosError<ApiError>);
+      // Primary source - use schema if available, otherwise reference photo.
+      // NOTE: Backend currently accepts only `schema_file` (+ optional `additional_notes`).
+      // We intentionally do NOT upload `reference_photo` to avoid unnecessary payload
+      // (and potential 413 / proxy body-size limits) until the backend supports it.
+      formData.append('schema_file', options.schemaFile ?? options.referencePhoto);
+      formData.append(
+        'generate_muscles',
+        String(options.generateMuscles !== false)
+      );
+      if (options.additionalNotes?.trim()) {
+        formData.append('additional_notes', options.additionalNotes);
       }
+
+      const response = await withTransientRetry(() =>
+        api.post<GenerateResponse>(`${API_V1_PREFIX}/generate`, formData)
+      );
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
     }
-    // Unreachable, but TS wants a return.
-    throw new Error("Failed to start regeneration");
   },
 
   /**
    * Генерація зображень з існуючої схеми пози (server-side fetch)
    * Обходить CORS проблеми - сервер сам завантажує схему
    */
-  generateFromPose: async (poseId: number, additionalNotes?: string): Promise<GenerateResponse> => {
-    const maxAttempts = 5;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      try {
-        // Always send an object body (even empty) to ensure Content-Type: application/json is set
-        const body = additionalNotes?.trim() ? { additional_notes: additionalNotes } : {};
-        const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate/from-pose/${poseId}`, body);
-        return response.data;
-      } catch (error) {
-        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
-        const statusCode = axios.isAxiosError(error)
-          ? error.response?.status
-          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
-        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
-        if (isTransient && attempt < maxAttempts - 1) {
-          const retryAfterMs =
-            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
-              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
-              : null;
-          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
-          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise((r) => setTimeout(r, delayMs));
-          continue;
-        }
-        throw handleError(error as AxiosError<ApiError>);
+  generateFromPose: async (
+    poseId: number,
+    additionalNotes?: string,
+    generateMuscles: boolean = true
+  ): Promise<GenerateResponse> => {
+    try {
+      // Always send an object body (even empty) to ensure Content-Type: application/json is set
+      const body: { additional_notes?: string; generate_muscles: boolean } = {
+        generate_muscles: generateMuscles,
+      };
+      if (additionalNotes?.trim()) {
+        body.additional_notes = additionalNotes;
       }
+      const response = await withTransientRetry(() =>
+        api.post<GenerateResponse>(`${API_V1_PREFIX}/generate/from-pose/${poseId}`, body)
+      );
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
     }
-    // Unreachable, but TS wants a return.
-    throw new Error("Failed to start generation");
   },
 
   /**
    * Генерація зображень з текстового опису пози
    * Не потребує завантаження зображення - AI генерує з опису
    */
-  generateFromText: async (description: string, additionalNotes?: string): Promise<GenerateResponse> => {
-    const maxAttempts = 5;
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      try {
-        const body: { description: string; additional_notes?: string } = { description };
-        if (additionalNotes?.trim()) {
-          body.additional_notes = additionalNotes;
-        }
-        const response = await api.post<GenerateResponse>(`${API_V1_PREFIX}/generate/from-text`, body);
-        return response.data;
-      } catch (error) {
-        const anyErr = error as unknown as Error & { isRateLimited?: boolean; retryAfter?: number; status?: number };
-        const statusCode = axios.isAxiosError(error)
-          ? error.response?.status
-          : anyErr?.status ?? (anyErr?.isRateLimited ? 429 : undefined);
-        const isTransient = statusCode === 409 || statusCode === 429 || statusCode === 503;
-        if (isTransient && attempt < maxAttempts - 1) {
-          const retryAfterMs =
-            statusCode === 429 && anyErr?.isRateLimited && typeof anyErr.retryAfter === "number"
-              ? Math.max(250, Math.floor(anyErr.retryAfter * 1000))
-              : null;
-          const backoffMs = Math.min(100 * (2 ** attempt), 1500) + Math.floor(Math.random() * 100);
-          const delayMs = Math.min(retryAfterMs ?? backoffMs, 10_000);
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise((r) => setTimeout(r, delayMs));
-          continue;
-        }
-        throw handleError(error as AxiosError<ApiError>);
+  generateFromText: async (
+    description: string,
+    additionalNotes?: string,
+    generateMuscles: boolean = true
+  ): Promise<GenerateResponse> => {
+    try {
+      const body: {
+        description: string;
+        additional_notes?: string;
+        generate_muscles: boolean;
+      } = { description, generate_muscles: generateMuscles };
+      if (additionalNotes?.trim()) {
+        body.additional_notes = additionalNotes;
       }
+      const response = await withTransientRetry(() =>
+        api.post<GenerateResponse>(`${API_V1_PREFIX}/generate/from-text`, body)
+      );
+      return response.data;
+    } catch (error) {
+      throw handleError(error as AxiosError<ApiError>);
     }
-    throw new Error("Failed to start generation");
   },
 
   getStatus: async (taskId: string): Promise<GenerateResponse> => {
@@ -1537,8 +1580,10 @@ export const authApi = {
 
   getMe: async (): Promise<User> => {
     try {
-      const response = await api.get<User>(`${API_V1_PREFIX}/auth/me`);
-      return response.data;
+      return await coalesceInFlight<User>("auth:getMe", async () => {
+        const response = await api.get<User>(`${API_V1_PREFIX}/auth/me`);
+        return response.data;
+      });
     } catch (error) {
       throw handleError(error as AxiosError<ApiError>);
     }
@@ -1553,22 +1598,6 @@ export const authApi = {
     }
   },
 
-  getSessions: async (): Promise<SessionListResponse> => {
-    try {
-      const response = await api.get<SessionListResponse>(`${API_V1_PREFIX}/auth/sessions`);
-      return response.data;
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
-    }
-  },
-
-  revokeSession: async (sessionId: number): Promise<void> => {
-    try {
-      await api.delete(`${API_V1_PREFIX}/auth/sessions/${sessionId}`);
-    } catch (error) {
-      throw handleError(error as AxiosError<ApiError>);
-    }
-  },
 };
 
 // === Compare API ===

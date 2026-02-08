@@ -8,7 +8,6 @@ import io
 import json
 import logging
 import re
-import unicodedata
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -31,7 +30,11 @@ from schemas.export import (
     MuscleExport,
     PoseExport,
 )
+from schemas.validators import ensure_utf8_encodable_deep, strip_invisible_edges
 from services.auth import get_current_user
+from services.csv_security import strip_csv_formula_guard
+from services.generation_task_utils import clamp_activation_level
+from services.image_validation import MAX_UPLOAD_SIZE_BYTES
 from sqlalchemy import and_, func, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/import", tags=["import"])
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = MAX_UPLOAD_SIZE_BYTES
 CHUNK_SIZE = 64 * 1024  # 64KB chunks for streaming file reads
 
 # Prevent extremely deep JSON from crashing validation / encoding and leaking 500s.
@@ -51,50 +54,6 @@ MAX_JSON_NESTING_DEPTH = 200
 # Under heavy Playwright atomic stress we can see transient SQLite "database is locked"
 # errors. A few extra retries dramatically reduces flakiness without masking real 5xx bugs.
 MAX_RETRY_ATTEMPTS = 8
-
-# CSV injection protection characters (formula triggers).
-# Export prefixes these with an apostrophe; import should reverse that when safe.
-CSV_INJECTION_CHARS = ("=", "+", "-", "@")
-
-
-def _strip_csv_formula_guard(value: str) -> str:
-    """
-    Remove CSV formula-guard apostrophes when safe.
-
-    Export prefixes fields that start with formula triggers (=, +, -, @) with
-    a single quote to prevent CSV injection. During import, strip that guard
-    so round-trips preserve original values. If the original value itself
-    started with an apostrophe before a formula trigger (e.g., "'=2+2"),
-    export adds a second apostrophe; in that case, drop only one.
-    """
-    if not isinstance(value, str) or not value.startswith("'"):
-        return value
-
-    # Handle escaped leading apostrophe (double apostrophe + formula trigger).
-    if value.startswith("''"):
-        idx = 2
-        while idx < len(value):
-            ch = value[idx]
-            if ch.isspace() or unicodedata.category(ch) == "Cf":
-                idx += 1
-                continue
-            break
-        if idx < len(value) and value[idx] in CSV_INJECTION_CHARS:
-            return value[1:]
-
-    idx = 1
-    while idx < len(value):
-        ch = value[idx]
-        if ch.isspace() or unicodedata.category(ch) == "Cf":
-            idx += 1
-            continue
-        break
-
-    if idx < len(value) and value[idx] in CSV_INJECTION_CHARS:
-        return value[1:]
-
-    return value
-
 
 def parse_json_upload_bytes(content: bytes) -> object:
     """
@@ -124,46 +83,13 @@ def parse_json_upload_bytes(content: bytes) -> object:
             detail="Invalid JSON",
         )
 
-    def _ensure_utf8_encodable(value: object) -> None:
-        """
-        Reject JSON payloads that contain unpaired surrogates / non-UTF8-encodable text.
-
-        Attack class: JSON allows \\uD800 escapes; Python will materialize them as
-        unpaired surrogates. If we persist such strings, later JSON responses can
-        crash while encoding to UTF-8 (500).
-        """
-        stack: List[Tuple[object, int]] = [(value, 0)]
-        while stack:
-            cur, depth = stack.pop()
-            if depth > MAX_JSON_NESTING_DEPTH:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="JSON nesting too deep.",
-                )
-
-            if cur is None:
-                continue
-            if isinstance(cur, (int, float, bool)):
-                continue
-            if isinstance(cur, str):
-                try:
-                    cur.encode("utf-8")
-                except UnicodeEncodeError:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Invalid Unicode characters in JSON file.",
-                    )
-                continue
-            if isinstance(cur, list):
-                stack.extend((v, depth + 1) for v in cur)
-                continue
-            if isinstance(cur, dict):
-                for k, v in cur.items():
-                    stack.append((k, depth + 1))
-                    stack.append((v, depth + 1))
-                continue
-
-    _ensure_utf8_encodable(parsed)
+    try:
+        ensure_utf8_encodable_deep(parsed, max_depth=MAX_JSON_NESTING_DEPTH)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
     return parsed
 
 
@@ -368,28 +294,6 @@ def _summarize_validation_error(error: ValidationError, max_len: int = 220) -> s
     return summary
 
 
-def _strip_invisible_edges(value: str) -> str:
-    """
-    Strip leading/trailing whitespace and Unicode format characters (Cf).
-
-    This prevents visually-identical names like "\\u200bYoga" or "\\ufeffYoga"
-    from bypassing uniqueness and confusing users.
-    """
-    if not isinstance(value, str):
-        return value
-    start = 0
-    end = len(value)
-    while start < end and (
-        value[start].isspace() or unicodedata.category(value[start]) == "Cf"
-    ):
-        start += 1
-    while end > start and (
-        value[end - 1].isspace() or unicodedata.category(value[end - 1]) == "Cf"
-    ):
-        end -= 1
-    return value[start:end]
-
-
 async def get_or_create_category(
     db: AsyncSession,
     user_id: int,
@@ -402,13 +306,13 @@ async def get_or_create_category(
     Returns tuple of (category, was_created).
     """
     # Normalize inputs to match Category schema behavior.
-    category_name = _strip_invisible_edges(category_name)
+    category_name = strip_invisible_edges(category_name)
     if not category_name:
         raise ValueError("Category name cannot be blank")
     if len(category_name) > 100:
         raise ValueError("Category name too long")
     if isinstance(description, str):
-        description = _strip_invisible_edges(description) or None
+        description = strip_invisible_edges(description) or None
 
     # Check if category exists (Unicode-aware, case-insensitive).
     result = await db.execute(select(Category).where(Category.user_id == user_id))
@@ -465,7 +369,7 @@ async def get_muscle_by_name(db: AsyncSession, muscle_name: str) -> Optional[Mus
     # If CSV export prefixed a leading apostrophe to neutralize formula injection,
     # allow a safe fallback lookup without that prefix so round-trips preserve muscles.
     if isinstance(muscle_name, str):
-        fallback_name = _strip_csv_formula_guard(muscle_name)
+        fallback_name = strip_csv_formula_guard(muscle_name)
         if fallback_name != muscle_name:
             result = await db.execute(
                 select(Muscle).where(func.lower(Muscle.name) == fallback_name.lower())
@@ -522,11 +426,6 @@ async def _category_exists_casefold(
         if existing.casefold() == target:
             return True
     return False
-
-
-def _clamp_activation_level(level: int) -> int:
-    """Clamp activation level to valid 0-100 range."""
-    return max(0, min(100, level))
 
 
 async def import_single_pose(
@@ -591,7 +490,7 @@ async def import_single_pose(
             # Handle category
             category_id = None
             if pose_data.category_name:
-                normalized_category_name = _strip_invisible_edges(pose_data.category_name)
+                normalized_category_name = strip_invisible_edges(pose_data.category_name)
                 if not normalized_category_name:
                     category_id = None
                 else:
@@ -623,7 +522,7 @@ async def import_single_pose(
                     muscle = await get_muscle_by_name(db, muscle_data.name)
                     if muscle:
                         # Clamp activation level to 0-100 range
-                        clamped_level = _clamp_activation_level(
+                        clamped_level = clamp_activation_level(
                             muscle_data.activation_level
                         )
                         pose_muscle = PoseMuscle(
@@ -661,7 +560,7 @@ async def import_single_pose(
                 muscle = await get_muscle_by_name(db, muscle_data.name)
                 if muscle:
                     # Clamp activation level to 0-100 range
-                    clamped_level = _clamp_activation_level(
+                    clamped_level = clamp_activation_level(
                         muscle_data.activation_level
                     )
                     pose_muscle = PoseMuscle(
@@ -820,7 +719,7 @@ def parse_muscles_from_csv(muscles_str: str) -> List[MuscleExport]:
         if level_part is not None:
             try:
                 level = int(_unescape_token(level_part).strip())
-                level = max(0, min(100, level))  # Clamp to 0-100
+                level = clamp_activation_level(level)
                 muscles.append(
                     MuscleExport(
                         name=name,
@@ -848,7 +747,7 @@ def _csv_cell(value: Optional[str], *, required: bool = False) -> str:
         return ""
     if not isinstance(value, str):
         value = str(value)
-    return _strip_csv_formula_guard(value).strip()
+    return strip_csv_formula_guard(value).strip()
 
 
 @router.post("/poses/json", response_model=ImportResult)
@@ -1135,7 +1034,7 @@ async def import_backup(
                 category, created = await get_or_create_category(
                     db, current_user.id, cat_data.name, cat_data.description
                 )
-                category_cache[_strip_invisible_edges(cat_data.name).casefold()] = category
+                category_cache[strip_invisible_edges(cat_data.name).casefold()] = category
 
                 results.append(
                     ImportItemResult(
@@ -1258,7 +1157,7 @@ async def preview_import_json(
     for i, cat_dict in enumerate(categories_data):
         try:
             cat = CategoryExport(**cat_dict)
-            normalized_name = _strip_invisible_edges(cat.name)
+            normalized_name = strip_invisible_edges(cat.name)
             if not normalized_name or len(normalized_name) > 100:
                 validation_errors.append(f"Category #{i + 1}: Invalid format")
                 continue

@@ -39,7 +39,12 @@ from services.auth import (
     get_current_user,
     verify_signed_image_request,
 )
+from services.generation_task_utils import (
+    clamp_activation_level,
+    parse_analyzed_muscles_json,
+)
 from services.image_validation import (
+    MAX_UPLOAD_SIZE_BYTES,
     extension_for_image_mime_type,
     normalize_image_mime_type,
     sniff_image_mime_type,
@@ -47,14 +52,14 @@ from services.image_validation import (
 )
 from services.storage import LocalStorage, S3Storage, get_storage
 from sqlalchemy import and_, delete, desc, func, or_, select
-from sqlalchemy.exc import IntegrityError, MissingGreenlet, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.exc import StaleDataError
 
 router = APIRouter(prefix="/poses", tags=["poses"])
 
-MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_BYTES
 
 def _parse_trusted_proxy_networks() -> List[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     settings = config.get_settings()
@@ -1145,8 +1150,6 @@ async def apply_generation_to_pose(
     Use this after generating from an existing pose to update it
     with the generation results instead of creating a new pose.
     """
-    import json
-
     from models.generation_task import GenerationTask
 
     # IMPORTANT: Don't rely on ORM attributes after rollback(), since SQLAlchemy
@@ -1205,37 +1208,10 @@ async def apply_generation_to_pose(
     task_additional_notes = task.additional_notes or ""
     task_analyzed_muscles_json = task.analyzed_muscles_json
 
-    def _clamp_activation_level(raw: object) -> int:
-        try:
-            level_int = int(raw)  # type: ignore[arg-type]
-        except Exception:
-            return 50
-        if level_int < 0:
-            return 0
-        if level_int > 100:
-            return 100
-        return level_int
-
-    muscles_data_for_apply = None
-    if task_analyzed_muscles_json:
-        try:
-            parsed = json.loads(task_analyzed_muscles_json)
-            if isinstance(parsed, list):
-                sanitized: list[dict[str, object]] = []
-                for m in parsed:
-                    if not isinstance(m, dict):
-                        continue
-                    name = m.get("name")
-                    if not isinstance(name, str):
-                        continue
-                    level = _clamp_activation_level(m.get("activation_level", 50))
-                    sanitized.append({"name": name, "activation_level": level})
-                    # Defensive cap: never allow unbounded rows from corrupted generator output.
-                    if len(sanitized) >= 200:
-                        break
-                muscles_data_for_apply = sanitized or None
-        except (json.JSONDecodeError, TypeError):
-            muscles_data_for_apply = None
+    muscles_data_for_apply = parse_analyzed_muscles_json(task_analyzed_muscles_json)
+    if muscles_data_for_apply:
+        # Defensive cap: never allow unbounded rows from corrupted generator output.
+        muscles_data_for_apply = muscles_data_for_apply[:200]
 
     async def load_pose_for_apply() -> Pose:
         query = (
@@ -1294,7 +1270,7 @@ async def apply_generation_to_pose(
                     muscle = muscles_by_name.get(name.lower())
                     if not muscle:
                         continue
-                    level = _clamp_activation_level(m.get("activation_level", 50))
+                    level = clamp_activation_level(m.get("activation_level", 50))
                     prev = dedup_by_muscle_id.get(muscle.id)
                     if prev is None or level > prev:
                         dedup_by_muscle_id[muscle.id] = level
@@ -1329,7 +1305,7 @@ async def apply_generation_to_pose(
                         for pm in (pose_to_update.pose_muscles or [])
                     )
                     will_change_muscles = incoming_pairs != current_pairs
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as e:
+            except (KeyError, TypeError, ValueError, AttributeError) as e:
                 logger.warning(f"Failed to prepare analyzed muscles for apply-generation: {e}")
                 planned_pose_muscles = None
                 will_change_muscles = False

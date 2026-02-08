@@ -9,7 +9,7 @@ import { cn } from "../../lib/utils";
 import type { Pose, PoseListItem } from "../../types";
 import { useI18n } from "../../i18n";
 import { logger } from "../../lib/logger";
-import { generationSteps, getStepState } from "./generation-steps";
+import { getGenerationSteps, getStepState } from "./generation-steps";
 import { usePoseImageSrc } from "../../hooks/usePoseImageSrc";
 import {
   selectLatestTaskForPose,
@@ -61,6 +61,8 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
   const progress = generationTask?.progress ?? 0;
   const statusMessage = generationTask?.statusMessage;
   const taskError = generationTask?.errorMessage;
+  const taskGenerateMuscles = generationTask?.generateMuscles ?? generateMuscles;
+  const generationSteps = getGenerationSteps(taskGenerateMuscles);
 
   // Track if generation is fully complete (100%)
   const isComplete = progress >= 100;
@@ -180,6 +182,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
           mode: "generate",
           file: uploadedFile,
           additionalNotes: notes,
+          generateMuscles,
         });
       } else if (pose.schema_path) {
         // Use server-side fetch to avoid CORS issues
@@ -188,6 +191,7 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
           poseName: pose.name,
           mode: "generate",
           additionalNotes: notes,
+          generateMuscles,
         });
       } else {
         setLocalError(t("generate.error_failed"));
@@ -408,13 +412,10 @@ export const GenerateModal: React.FC<GenerateModalProps> = ({
             <div className="space-y-3">
               {generationSteps.map((step, index) => {
                 const Icon = step.icon;
-                const stepState = getStepState(index, progress, isComplete);
+                const stepState = getStepState(generationSteps, index, progress, isComplete);
                 const isActive = stepState === "active";
                 const isStepComplete = stepState === "complete";
                 const isPending = stepState === "pending";
-
-                // Hide muscles step if not generating muscles
-                if (step.id === "generating_muscles" && !generateMuscles) return null;
 
                 return (
                   <div

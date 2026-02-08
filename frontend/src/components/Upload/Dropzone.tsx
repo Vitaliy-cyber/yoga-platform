@@ -5,6 +5,7 @@ import { Upload, X, FileImage, CheckCircle, AlertTriangle } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useI18n } from "../../i18n";
 import { fadeScaleIn } from "../../lib/animation-variants";
+import { MAX_UPLOAD_SIZE_BYTES } from "../../lib/constants";
 
 interface DropzoneProps {
   onFileSelect: (file: File) => void;
@@ -19,7 +20,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({
   selectedFile,
   onClear,
   accept = { "image/*": [".jpeg", ".jpg", ".png", ".webp"] },
-  maxSize = 10 * 1024 * 1024,
+  maxSize = MAX_UPLOAD_SIZE_BYTES,
 }) => {
   const [preview, setPreview] = useState<string | null>(null);
   const { t } = useI18n();

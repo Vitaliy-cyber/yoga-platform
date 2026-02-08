@@ -8,6 +8,7 @@ from PIL import Image, UnidentifiedImageError
 logger = logging.getLogger(__name__)
 
 ALLOWED_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
+MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 MIN_IMAGE_WIDTH = 64
 MIN_IMAGE_HEIGHT = 64
 MAX_IMAGE_WIDTH = 8192

@@ -28,6 +28,12 @@ EXCLUDED_PATHS = {
     "/favicon.ico",
 }
 
+# Prefixes to exclude from logging (high-frequency polling endpoints)
+EXCLUDED_PREFIXES = (
+    "/api/v1/generate/status/",
+    "/api/generate/status/",
+)
+
 # Maximum body size to log (to avoid logging large file uploads)
 MAX_BODY_LOG_SIZE = 1024  # 1KB
 
@@ -52,6 +58,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         if request.url.path in EXCLUDED_PATHS:
             return await call_next(request)
 
+        # Skip excluded prefix paths
+        if any(request.url.path.startswith(prefix) for prefix in EXCLUDED_PREFIXES):
+            return await call_next(request)
+
         # Skip static file paths
         if request.url.path.startswith("/storage/"):
             return await call_next(request)
@@ -68,7 +78,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         query_params = dict(request.query_params)
         client_ip = request.client.host if request.client else "unknown"
 
-        # Log incoming request
+        # Build request descriptor (single-line logging on completion/error).
         log_parts = [
             f"[{request_id}]",
             f"{method} {path}",
@@ -83,8 +93,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             log_parts.append(f"params={sanitized_params}")
 
         log_parts.append(f"client={client_ip}")
-
-        logger.info(" ".join(log_parts))
+        request_desc = " ".join(log_parts)
 
         # Process request
         try:
@@ -93,7 +102,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             # Log exception
             duration = time.time() - start_time
             logger.error(
-                f"[{request_id}] {method} {path} - ERROR after {duration:.3f}s: {e}"
+                f"{request_desc} - ERROR ({duration:.3f}s): {e}"
             )
             raise
 
@@ -109,11 +118,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             log_func = logger.error
         elif status_class == 4:
             log_func = logger.warning
+        elif method == "GET":
+            # Successful read traffic is the noisiest in dev; keep it at debug.
+            log_func = logger.debug
         else:
             log_func = logger.info
 
         log_func(
-            f"[{request_id}] {method} {path} - {status_code} ({duration:.3f}s)"
+            f"{request_desc} - {status_code} ({duration:.3f}s)"
         )
 
         # Add request ID to response headers for debugging
@@ -131,6 +143,8 @@ def configure_request_logging(log_level: str = "INFO") -> None:
     """
     request_logger = logging.getLogger("api.requests")
     request_logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+    # Prevent duplicate emission via root logger handlers.
+    request_logger.propagate = False
 
     # Create a handler if none exists
     if not request_logger.handlers:

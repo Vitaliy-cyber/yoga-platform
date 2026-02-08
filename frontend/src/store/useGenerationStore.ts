@@ -21,6 +21,7 @@ interface StartFromPoseParams {
   poseName: string;
   mode: GenerationMode;
   additionalNotes?: string;
+  generateMuscles?: boolean;
 }
 
 interface StartFromUploadParams extends StartFromPoseParams {
@@ -64,6 +65,7 @@ const createTaskRecord = (
   poseId: number,
   poseName: string,
   mode: GenerationMode,
+  generateMuscles: boolean,
   status: BackgroundGenerationTask["status"],
   progress: number,
   statusMessage: string | null,
@@ -72,6 +74,7 @@ const createTaskRecord = (
   poseId,
   poseName,
   mode,
+  generateMuscles,
   status,
   progress,
   statusMessage,
@@ -356,6 +359,34 @@ export const useGenerationStore = create<GenerationStoreState>()(
         return task;
       };
 
+      const registerStartedTask = (
+        response: {
+          task_id: string;
+          status: BackgroundGenerationTask["status"];
+          progress: number;
+          status_message: string | null;
+        },
+        params: {
+          poseId: number;
+          poseName: string;
+          mode: GenerationMode;
+          generateMuscles: boolean;
+        }
+      ): string => {
+        const task = createTaskRecord(
+          response.task_id,
+          params.poseId,
+          params.poseName,
+          params.mode,
+          params.generateMuscles,
+          response.status,
+          response.progress,
+          response.status_message,
+        );
+        startTrackingTask(task);
+        return response.task_id;
+      };
+
       return {
         tasks: {},
         taskOrder: [],
@@ -417,19 +448,25 @@ export const useGenerationStore = create<GenerationStoreState>()(
           }
         },
 
-        startFromPose: async ({ poseId, poseName, mode, additionalNotes }) => {
-          const response = await generateApi.generateFromPose(poseId, additionalNotes);
-          const task = createTaskRecord(
-            response.task_id,
+        startFromPose: async ({
+          poseId,
+          poseName,
+          mode,
+          additionalNotes,
+          generateMuscles,
+        }) => {
+          const shouldGenerateMuscles = generateMuscles ?? true;
+          const response = await generateApi.generateFromPose(
+            poseId,
+            additionalNotes,
+            shouldGenerateMuscles
+          );
+          return registerStartedTask(response, {
             poseId,
             poseName,
             mode,
-            response.status,
-            response.progress,
-            response.status_message,
-          );
-          startTrackingTask(task);
-          return response.task_id;
+            generateMuscles: shouldGenerateMuscles,
+          });
         },
 
         startFromUpload: async ({
@@ -438,19 +475,40 @@ export const useGenerationStore = create<GenerationStoreState>()(
           mode,
           file,
           additionalNotes,
+          generateMuscles,
         }) => {
-          const response = await generateApi.generate(file, additionalNotes);
-          const task = createTaskRecord(
-            response.task_id,
+          const shouldGenerateMuscles = generateMuscles ?? true;
+          // Persist the uploaded source image as pose schema first, so the pose
+          // always keeps the latest input reference after generation is applied.
+          const updatedPose = await posesApi.uploadSchema(poseId, file);
+          const appStore = useAppStore.getState();
+          appStore.setPoses(
+            appStore.poses.map((pose) =>
+              pose.id === updatedPose.id
+                ? {
+                    ...pose,
+                    category_id: updatedPose.category_id,
+                    category_name: updatedPose.category_name,
+                    schema_path: updatedPose.schema_path,
+                    version: updatedPose.version,
+                  }
+                : pose,
+            ),
+          );
+          appStore.invalidatePoses();
+          broadcastInvalidation();
+
+          const response = await generateApi.generate(
+            file,
+            additionalNotes,
+            shouldGenerateMuscles
+          );
+          return registerStartedTask(response, {
             poseId,
             poseName,
             mode,
-            response.status,
-            response.progress,
-            response.status_message,
-          );
-          startTrackingTask(task);
-          return response.task_id;
+            generateMuscles: shouldGenerateMuscles,
+          });
         },
 
         startRegenerationUpload: async ({
@@ -460,23 +518,21 @@ export const useGenerationStore = create<GenerationStoreState>()(
           schemaFile,
           referencePhoto,
           additionalNotes,
+          generateMuscles,
         }) => {
+          const shouldGenerateMuscles = generateMuscles ?? true;
           const response = await generateApi.regenerate({
             schemaFile,
             referencePhoto,
             additionalNotes,
+            generateMuscles: shouldGenerateMuscles,
           });
-          const task = createTaskRecord(
-            response.task_id,
+          return registerStartedTask(response, {
             poseId,
             poseName,
             mode,
-            response.status,
-            response.progress,
-            response.status_message,
-          );
-          startTrackingTask(task);
-          return response.task_id;
+            generateMuscles: shouldGenerateMuscles,
+          });
         },
 
         retryApply: async (taskId: string) => {

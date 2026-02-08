@@ -20,7 +20,7 @@ from collections import defaultdict
 from functools import wraps
 from typing import Callable, Dict, List, Optional, Tuple
 
-from config import get_settings
+from config import AppMode, get_settings
 from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
@@ -277,10 +277,14 @@ class RateLimiter:
                 logger.info("Using Redis rate limiter backend")
                 self._backend = RedisRateLimiterBackend(redis_url)
             else:
-                logger.warning(
+                message = (
                     "Using in-memory rate limiter. Rate limits will be lost on restart. "
                     "Set REDIS_URL for production use with multiple instances."
                 )
+                if settings.APP_MODE == AppMode.DEV:
+                    logger.debug(message)
+                else:
+                    logger.warning(message)
                 self._backend = InMemoryRateLimiterBackend()
 
     async def is_allowed(

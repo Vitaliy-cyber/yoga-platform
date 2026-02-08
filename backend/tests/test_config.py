@@ -3,7 +3,7 @@ Tests for application configuration.
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import os
 
 
@@ -229,24 +229,14 @@ class TestJWTSettings:
 
 
 class TestAISettings:
-    """Tests for AI generation settings."""
+    """Tests for Gemini AI settings."""
 
-    def test_ai_enabled_by_default(self):
-        """Test AI generation is enabled by default."""
+    def test_google_api_key_defaults_to_empty(self):
         with patch.dict(os.environ, {}, clear=True):
             from config import Settings
 
             settings = Settings()
-            assert settings.ENABLE_AI_GENERATION is True
-            assert settings.USE_GOOGLE_AI is True
-
-    def test_ai_can_be_disabled(self):
-        """Test AI generation can be disabled."""
-        with patch.dict(os.environ, {"ENABLE_AI_GENERATION": "false"}, clear=True):
-            from config import Settings
-
-            settings = Settings()
-            assert settings.ENABLE_AI_GENERATION is False
+            assert settings.GOOGLE_API_KEY == ""
 
 
 class TestProductionSecurityValidation:

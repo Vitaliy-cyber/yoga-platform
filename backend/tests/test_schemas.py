@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 from schemas.category import CategoryCreate, CategoryResponse, CategoryUpdate
-from schemas.generate import GenerateResponse, GenerateStatus, LayerType
+from schemas.generate import GenerateResponse, GenerateStatus
 from schemas.muscle import MuscleCreate, MuscleResponse, PoseMuscleResponse
 from schemas.pose import PoseCreate, PoseMuscleCreate, PoseResponse, PoseUpdate
 
@@ -210,18 +210,12 @@ class TestGenerateSchemas:
         for status in statuses:
             assert status.value in ["pending", "processing", "completed", "failed"]
 
-    def test_layer_type_values(self):
-        types = [LayerType.PHOTO, LayerType.MUSCLES, LayerType.SKELETON]
-        for layer in types:
-            assert layer.value in ["photo", "muscles", "skeleton"]
-
     def test_generate_response_pending(self):
         schema = GenerateResponse(
             task_id="task-123", status=GenerateStatus.PENDING, progress=0
         )
         assert schema.status == GenerateStatus.PENDING
         assert schema.progress == 0
-        assert schema.result_url is None
 
     def test_generate_response_processing(self):
         schema = GenerateResponse(
@@ -234,10 +228,8 @@ class TestGenerateSchemas:
             task_id="task-789",
             status=GenerateStatus.COMPLETED,
             progress=100,
-            result_url="/generated/result.png",
         )
         assert schema.status == GenerateStatus.COMPLETED
-        assert schema.result_url == "/generated/result.png"
 
     def test_generate_response_failed(self):
         schema = GenerateResponse(

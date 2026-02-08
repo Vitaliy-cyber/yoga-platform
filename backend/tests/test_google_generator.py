@@ -171,7 +171,7 @@ class TestGoogleGeminiGeneratorGenerateImage:
         assert config.kwargs["response_modalities"] == ["TEXT", "IMAGE"]
         image_config = config.kwargs["image_config"]
         assert image_config.kwargs["aspect_ratio"] == "1:1"
-        assert image_config.kwargs["image_size"] == "2K"
+        assert image_config.kwargs["image_size"] == "1K"
         assert config.kwargs["temperature"] == GoogleGeminiGenerator.IMAGE_TEMPERATURE
         assert config.kwargs["top_p"] == GoogleGeminiGenerator.IMAGE_TOP_P
         assert config.kwargs["top_k"] == GoogleGeminiGenerator.IMAGE_TOP_K
@@ -708,14 +708,13 @@ class TestGoogleGeminiGeneratorGenerateAll:
             GoogleGeminiGenerator._initialized = False
 
     @pytest.mark.asyncio
-    async def test_generate_all_from_image_merges_pose_description_with_detected_pose_context(self):
+    async def test_generate_all_from_image_keeps_explicit_pose_description(self):
         with patch("services.google_generator.get_settings") as mock_settings:
             settings = MagicMock()
             settings.GOOGLE_API_KEY = "test-key"
             mock_settings.return_value = settings
 
             from services.google_generator import GoogleGeminiGenerator
-            from services.pose_context import PoseContext
 
             GoogleGeminiGenerator._instance = None
             GoogleGeminiGenerator._initialized = False
@@ -724,6 +723,7 @@ class TestGoogleGeminiGeneratorGenerateAll:
             generator._initialized = True
             generator._analyze_muscles_from_image = AsyncMock(return_value=[])
             generator._is_good_muscle_metrics = MagicMock(return_value=True)
+            generator._describe_pose_geometry = AsyncMock(return_value="AUTO-DESCRIPTION")
 
             mock_img = Image.new("RGB", (256, 256), "green")
             generator._generate_image = AsyncMock(return_value=(mock_img, False))
@@ -733,27 +733,17 @@ class TestGoogleGeminiGeneratorGenerateAll:
             img.save(buffer, format="PNG")
             image_bytes = buffer.getvalue()
 
-            pose_ctx = PoseContext(
-                pose_type="seated",
-                orientation="left-facing",
-                joint_angles={"left_knee": 92.0},
-                landmarks_detected=12,
+            await generator.generate_all_from_image(
+                image_bytes=image_bytes,
+                mime_type="image/png",
+                task_id="task-pose-context",
+                pose_description="Janu Sirsasana",
             )
-            with patch(
-                "services.google_generator.build_pose_context_from_image_bytes",
-                return_value=pose_ctx,
-            ):
-                await generator.generate_all_from_image(
-                    image_bytes=image_bytes,
-                    mime_type="image/png",
-                    task_id="task-pose-context",
-                    pose_description="Janu Sirsasana",
-                )
 
             photo_prompt = generator._generate_image.call_args_list[0].args[0]
             assert "Janu Sirsasana" in photo_prompt
-            assert "Detected pose context" in photo_prompt
-            assert "Pose type: seated" in photo_prompt
+            assert "AUTO-DESCRIPTION" in photo_prompt
+            generator._describe_pose_geometry.assert_awaited_once()
 
             GoogleGeminiGenerator._instance = None
             GoogleGeminiGenerator._initialized = False
@@ -777,25 +767,67 @@ class TestGoogleGeminiGeneratorGenerateAll:
                 task_id="test-task",
             )
 
-            # First call is photo generation: must include reference bytes.
+            # First call is photo generation: uses prepared reference bytes.
             first_call = generator._generate_image.call_args_list[0].kwargs
             assert isinstance(first_call.get("reference_image_bytes"), bytes)
             assert len(first_call.get("reference_image_bytes")) > 0
             assert first_call.get("reference_mime_type") == "image/png"
             assert first_call.get("reference_already_prepared") is True
-            assert first_call.get("include_pose_control") is True
+            assert first_call.get("include_pose_control") is False
             assert isinstance(first_call.get("generation_seed"), int)
 
-            # Muscle generation must also keep the original schema as geometric reference
-            # to keep final photo and muscle outputs aligned for the user.
+            # Muscle generation is conditioned on the generated photo.
             second_call = generator._generate_image.call_args_list[1].kwargs
             assert isinstance(second_call.get("reference_image_bytes"), bytes)
             assert len(second_call.get("reference_image_bytes")) > 0
             assert second_call.get("reference_mime_type") == "image/png"
             assert second_call.get("reference_already_prepared") in (None, False)
-            assert second_call.get("include_pose_control") is True
+            assert second_call.get("include_pose_control") is False
             assert isinstance(second_call.get("generation_seed"), int)
             assert first_call.get("generation_seed") != second_call.get("generation_seed")
+
+            GoogleGeminiGenerator._instance = None
+            GoogleGeminiGenerator._initialized = False
+
+    @pytest.mark.asyncio
+    async def test_generate_all_from_image_auto_generates_pose_description_when_missing(self):
+        with patch("services.google_generator.get_settings") as mock_settings:
+            settings = MagicMock()
+            settings.GOOGLE_API_KEY = "test-key"
+            mock_settings.return_value = settings
+
+            from services.google_generator import GoogleGeminiGenerator
+
+            GoogleGeminiGenerator._instance = None
+            GoogleGeminiGenerator._initialized = False
+
+            generator = GoogleGeminiGenerator()
+            generator._initialized = True
+            generator._client = MagicMock()
+
+            generator._describe_pose_geometry = AsyncMock(
+                return_value="The subject is seated with one leg extended forward."
+            )
+            generator._analyze_muscles_from_image = AsyncMock(return_value=[])
+            generator._is_good_muscle_metrics = MagicMock(return_value=True)
+
+            mock_img = Image.new("RGB", (256, 256), "green")
+            generator._generate_image = AsyncMock(return_value=(mock_img, False))
+
+            img = Image.new("RGB", (128, 128), "red")
+            buffer = BytesIO()
+            img.save(buffer, format="PNG")
+            image_bytes = buffer.getvalue()
+
+            await generator.generate_all_from_image(
+                image_bytes=image_bytes,
+                mime_type="image/png",
+                task_id="task-auto-pose-description",
+            )
+
+            generator._describe_pose_geometry.assert_awaited_once()
+            photo_prompt = generator._generate_image.call_args_list[0].args[0]
+            assert "The subject is seated with one leg extended forward." in photo_prompt
 
             GoogleGeminiGenerator._instance = None
             GoogleGeminiGenerator._initialized = False
@@ -986,6 +1018,7 @@ class TestGoogleGeminiGeneratorGenerateAll:
             first_call = generator._generate_image.call_args_list[0].kwargs
             second_call = generator._generate_image.call_args_list[1].kwargs
             assert first_call["reference_image_bytes"] == prepared_bytes
+            assert first_call["reference_mime_type"] == "image/png"
             assert first_call["reference_already_prepared"] is True
             assert second_call["reference_image_bytes"] != prepared_bytes
             assert second_call.get("reference_already_prepared") in (None, False)
@@ -1081,7 +1114,6 @@ class TestGoogleGeminiGeneratorGenerateAll:
             muscle_prompt = generator._generate_image.call_args_list[1].args[0]
             assert notes in photo_prompt
             assert notes in muscle_prompt
-            assert "ADDITIONAL USER INSTRUCTIONS" in photo_prompt
             assert "ADDITIONAL USER INSTRUCTIONS" in muscle_prompt
 
             GoogleGeminiGenerator._instance = None
@@ -1100,10 +1132,11 @@ class TestGoogleGeminiGeneratorPrompts:
         generator = GoogleGeminiGenerator()
         prompt = generator._build_photo_prompt("warrior pose", None)
 
-        assert "single practitioner" in prompt.lower()
+        assert "performing this yoga pose" in prompt
         assert "studio" in prompt.lower()
         assert "warrior pose" in prompt
-        assert "mirrors the reference diagram precisely" in prompt
+        assert "Match the body position exactly." in prompt
+        assert "white seamless background" in prompt
 
         GoogleGeminiGenerator._instance = None
         GoogleGeminiGenerator._initialized = False
@@ -1190,11 +1223,12 @@ class TestGoogleGeminiGeneratorPromptDetails:
         prompt = generator._build_photo_prompt("warrior pose", None)
 
         assert "warrior pose" in prompt
-        assert "preserving every bend" in prompt
-        assert "Natural body proportions" in prompt
+        assert "performing this yoga pose" in prompt
+        assert "Match the body position exactly." in prompt
 
         prompt_no_desc = generator._build_photo_prompt(None, None)
-        assert "replicates the reference diagram exactly" in prompt_no_desc
+        assert "performing this yoga pose" not in prompt_no_desc
+        assert "Studio photo of a woman performing a yoga pose." in prompt_no_desc
 
         GoogleGeminiGenerator._instance = None
         GoogleGeminiGenerator._initialized = False
@@ -1224,7 +1258,7 @@ class TestGoogleGeminiGeneratorPromptDetails:
         GoogleGeminiGenerator._initialized = False
 
     @pytest.mark.asyncio
-    async def test_generate_all_retries_until_muscle_quality(self):
+    async def test_generate_all_uses_single_shot_generation(self):
         from services.google_generator import GoogleGeminiGenerator
 
         GoogleGeminiGenerator._instance = None
@@ -1233,27 +1267,11 @@ class TestGoogleGeminiGeneratorPromptDetails:
         generator = GoogleGeminiGenerator()
         generator._initialized = True
 
-        bad_img = Image.new("RGB", (100, 100), color="white")
-        good_img = Image.new("RGB", (100, 100), color="white")
-        draw = ImageDraw.Draw(good_img)
-        draw.rectangle([0, 0, 29, 29], fill=(255, 0, 0))
-        draw.rectangle([30, 0, 49, 19], fill=(0, 0, 255))
-        draw.rectangle([0, 90, 15, 95], fill=(0, 0, 0))
-
         photo_img = Image.new("RGB", (100, 100), color="blue")
-
-        async def generate_image_side_effect(*args, **kwargs):
-            call_index = generate_image_side_effect.call_index
-            generate_image_side_effect.call_index += 1
-            if call_index == 0:
-                return photo_img, False
-            if call_index < 3:
-                return bad_img, False
-            return good_img, False
-
-        generate_image_side_effect.call_index = 0
-
-        generator._generate_image = AsyncMock(side_effect=generate_image_side_effect)
+        muscle_img = Image.new("RGB", (100, 100), color="white")
+        generator._generate_image = AsyncMock(
+            side_effect=[(photo_img, False), (muscle_img, False)]
+        )
         generator._analyze_muscles_from_image = AsyncMock(return_value=[])
 
         schema_bytes = BytesIO()
@@ -1264,14 +1282,14 @@ class TestGoogleGeminiGeneratorPromptDetails:
             task_id="task-1",
         )
 
-        assert generator._generate_image.call_count == 4
+        assert generator._generate_image.call_count == 2
         assert result.used_placeholders is False
 
         GoogleGeminiGenerator._instance = None
         GoogleGeminiGenerator._initialized = False
 
     @pytest.mark.asyncio
-    async def test_generate_all_from_image_uses_best_attempt_when_all_quality_checks_fail(self):
+    async def test_generate_all_from_image_single_shot_uses_first_muscle_result(self):
         from services.google_generator import GoogleGeminiGenerator
 
         GoogleGeminiGenerator._instance = None
@@ -1281,30 +1299,14 @@ class TestGoogleGeminiGeneratorPromptDetails:
         generator._initialized = True
 
         photo_img = Image.new("RGB", (100, 100), color="blue")
-        low_quality = Image.new("RGB", (100, 100), color="white")
-        medium_quality = Image.new("RGB", (100, 100), color="white")
-        worse_quality = Image.new("RGB", (100, 100), color="white")
-
-        draw_low = ImageDraw.Draw(low_quality)
-        draw_low.rectangle([0, 0, 10, 10], fill=(120, 80, 80))
-
-        draw_medium = ImageDraw.Draw(medium_quality)
-        draw_medium.rectangle([0, 0, 35, 70], fill=(150, 80, 80))
-        draw_medium.rectangle([40, 0, 70, 60], fill=(80, 95, 150))
-        draw_medium.line([0, 99, 99, 99], fill=(20, 20, 20), width=2)
-
-        draw_worse = ImageDraw.Draw(worse_quality)
-        draw_worse.rectangle([0, 0, 15, 20], fill=(95, 80, 80))
+        single_muscle_result = Image.new("RGB", (100, 100), color="white")
 
         generator._generate_image = AsyncMock(
             side_effect=[
                 (photo_img, False),
-                (low_quality, False),
-                (medium_quality, False),
-                (worse_quality, False),
+                (single_muscle_result, False),
             ]
         )
-        generator._is_good_muscle_metrics = MagicMock(return_value=False)
         generator._analyze_muscles_from_image = AsyncMock(return_value=[])
 
         schema_bytes = BytesIO()
@@ -1316,9 +1318,9 @@ class TestGoogleGeminiGeneratorPromptDetails:
             task_id="task-2",
         )
 
-        assert generator._generate_image.call_count == 4
+        assert generator._generate_image.call_count == 2
         assert result.used_placeholders is False
-        assert result.muscles_bytes == generator._image_to_bytes(medium_quality)
+        assert result.muscles_bytes == generator._image_to_bytes(single_muscle_result)
 
         GoogleGeminiGenerator._instance = None
         GoogleGeminiGenerator._initialized = False

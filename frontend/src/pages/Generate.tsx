@@ -132,7 +132,7 @@ export const Generate: React.FC = () => {
     try {
       if (inputType === "schematic" && uploadedFile) {
         const notes = additionalNotes.trim() ? additionalNotes.trim() : undefined;
-        await generate(uploadedFile, notes);
+        await generate(uploadedFile, notes, generateMuscles);
         return;
       }
 
@@ -140,7 +140,7 @@ export const Generate: React.FC = () => {
         const description = textDescription.trim();
         if (!description) return;
         const notes = additionalNotes.trim() ? additionalNotes.trim() : undefined;
-        await generateFromText(description, notes);
+        await generateFromText(description, notes, generateMuscles);
       }
     } catch {
       // `useGenerate` already sets UI error state + toast.

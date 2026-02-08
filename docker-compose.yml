@@ -26,10 +26,8 @@ services:
       - APP_MODE=prod
       - DATABASE_URL=postgresql://${DB_USER:-yoga_user}:${DB_PASSWORD:-yoga_pass}@db:5432/${DB_NAME:-yoga_db}
       - SECRET_KEY=${SECRET_KEY}
-      - ENABLE_AI_GENERATION=${ENABLE_AI_GENERATION:-true}
     volumes:
       - ./storage:/app/storage
-      - ./ai/models:/app/ai/models
     depends_on:
       db:
         condition: service_healthy

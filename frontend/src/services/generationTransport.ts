@@ -37,8 +37,6 @@ const WS_FALLBACK_DELAY_MS = 2500;
 const WS_SILENT_FALLBACK_DELAY_MS = 3500;
 const POLL_BASE_DELAY_MS = 2000;
 const POLL_MAX_DELAY_MS = 15_000;
-const MAX_RECONNECT_ATTEMPTS = 5;
-const BASE_RECONNECT_DELAY = 1000;
 
 const clampProgress = (value: unknown): number => {
   const numeric = Number(value);
@@ -56,15 +54,12 @@ export class GenerationTransport {
   private readonly callbacks: GenerationTransportCallbacks;
 
   private ws: WebSocket | null = null;
-  private reconnectAttempt = 0;
-  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private pollTimeout: ReturnType<typeof setTimeout> | null = null;
   private polling = false;
   private pollDelay = 0;
 
   private wsOpened = false;
-  private wsGotProgress = false;
   private wsFallbackTimeout: ReturnType<typeof setTimeout> | null = null;
   private wsSilentFallbackTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -144,11 +139,6 @@ export class GenerationTransport {
       this.wsSilentFallbackTimeout = null;
     }
 
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-
     if (this.ws) {
       const oldWs = this.ws;
       this.ws = null;
@@ -164,9 +154,7 @@ export class GenerationTransport {
       }
     }
 
-    this.reconnectAttempt = 0;
     this.wsOpened = false;
-    this.wsGotProgress = false;
   }
 
   private stopPolling(): void {
@@ -301,7 +289,6 @@ export class GenerationTransport {
     }
 
     this.wsOpened = false;
-    this.wsGotProgress = false;
 
     if (this.wsFallbackTimeout) {
       clearTimeout(this.wsFallbackTimeout);
@@ -326,7 +313,6 @@ export class GenerationTransport {
       }
 
       this.wsOpened = true;
-      this.reconnectAttempt = 0;
 
       if (this.wsFallbackTimeout) {
         clearTimeout(this.wsFallbackTimeout);
@@ -342,7 +328,6 @@ export class GenerationTransport {
 
       this.wsSilentFallbackTimeout = setTimeout(() => {
         if (this.stopped || isTerminal(this.snapshot.status)) return;
-        if (this.wsGotProgress) return;
         this.startPolling();
       }, WS_SILENT_FALLBACK_DELAY_MS);
     };
@@ -355,8 +340,6 @@ export class GenerationTransport {
         if (message.type !== "progress_update") {
           return;
         }
-
-        this.wsGotProgress = true;
 
         if (this.wsSilentFallbackTimeout) {
           clearTimeout(this.wsSilentFallbackTimeout);
@@ -375,6 +358,13 @@ export class GenerationTransport {
         });
 
         this.stopPolling();
+
+        if (!isTerminal(this.snapshot.status)) {
+          this.wsSilentFallbackTimeout = setTimeout(() => {
+            if (this.stopped || isTerminal(this.snapshot.status)) return;
+            this.startPolling();
+          }, WS_SILENT_FALLBACK_DELAY_MS);
+        }
       } catch (err) {
         logger.error("Failed to parse generation WebSocket message", err);
       }
@@ -385,7 +375,7 @@ export class GenerationTransport {
       this.startPolling();
     };
 
-    ws.onclose = (event) => {
+    ws.onclose = () => {
       if (this.stopped || isTerminal(this.snapshot.status)) return;
 
       if (this.wsFallbackTimeout) {
@@ -398,27 +388,9 @@ export class GenerationTransport {
         this.wsSilentFallbackTimeout = null;
       }
 
-      if (event.code === 1000) {
-        return;
-      }
-
+      // Even a "normal" close (1000) can happen when backend reloads gracefully
+      // in dev; keep task tracking alive via HTTP polling.
       this.startPolling();
-
-      if (this.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-        this.emitUpdate({
-          status: "failed",
-          errorMessage: "Generation connection lost",
-        });
-        return;
-      }
-
-      const delay = BASE_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempt);
-      this.reconnectAttempt += 1;
-
-      this.reconnectTimeout = setTimeout(() => {
-        if (this.stopped || isTerminal(this.snapshot.status)) return;
-        void this.connectWebSocket();
-      }, delay);
     };
 
     this.ws = ws;

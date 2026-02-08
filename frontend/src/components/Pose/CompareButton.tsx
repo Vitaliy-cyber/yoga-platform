@@ -4,6 +4,7 @@ import { Button } from "../ui/button";
 import { useCompareStore } from "../../store/useCompareStore";
 import { useI18n } from "../../i18n";
 import type { PoseListItem } from "../../types";
+import { MAX_POSES_FOR_COMPARISON } from "../../lib/constants";
 
 interface CompareButtonProps {
   pose: PoseListItem;
@@ -23,7 +24,7 @@ export const CompareButton: React.FC<CompareButtonProps> = ({
 
   // Compute derived values - these will update when selectedPoses changes
   const isSelected = selectedPoses.includes(pose.id);
-  const canAdd = selectedPoses.length < 4;
+  const canAdd = selectedPoses.length < MAX_POSES_FOR_COMPARISON;
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();

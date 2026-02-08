@@ -49,6 +49,25 @@ class TestGenerateFromTextRoutes:
         assert called_args[0] == task_id
         assert called_args[1] == description.strip()
         assert called_args[2] == "keep elbows straight"
+        assert called_args[3] is True
+
+    @pytest.mark.asyncio
+    async def test_from_text_forwards_generate_muscles_flag(
+        self, auth_client: AsyncClient
+    ):
+        mock_runner = AsyncMock(return_value=None)
+        with patch("api.routes.generate.run_generation_from_text", mock_runner):
+            response = await auth_client.post(
+                "/api/generate/from-text",
+                json={
+                    "description": "Detailed warrior pose with stable footing and extended arms.",
+                    "generate_muscles": False,
+                },
+            )
+
+        assert response.status_code == 200
+        called_args = mock_runner.await_args.args
+        assert called_args[3] is False
 
     @pytest.mark.asyncio
     async def test_from_text_rejects_too_long_additional_notes(self, auth_client: AsyncClient):
@@ -349,3 +368,72 @@ class TestRunGenerationFailures:
         ).scalar_one()
         assert updated.status == GenerateStatus.FAILED.value
         assert "placeholders" in (updated.error_message or "").lower()
+
+    @pytest.mark.asyncio
+    async def test_run_generation_without_muscles_skips_muscle_outputs(
+        self, db_session: AsyncSession
+    ):
+        from api.routes.generate import run_generation
+        from services.google_generator import GenerationResult
+
+        user = User.create_with_token("no-muscles-token", name="NoMusclesUser")
+        db_session.add(user)
+        await db_session.flush()
+        task = GenerationTask(
+            task_id="generation-no-muscles-task",
+            user_id=user.id,
+            status=GenerateStatus.PENDING.value,
+            progress=0,
+            status_message="In queue...",
+        )
+        db_session.add(task)
+        await db_session.commit()
+
+        mock_generator = MagicMock()
+        mock_generator.generate_all_from_image = AsyncMock(
+            return_value=GenerationResult(
+                photo_bytes=_tiny_png_bytes(),
+                muscles_bytes=_tiny_png_bytes(),
+                used_placeholders=False,
+                analyzed_muscles=[],
+            )
+        )
+        mock_storage = MagicMock()
+        mock_storage.upload_bytes = AsyncMock(return_value="/p.png")
+
+        class _SessionCtx:
+            def __init__(self, session):
+                self._session = session
+
+            async def __aenter__(self):
+                return self._session
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("api.routes.generate.get_storage", return_value=mock_storage), patch(
+            "api.routes.generate.AsyncSessionLocal",
+            return_value=_SessionCtx(db_session),
+        ), patch(
+            "services.google_generator.GoogleGeminiGenerator.get_instance",
+            return_value=mock_generator,
+        ):
+            await run_generation(
+                "generation-no-muscles-task",
+                _tiny_png_bytes(),
+                "image/png",
+                generate_muscles=False,
+            )
+
+        updated = (
+            await db_session.execute(
+                select(GenerationTask).where(
+                    GenerationTask.task_id == "generation-no-muscles-task"
+                )
+            )
+        ).scalar_one()
+        assert updated.status == GenerateStatus.COMPLETED.value
+        assert updated.photo_url == "/p.png"
+        assert updated.muscles_url is None
+        assert updated.analyzed_muscles_json is None
+        assert mock_storage.upload_bytes.await_count == 1

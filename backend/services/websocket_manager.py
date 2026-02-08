@@ -120,7 +120,7 @@ class ConnectionManager:
             self._subscriptions[task_id].add((websocket, user_id))
             self._websocket_tasks[websocket] = task_id
 
-        logger.info(f"WebSocket connected: user={user_id}, task={task_id}")
+        logger.debug(f"WebSocket connected: user={user_id}, task={task_id}")
 
     async def disconnect(self, websocket: WebSocket) -> None:
         """
@@ -143,7 +143,7 @@ class ConnectionManager:
                 if not self._subscriptions[task_id]:
                     del self._subscriptions[task_id]
 
-                logger.info(f"WebSocket disconnected: task={task_id}")
+                logger.debug(f"WebSocket disconnected: task={task_id}")
 
     async def broadcast_progress(self, update: ProgressUpdate) -> int:
         """

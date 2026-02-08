@@ -57,7 +57,7 @@ install:
 
 # Run backend locally
 run-backend:
-	cd backend && uvicorn main:app --reload --port 8000
+	cd backend && uvicorn main:app --reload --port 8000 --log-level warning
 
 # Run frontend locally
 run-frontend:

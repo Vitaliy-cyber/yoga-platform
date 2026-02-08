@@ -26,12 +26,20 @@ import hashlib
 import logging
 import os
 
-from config import get_settings
+from config import AppMode, get_settings
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 settings = get_settings()
+
+
+def _dev_info(message: str) -> None:
+    """Reduce startup noise in dev while keeping production info logs."""
+    if settings.APP_MODE == AppMode.DEV:
+        logging.debug(message)
+    else:
+        logging.info(message)
 
 # Convert URL for async drivers
 database_url = settings.DATABASE_URL
@@ -306,7 +314,7 @@ async def _seed_default_muscles():
         count = result.scalar()
 
         if count > 0:
-            logging.info(f"Muscles table already has {count} entries, skipping seed")
+            _dev_info(f"Muscles table already has {count} entries, skipping seed")
             return
 
         logging.info("Seeding default muscles...")
@@ -581,4 +589,4 @@ async def init_db():
     # Seed default muscles if table is empty
     await _seed_default_muscles()
 
-    logging.info("Database initialized successfully")
+    _dev_info("Database initialized successfully")

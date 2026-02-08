@@ -44,7 +44,7 @@ export const PoseViewer: React.FC<PoseViewerProps> = ({ pose, isOpen, onClose })
     pose.muscle_layer_path,
     pose.id,
     "muscle_layer",
-    { enabled: activeOverlay === "muscles" && Boolean(pose.muscle_layer_path), version: pose.version }
+    { enabled: Boolean(pose.muscle_layer_path), version: pose.version }
   );
 
   const hasOverlay = (type: string) => {

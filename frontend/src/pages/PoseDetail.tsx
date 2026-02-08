@@ -6,6 +6,7 @@ import {
   exportApi,
   downloadBlob,
   getImageProxyUrl,
+  isAbortRequestError,
 } from "../services/api";
 import { usePoseImageSrc } from "../hooks/usePoseImageSrc";
 import { Button } from "../components/ui/button";
@@ -206,7 +207,9 @@ const PoseDetailContent: React.FC = () => {
   );
 
   const [pose, setPose] = useState<Pose | null>(initialPose);
-  const [categories, setCategories] = useState<Category[]>([]);
+  const [categories, setCategories] = useState<Category[]>(
+    () => useAppStore.getState().categories,
+  );
   const [isLoading, setIsLoading] = useState(() => !initialPose);
   const [error, setError] = useState<string | null>(null);
   const { t } = useI18n();
@@ -277,6 +280,8 @@ const PoseDetailContent: React.FC = () => {
   const muscleWidgetAutoDismissTimerRef = useRef<number | null>(null);
   const muscleWidgetExitTimerRef = useRef<number | null>(null);
 
+  const appCategories = useAppStore((state) => state.categories);
+  const setAppCategories = useAppStore((state) => state.setCategories);
   // Toast notifications
   const addToast = useAppStore((state) => state.addToast);
   const visibleGenerationWidgetTaskCount = useGenerationStore((state) => {
@@ -344,17 +349,33 @@ const PoseDetailContent: React.FC = () => {
     return () => observer.disconnect();
   }, [visibleGenerationWidgetTaskCount]);
 
-  const refreshCategories = useCallback(() => {
-    categoriesApi.getAll().then(setCategories).catch(console.error);
-  }, []);
+  useEffect(() => {
+    setCategories(appCategories);
+  }, [appCategories]);
 
-  const fetchPoseWithRetry = useCallback(async (poseId: number) => {
+  const refreshCategories = useCallback(() => {
+    categoriesApi
+      .getAll()
+      .then((nextCategories) => {
+        setCategories(nextCategories);
+        setAppCategories(nextCategories);
+      })
+      .catch(console.error);
+  }, [setAppCategories]);
+
+  const fetchPoseWithRetry = useCallback(async (poseId: number, signal?: AbortSignal) => {
     const maxAttempts = 4;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (signal?.aborted) {
+        throw new Error("Request aborted");
+      }
       try {
         // eslint-disable-next-line no-await-in-loop
-        return await posesApi.getById(poseId);
+        return await posesApi.getById(poseId, signal);
       } catch (err) {
+        if (isAbortRequestError(err) || signal?.aborted) {
+          throw err;
+        }
         const anyErr = err as Error & { status?: number; isRateLimited?: boolean; retryAfter?: number };
         const status = anyErr.status ?? (anyErr.isRateLimited ? 429 : undefined);
         const isRetryable = status === 409 || status === 429 || status === 503;
@@ -398,6 +419,8 @@ const PoseDetailContent: React.FC = () => {
   }, [id, initialPose, routePoseId]);
 
   useEffect(() => {
+    const abortController = new AbortController();
+
     const fetchData = async () => {
       if (!id) return;
       const hasRenderablePose = Boolean(initialPose && initialPose.id === routePoseId);
@@ -406,12 +429,8 @@ const PoseDetailContent: React.FC = () => {
       }
       setError(null);
       try {
-        const [poseData, categoriesData] = await Promise.all([
-          fetchPoseWithRetry(parseInt(id, 10)),
-          categoriesApi.getAll(),
-        ]);
+        const poseData = await fetchPoseWithRetry(parseInt(id, 10), abortController.signal);
         setPose(poseData);
-        setCategories(categoriesData);
         setEditData({
           name: poseData.name,
           name_en: poseData.name_en || "",
@@ -420,15 +439,23 @@ const PoseDetailContent: React.FC = () => {
           change_note: "",
         });
       } catch (err) {
+        if (isAbortRequestError(err)) {
+          return;
+        }
         setError(
           err instanceof Error ? err.message : t("pose.detail.not_found"),
         );
       } finally {
-        setIsLoading(false);
+        if (!abortController.signal.aborted) {
+          setIsLoading(false);
+        }
       }
     };
 
     void fetchData();
+    return () => {
+      abortController.abort();
+    };
   }, [fetchPoseWithRetry, id, initialPose, routePoseId, t]);
 
   const handleSave = async () => {
@@ -493,22 +520,13 @@ const PoseDetailContent: React.FC = () => {
     }
   };
 
-  const activeImageType = activeTab === "muscles" ? "muscle_layer" : "photo";
-  const activeDirectPath =
-    activeTab === "muscles" ? pose?.muscle_layer_path : pose?.photo_path;
-  const { src: activeImageSrc, refresh: refreshActiveImage } = usePoseImageSrc(
-    activeDirectPath,
-    pose?.id ?? 0,
-    activeImageType,
-    { enabled: Boolean(pose && activeDirectPath), version: pose?.version },
-  );
-  const { src: studioImageSrc } = usePoseImageSrc(
+  const { src: studioImageSrc, refresh: refreshStudioImage } = usePoseImageSrc(
     pose?.photo_path,
     pose?.id ?? 0,
     "photo",
     { enabled: Boolean(pose?.photo_path), version: pose?.version },
   );
-  const { src: muscleLayerImageSrc } = usePoseImageSrc(
+  const { src: muscleLayerImageSrc, refresh: refreshMuscleLayerImage } = usePoseImageSrc(
     pose?.muscle_layer_path,
     pose?.id ?? 0,
     "muscle_layer",
@@ -521,6 +539,8 @@ const PoseDetailContent: React.FC = () => {
     "schema",
     { enabled: Boolean(pose?.schema_path), version: pose?.version },
   );
+  const activeImageSrc =
+    activeTab === "muscles" ? muscleLayerImageSrc : studioImageSrc;
   const canIncludeStudioPhoto = Boolean(pose?.photo_path);
   const canIncludeMusclePhoto = Boolean(pose?.muscle_layer_path);
   const canIncludeActiveMuscles = Boolean(pose?.muscles?.length);
@@ -1319,16 +1339,19 @@ const PoseDetailContent: React.FC = () => {
                   </Tabs>
                 </div>
                 <div className="p-4">
-                  <div
-                    key={activeTab}
-                    className="aspect-square bg-muted/40 rounded-xl overflow-hidden"
-                  >
+                  <div className="aspect-square bg-muted/40 rounded-xl overflow-hidden">
                     <img
                       src={activeImageSrc || undefined}
                       alt={pose.name}
                       className="w-full h-full object-contain"
                       data-testid="pose-active-image"
-                      onError={() => void refreshActiveImage(true)}
+                      onError={() =>
+                        void (
+                          activeTab === "muscles"
+                            ? refreshMuscleLayerImage(true)
+                            : refreshStudioImage(true)
+                        )
+                      }
                     />
                   </div>
                 </div>

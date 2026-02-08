@@ -70,7 +70,7 @@ def start_cleanup_task():
     global _cleanup_task
     if _cleanup_task is None or _cleanup_task.done():
         _cleanup_task = asyncio.create_task(_periodic_token_cleanup())
-        logger.info("Started periodic token cleanup task")
+        logger.debug("Started periodic token cleanup task")
 
 
 def stop_cleanup_task():
@@ -78,7 +78,7 @@ def stop_cleanup_task():
     global _cleanup_task
     if _cleanup_task and not _cleanup_task.done():
         _cleanup_task.cancel()
-        logger.info("Stopped periodic token cleanup task")
+        logger.debug("Stopped periodic token cleanup task")
 
 
 def _extract_bearer_token(request: Request) -> Optional[str]:

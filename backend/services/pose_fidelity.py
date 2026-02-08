@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import urllib.request
 from dataclasses import dataclass
 from enum import Enum
@@ -24,6 +25,24 @@ from typing import Dict, Protocol
 from PIL import Image, ImageOps
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_mediapipe_runtime_logging() -> None:
+    """
+    Reduce noisy native backend warnings (TensorFlow/absl/MediaPipe) that are
+    not actionable for normal generation flows.
+    """
+    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+    os.environ.setdefault("GLOG_minloglevel", "2")
+    os.environ.setdefault("ABSL_LOGGING_MIN_LOG_LEVEL", "2")
+    try:
+        from absl import logging as absl_logging
+
+        absl_logging.set_verbosity(absl_logging.ERROR)
+        absl_logging.set_stderrthreshold("error")
+    except Exception:
+        # absl may be unavailable in some environments; safe to ignore.
+        pass
 
 
 class PoseMismatchError(RuntimeError):
@@ -118,6 +137,7 @@ class MediaPipeLandmarkExtractor:
         self._pose = None
 
         try:
+            _configure_mediapipe_runtime_logging()
             import mediapipe as mp
             import numpy as np
 
@@ -330,16 +350,18 @@ class PoseFidelityEvaluator:
         "left_foot_index",
         "right_foot_index",
     )
+    _selfie_segmenter = None
+    _selfie_segmenter_failed = False
 
     def __init__(
         self,
         *,
         extractor: LandmarkExtractorProtocol | None = None,
-        score_threshold: float = 0.86,
-        silhouette_score_threshold: float = 0.82,
-        max_joint_delta_degrees: float = 14.0,
+        score_threshold: float = 0.80,
+        silhouette_score_threshold: float = 0.76,
+        max_joint_delta_degrees: float = 20.0,
         min_visibility: float = 0.45,
-        min_joint_matches: int = 6,
+        min_joint_matches: int = 8,
     ):
         self._extractor = extractor or MediaPipeLandmarkExtractor()
         self._allow_silhouette_fallback = extractor is None
@@ -426,14 +448,29 @@ class PoseFidelityEvaluator:
                 failure_reason=PoseFidelityFailureReason.GENERATED_NO_POSE,
             )
 
-        joint_deltas = self._compute_joint_deltas(source_landmarks, generated_landmarks)
+        primary_result = self._evaluate_landmark_pair(source_landmarks, generated_landmarks)
+        mirrored_result = self._evaluate_landmark_pair(
+            source_landmarks, self._mirror_landmarks(generated_landmarks)
+        )
+        selected_result = self._choose_better_landmark_result(primary_result, mirrored_result)
+        if (
+            selected_result.failure_reason == PoseFidelityFailureReason.INSUFFICIENT_JOINTS
+            and self._allow_silhouette_fallback
+        ):
+            silhouette_result = self._evaluate_by_silhouette(source_bytes, generated_bytes)
+            if silhouette_result is not None:
+                return silhouette_result
+        return selected_result
+
+    def _evaluate_landmark_pair(
+        self,
+        source_landmarks: Dict[str, tuple[float, float, float]],
+        generated_landmarks: Dict[str, tuple[float, float, float]],
+    ) -> PoseFidelityResult:
+        joint_deltas, joint_weights = self._compute_joint_deltas(
+            source_landmarks, generated_landmarks
+        )
         if len(joint_deltas) < self.min_joint_matches:
-            if self._allow_silhouette_fallback:
-                silhouette_result = self._evaluate_by_silhouette(
-                    source_bytes, generated_bytes
-                )
-                if silhouette_result is not None:
-                    return silhouette_result
             return PoseFidelityResult(
                 available=True,
                 validation_performed=True,
@@ -450,7 +487,7 @@ class PoseFidelityEvaluator:
                 failure_reason=PoseFidelityFailureReason.INSUFFICIENT_JOINTS,
             )
 
-        angle_score = self._joint_score(joint_deltas)
+        angle_score = self._joint_score(joint_deltas, joint_weights)
         position_score, compared_points = self._position_score(
             source_landmarks, generated_landmarks
         )
@@ -482,6 +519,31 @@ class PoseFidelityEvaluator:
             mirror_suspected=mirror_suspected,
         )
 
+    def _choose_better_landmark_result(
+        self, primary: PoseFidelityResult, mirrored: PoseFidelityResult
+    ) -> PoseFidelityResult:
+        def rank(result: PoseFidelityResult) -> tuple[int, float, float, float, float, int, int]:
+            return (
+                1 if result.passed else 0,
+                result.pose_score,
+                result.angle_score,
+                result.position_score,
+                -result.max_joint_delta,
+                result.compared_joints,
+                result.compared_points,
+            )
+
+        return mirrored if rank(mirrored) > rank(primary) else primary
+
+    @staticmethod
+    def _mirror_landmarks(
+        landmarks: Dict[str, tuple[float, float, float]]
+    ) -> Dict[str, tuple[float, float, float]]:
+        mirrored: Dict[str, tuple[float, float, float]] = {}
+        for name, (x, y, visibility) in landmarks.items():
+            mirrored[name] = (1.0 - x, y, visibility)
+        return mirrored
+
     def _is_landmark_visible(
         self, landmarks: Dict[str, tuple[float, float, float]], name: str
     ) -> bool:
@@ -494,8 +556,9 @@ class PoseFidelityEvaluator:
         self,
         source: Dict[str, tuple[float, float, float]],
         generated: Dict[str, tuple[float, float, float]],
-    ) -> dict[str, float]:
+    ) -> tuple[dict[str, float], dict[str, float]]:
         deltas: dict[str, float] = {}
+        weights: dict[str, float] = {}
         for joint_name, (a, b, c) in self.ANGLE_TRIPLES.items():
             if not (
                 self._is_landmark_visible(source, a)
@@ -511,7 +574,16 @@ class PoseFidelityEvaluator:
             if src_angle is None or gen_angle is None:
                 continue
             deltas[joint_name] = abs(src_angle - gen_angle)
-        return deltas
+            vis_values = (
+                source[a][2],
+                source[b][2],
+                source[c][2],
+                generated[a][2],
+                generated[b][2],
+                generated[c][2],
+            )
+            weights[joint_name] = max(0.1, min(1.0, float(mean(vis_values))))
+        return deltas, weights
 
     @staticmethod
     def _calculate_angle(
@@ -530,10 +602,26 @@ class PoseFidelityEvaluator:
         return math.degrees(math.acos(cos_theta))
 
     @staticmethod
-    def _joint_score(joint_deltas: dict[str, float]) -> float:
+    def _joint_score(
+        joint_deltas: dict[str, float], joint_weights: dict[str, float] | None = None
+    ) -> float:
         # 0 delta -> 1.0 score, 45+ deg delta -> 0 score for that joint.
-        per_joint = [max(0.0, 1.0 - (delta / 45.0)) for delta in joint_deltas.values()]
-        return float(mean(per_joint)) if per_joint else 0.0
+        if not joint_deltas:
+            return 0.0
+        if not joint_weights:
+            per_joint = [max(0.0, 1.0 - (delta / 45.0)) for delta in joint_deltas.values()]
+            return float(mean(per_joint)) if per_joint else 0.0
+
+        weighted_total = 0.0
+        weighted_sum = 0.0
+        for joint_name, delta in joint_deltas.items():
+            score = max(0.0, 1.0 - (delta / 45.0))
+            weight = max(0.1, float(joint_weights.get(joint_name, 0.5)))
+            weighted_total += score * weight
+            weighted_sum += weight
+        if weighted_sum <= 1e-6:
+            return 0.0
+        return float(weighted_total / weighted_sum)
 
     def _position_score(
         self,
@@ -545,7 +633,9 @@ class PoseFidelityEvaluator:
         if not source_norm or not generated_norm:
             return 0.0, 0
 
-        point_scores: list[float] = []
+        weighted_score_sum = 0.0
+        weighted_score_total = 0.0
+        compared_points = 0
         for name in self.POSITION_POINTS:
             if name not in source_norm or name not in generated_norm:
                 continue
@@ -553,11 +643,21 @@ class PoseFidelityEvaluator:
             dy = source_norm[name][1] - generated_norm[name][1]
             distance = math.hypot(dx, dy)
             # Distances around 1.2 torso-widths are considered mismatch.
-            point_scores.append(max(0.0, 1.0 - (distance / 1.2)))
+            point_score = max(0.0, 1.0 - (distance / 1.2))
+            visibility_weight = max(
+                0.1,
+                min(
+                    1.0,
+                    float((source[name][2] + generated[name][2]) / 2.0),
+                ),
+            )
+            weighted_score_sum += point_score * visibility_weight
+            weighted_score_total += visibility_weight
+            compared_points += 1
 
-        if not point_scores:
+        if compared_points == 0 or weighted_score_total <= 1e-6:
             return 0.0, 0
-        return float(mean(point_scores)), len(point_scores)
+        return float(weighted_score_sum / weighted_score_total), compared_points
 
     def _evaluate_by_silhouette(
         self, source_bytes: bytes, generated_bytes: bytes
@@ -610,19 +710,57 @@ class PoseFidelityEvaluator:
                 failure_reason=PoseFidelityFailureReason.GENERATED_NO_POSE,
             )
 
-        iou = self._mask_iou(source_mask, generated_mask, np=np)
-        profile_score = self._profile_similarity(
-            source_mask, generated_mask, cv2=cv2, np=np
+        source_skeleton = self._skeletonize(source_mask, cv2=cv2, np=np)
+        candidates: list[tuple[object, object | None, bool]] = [
+            (generated_mask, generated_contour, False)
+        ]
+        mirrored_generated_mask = cv2.flip(generated_mask, 1)
+        mirrored_generated_contour = self._largest_contour(
+            mirrored_generated_mask, cv2=cv2
         )
-        shape_score = 0.0
-        if source_contour is not None and generated_contour is not None:
-            # Lower is better for matchShapes, clamp to 0..1 score
-            shape_distance = cv2.matchShapes(
-                source_contour, generated_contour, cv2.CONTOURS_MATCH_I1, 0.0
-            )
-            shape_score = max(0.0, 1.0 - (min(float(shape_distance), 1.4) / 1.4))
+        if mirrored_generated_contour is not None:
+            candidates.append((mirrored_generated_mask, mirrored_generated_contour, True))
 
-        pose_score = (0.45 * iou) + (0.35 * shape_score) + (0.20 * profile_score)
+        best_metrics: dict[str, float | bool] | None = None
+        for candidate_mask, candidate_contour, mirror_suspected in candidates:
+            iou = self._mask_iou(source_mask, candidate_mask, np=np)
+            profile_score = self._profile_similarity(
+                source_mask, candidate_mask, cv2=cv2, np=np
+            )
+            shape_score = 0.0
+            if source_contour is not None and candidate_contour is not None:
+                # Lower is better for matchShapes, clamp to 0..1 score
+                shape_distance = cv2.matchShapes(
+                    source_contour, candidate_contour, cv2.CONTOURS_MATCH_I1, 0.0
+                )
+                shape_score = max(0.0, 1.0 - (min(float(shape_distance), 1.4) / 1.4))
+
+            skeleton_score = self._skeleton_similarity(
+                source_skeleton, candidate_mask, cv2=cv2, np=np
+            )
+            pose_score = (
+                (0.35 * iou)
+                + (0.20 * shape_score)
+                + (0.20 * profile_score)
+                + (0.25 * skeleton_score)
+            )
+            current_metrics = {
+                "pose_score": pose_score,
+                "shape_score": shape_score,
+                "iou": iou,
+                "skeleton_score": skeleton_score,
+                "mirror_suspected": mirror_suspected,
+            }
+            if (
+                best_metrics is None
+                or float(current_metrics["pose_score"]) > float(best_metrics["pose_score"])
+            ):
+                best_metrics = current_metrics
+
+        if best_metrics is None:
+            return None
+
+        pose_score = float(best_metrics["pose_score"])
         passed = pose_score >= self.silhouette_score_threshold
 
         return PoseFidelityResult(
@@ -630,8 +768,8 @@ class PoseFidelityEvaluator:
             validation_performed=True,
             passed=passed,
             pose_score=float(max(0.0, min(1.0, pose_score))),
-            angle_score=float(max(0.0, min(1.0, shape_score))),
-            position_score=float(max(0.0, min(1.0, iou))),
+            angle_score=float(max(0.0, min(1.0, float(best_metrics["skeleton_score"])))),
+            position_score=float(max(0.0, min(1.0, float(best_metrics["iou"])))),
             max_joint_delta=0.0,
             joint_deltas={},
             compared_joints=0,
@@ -641,7 +779,53 @@ class PoseFidelityEvaluator:
             failure_reason=(
                 None if passed else PoseFidelityFailureReason.SCORE_BELOW_THRESHOLD
             ),
+            mirror_suspected=bool(best_metrics["mirror_suspected"]),
         )
+
+    @staticmethod
+    def _largest_contour(mask, *, cv2):
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return max(contours, key=cv2.contourArea) if contours else None
+
+    @staticmethod
+    def _skeleton_similarity(source_skeleton, generated_mask, *, cv2, np) -> float:
+        generated_skeleton = PoseFidelityEvaluator._skeletonize(
+            generated_mask, cv2=cv2, np=np
+        )
+        source_pixels = int(np.count_nonzero(source_skeleton))
+        generated_pixels = int(np.count_nonzero(generated_skeleton))
+        if source_pixels <= 0 or generated_pixels <= 0:
+            return 0.0
+
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        source_dilated = cv2.dilate(source_skeleton, kernel, iterations=1) > 0
+        generated_dilated = cv2.dilate(generated_skeleton, kernel, iterations=1) > 0
+        source_binary = source_skeleton > 0
+        generated_binary = generated_skeleton > 0
+
+        source_coverage = np.logical_and(source_dilated, generated_binary).sum() / max(
+            1, generated_pixels
+        )
+        generated_coverage = np.logical_and(generated_dilated, source_binary).sum() / max(
+            1, source_pixels
+        )
+        return float((source_coverage + generated_coverage) / 2.0)
+
+    @staticmethod
+    def _skeletonize(mask, *, cv2, np):
+        binary = (mask > 0).astype(np.uint8) * 255
+        skeleton = np.zeros_like(binary)
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+        working = binary.copy()
+        while True:
+            eroded = cv2.erode(working, kernel)
+            opened = cv2.dilate(eroded, kernel)
+            layer = cv2.subtract(working, opened)
+            skeleton = cv2.bitwise_or(skeleton, layer)
+            working = eroded
+            if cv2.countNonZero(working) == 0:
+                break
+        return skeleton
 
     @staticmethod
     def _mask_iou(mask_a, mask_b, *, np) -> float:
@@ -701,6 +885,10 @@ class PoseFidelityEvaluator:
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
         masks = []
+        segmentation_mask = cls._segment_subject_mediapipe(image, cv2=cv2, np=np)
+        if segmentation_mask is not None:
+            masks.append(segmentation_mask)
+
         for threshold_mode in (cv2.THRESH_BINARY, cv2.THRESH_BINARY_INV):
             _, mask = cv2.threshold(
                 gray, 0, 255, threshold_mode | cv2.THRESH_OTSU
@@ -720,12 +908,9 @@ class PoseFidelityEvaluator:
         frame_area = float(max(1, h * w))
 
         for mask in masks:
-            contours, _ = cv2.findContours(
-                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            if not contours:
+            contour = cls._largest_contour(mask, cv2=cv2)
+            if contour is None:
                 continue
-            contour = max(contours, key=cv2.contourArea)
             area = float(cv2.contourArea(contour))
             if area < 0.01 * frame_area:
                 continue
@@ -767,6 +952,46 @@ class PoseFidelityEvaluator:
         )
         contour = max(contours, key=cv2.contourArea) if contours else None
         return normalized, contour
+
+    @classmethod
+    def _segment_subject_mediapipe(cls, image, *, cv2, np):
+        if cls._selfie_segmenter_failed:
+            return None
+        try:
+            if cls._selfie_segmenter is None:
+                import mediapipe as mp
+
+                mp_solutions = getattr(mp, "solutions", None)
+                selfie_segmentation = (
+                    getattr(mp_solutions, "selfie_segmentation", None)
+                    if mp_solutions is not None
+                    else None
+                )
+                if selfie_segmentation is None:
+                    cls._selfie_segmenter_failed = True
+                    return None
+                cls._selfie_segmenter = selfie_segmentation.SelfieSegmentation(
+                    model_selection=1
+                )
+
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            result = cls._selfie_segmenter.process(rgb)
+            segmentation_mask = getattr(result, "segmentation_mask", None)
+            if segmentation_mask is None:
+                return None
+
+            mask = (segmentation_mask > 0.22).astype(np.uint8) * 255
+            mask = cv2.morphologyEx(
+                mask, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8), iterations=1
+            )
+            mask = cv2.morphologyEx(
+                mask, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1
+            )
+            return mask
+        except Exception as exc:
+            cls._selfie_segmenter_failed = True
+            logger.debug("MediaPipe selfie segmentation unavailable: %s", exc)
+            return None
 
     def _normalize_to_torso(
         self, landmarks: Dict[str, tuple[float, float, float]]

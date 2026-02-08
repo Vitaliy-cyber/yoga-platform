@@ -24,6 +24,7 @@ import { Button } from '../ui/button';
 import { importApi } from '../../services/api';
 import { useI18n } from '../../i18n';
 import { slideHorizontalSwap, normalTransition } from '../../lib/animation-variants';
+import { MAX_UPLOAD_SIZE_BYTES } from '../../lib/constants';
 import type { DuplicateHandling, ImportResult, ImportPreviewResult } from '../../types';
 import ImportPreview from './ImportPreview';
 
@@ -78,7 +79,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     onDrop,
     accept: ACCEPTED_FILES[importType],
     maxFiles: 1,
-    maxSize: 10 * 1024 * 1024, // 10MB
+    maxSize: MAX_UPLOAD_SIZE_BYTES,
   });
 
   const handlePreview = async () => {

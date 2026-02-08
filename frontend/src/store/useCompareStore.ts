@@ -2,8 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ComparisonResult, PoseListItem } from '../types';
 import { compareApi } from '../services/api';
-
-const MAX_POSES_FOR_COMPARISON = 4;
+import { MAX_POSES_FOR_COMPARISON } from '../lib/constants';
 
 interface CompareStore {
   // State
@@ -158,7 +157,4 @@ export const useCompareStore = create<CompareStore>()(
 );
 
 // Selector hooks for better performance
-export const useSelectedPoseIds = () => useCompareStore((state) => state.selectedPoses);
 export const useSelectedPoseCount = () => useCompareStore((state) => state.selectedPoses.length);
-export const useCanCompare = () => useCompareStore((state) => state.selectedPoses.length >= 2);
-export const useCanAddMore = () => useCompareStore((state) => state.selectedPoses.length < MAX_POSES_FOR_COMPARISON);

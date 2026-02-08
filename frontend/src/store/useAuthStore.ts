@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { User } from '../types';
-import { TOKEN_REFRESH_THRESHOLD_MS } from '../lib/constants';
 import { useGenerationStore } from './useGenerationStore';
 
 // Storage key for persisting auth state
@@ -30,8 +29,6 @@ interface AuthState {
   setHasHydrated: (hasHydrated: boolean) => void;
   setLastRefreshAt: (timestamp: number | null) => void;
   setRefreshError: (error: string | null) => void;
-  isTokenExpired: () => boolean;
-  shouldRefreshToken: () => boolean;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -109,26 +106,6 @@ export const useAuthStore = create<AuthState>()(
 
       setRefreshError: (error) => set({ refreshError: error }),
 
-      // Check if token is expired
-      isTokenExpired: () => {
-        const { accessToken, tokenExpiresAt } = get();
-        // Return true if there's no access token (considered expired/invalid)
-        if (!accessToken) return true;
-        // Return false if we have token but no expiry info (assume valid)
-        if (!tokenExpiresAt) return false;
-        return Date.now() >= tokenExpiresAt;
-      },
-
-      // Check if token should be refreshed (expires within threshold)
-      // NOTE: We don't check refreshToken here because it's stored in httpOnly cookie,
-      // not in the store. The cookie presence is handled by the TokenManager.
-      shouldRefreshToken: () => {
-        const { tokenExpiresAt, accessToken } = get();
-        // Need both token and expiry to determine refresh timing
-        if (!tokenExpiresAt || !accessToken) return false;
-        // Refresh if token expires within threshold
-        return Date.now() >= tokenExpiresAt - TOKEN_REFRESH_THRESHOLD_MS;
-      },
     }),
     {
       name: TOKEN_KEY,
@@ -180,14 +157,4 @@ if (typeof window !== 'undefined') {
 // Helper to get token for API calls (can be used outside React)
 export const getAuthToken = (): string | null => {
   return useAuthStore.getState().accessToken;
-};
-
-// Helper to get refresh token
-export const getRefreshToken = (): string | null => {
-  return useAuthStore.getState().refreshToken;
-};
-
-// Helper to check if should refresh
-export const shouldRefresh = (): boolean => {
-  return useAuthStore.getState().shouldRefreshToken();
 };

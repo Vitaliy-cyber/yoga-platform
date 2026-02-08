@@ -5,8 +5,8 @@
 ## Можливості
 
 - Завантаження схематичних зображень поз
-- AI-генерація реалістичних фото з схем (Google Gemini)
-- Візуалізація анатомічних шарів (м'язи, скелет)
+- AI-генерація реалістичних фото з схем (Google Gemini / Nano Banana)
+- Візуалізація анатомічних шарів (м'язи)
 - Каталог поз з описами, ефектами та інструкціями
 - Відображення активних м'язів для кожної пози
 
@@ -79,7 +79,6 @@ yoga-platform/
 │       ├── hooks/    # Custom hooks
 │       ├── store/    # Zustand store
 │       └── services/ # API client
-├── ai/models/         # AI моделі (завантажуються автоматично)
 ├── storage/          # Uploaded & generated files
 └── docker-compose.yml
 ```
@@ -95,10 +94,11 @@ yoga-platform/
 - `GET /api/v1/poses/search?q=...` - Пошук
 
 ### Генерація
-- `POST /api/v1/generate/photo` - Згенерувати фото
-- `POST /api/v1/generate/muscles` - Згенерувати шар м'язів
-- `POST /api/v1/generate/skeleton` - Згенерувати скелет
+- `POST /api/v1/generate` - Генерація з завантаженого schema image
+- `POST /api/v1/generate/from-text` - Генерація з текстового опису
+- `POST /api/v1/generate/from-pose/{pose_id}` - Генерація з існуючої пози
 - `GET /api/v1/generate/status/{task_id}` - Статус генерації
+- `POST /api/v1/generate/save-to-gallery` - Зберегти результат у галерею
 
 ### Категорії та м'язи
 - `GET /api/v1/categories` - Список категорій
@@ -107,7 +107,7 @@ yoga-platform/
 
 ## AI Провайдер
 
-Поточна реалізація використовує **Google Gemini** (`backend/services/google_generator.py`).
+Поточна реалізація використовує лише **Google Gemini (Nano Banana)** (`backend/services/google_generator.py`).
 Для роботи AI-генерації потрібно встановити `GOOGLE_API_KEY` у `.env`.
 
 ## Конфігурація
@@ -122,7 +122,6 @@ APP_MODE=dev  # dev | prod
 DATABASE_URL=postgresql://user:pass@localhost:5432/yoga_db
 
 # AI
-ENABLE_AI_GENERATION=true
 GOOGLE_API_KEY=your-gemini-api-key
 
 # Безпека

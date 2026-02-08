@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from models.pose import Pose, PoseMuscle
 from models.pose_version import PoseVersion
+from services.generation_task_utils import clamp_activation_level
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -493,7 +494,7 @@ class VersioningService:
                         f"Invalid activation_level for muscle {muscle_id}, "
                         f"defaulted to 50"
                     )
-                activation_level = max(0, min(100, int(activation_level)))
+                activation_level = clamp_activation_level(activation_level)
 
                 # Verify muscle exists
                 muscle_result = await db.execute(

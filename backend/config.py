@@ -153,8 +153,6 @@ class Settings(BaseSettings):
 
     # Google Gemini API (AI generation settings)
     GOOGLE_API_KEY: str = ""
-    ENABLE_AI_GENERATION: bool = True
-    USE_GOOGLE_AI: bool = True
 
     # CORS - додаткові origins для Railway та інших платформ
     CORS_ALLOWED_ORIGINS: str = ""  # Comma-separated list of allowed origins
