@@ -72,9 +72,9 @@ class GoogleGeminiGenerator:
     GEMINI_IMAGE_MODEL = "models/gemini-3-pro-image-preview"
     # Model for vision/analysis
     GEMINI_VISION_MODEL = "models/gemini-3-pro-preview"
-    # Primary + fallback modality profiles. Some API responses return text-only with
-    # ["TEXT", "IMAGE"]; ["IMAGE"] fallback improves reliability for image extraction.
-    IMAGE_MODALITY_PROFILES: tuple[list[str], ...] = (["TEXT", "IMAGE"], ["IMAGE"])
+    # Primary + fallback modality profiles.
+    # Prefer IMAGE-first to reduce text-only responses for image-generation calls.
+    IMAGE_MODALITY_PROFILES: tuple[list[str], ...] = (["IMAGE"], ["TEXT", "IMAGE"])
     IMAGE_ASPECT_RATIO = "1:1"
     IMAGE_SIZE = "1K"
     IMAGE_MAX_RETRIES = 3
@@ -837,6 +837,53 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
             "the spatial geometry shown in the edge map precisely."
         )
 
+    @staticmethod
+    def _compact_prompt_for_retry(prompt: str) -> str:
+        """
+        Flatten markdown-heavy prompts into a compact plain-text variant.
+
+        Some model responses become text-only with long, heavily formatted prompts.
+        A compact retry prompt often restores image output while preserving intent.
+        """
+        compact = _single_line(prompt or "")
+        for token in ("**", "__", "`", "###", "##"):
+            compact = compact.replace(token, "")
+        return " ".join(compact.split())
+
+    @classmethod
+    def _response_no_image_summary(cls, response: object) -> str:
+        text_value = getattr(response, "text", None)
+        text = text_value.strip() if isinstance(text_value, str) else ""
+
+        candidates = getattr(response, "candidates", None) or []
+        finish_reasons: list[str] = []
+        for candidate in candidates:
+            reason = getattr(candidate, "finish_reason", None)
+            if reason is None:
+                continue
+            finish_reasons.append(str(reason))
+
+        parts_count = 0
+        inline_like_parts = 0
+        for part in cls._iter_response_parts(response):
+            parts_count += 1
+            if getattr(part, "inline_data", None) is not None:
+                inline_like_parts += 1
+            elif getattr(part, "data", None) is not None:
+                inline_like_parts += 1
+            elif getattr(part, "image", None) is not None:
+                inline_like_parts += 1
+
+        generated_images = getattr(response, "generated_images", None) or []
+        return (
+            f"candidates={len(candidates)} "
+            f"finish_reasons={finish_reasons or ['<none>']} "
+            f"parts={parts_count} "
+            f"image_like_parts={inline_like_parts} "
+            f"generated_images={len(generated_images)} "
+            f"text_len={len(text)}"
+        )
+
     async def _generate_image(
         self,
         prompt: str,
@@ -865,6 +912,8 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         logger.debug(f"Generating image: {prompt[:80]}...")
 
         # Prepare contents - either just prompt or prompt + reference image
+        base_prompt = prompt
+        content_parts: Optional[list[object]] = None
         if reference_image_bytes:
             ref_mime_type = self._normalize_reference_mime_type(
                 reference_mime_type or "image/png"
@@ -914,13 +963,9 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                             data=control_bytes, mime_type=control_mime_type
                         )
                     )
-                    prompt = self._append_pose_control_instructions(prompt)
+                    base_prompt = self._append_pose_control_instructions(base_prompt)
                 except Exception as e:
                     logger.warning("Failed to build pose-control guide image: %s", e)
-
-            contents = [*content_parts, prompt]
-        else:
-            contents = prompt
 
         if self._client is None:
             raise RuntimeError("Google Gemini client not initialized")
@@ -928,6 +973,16 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
         active_seed = generation_seed
         for attempt in range(max_retries):
             try:
+                prompt_for_attempt = (
+                    base_prompt
+                    if attempt == 0
+                    else self._compact_prompt_for_retry(base_prompt)
+                )
+                contents = (
+                    [*content_parts, prompt_for_attempt]
+                    if content_parts is not None
+                    else prompt_for_attempt
+                )
                 allow_seed = active_seed is not None
                 for modalities in self.IMAGE_MODALITY_PROFILES:
                     config_seed = active_seed if allow_seed else None
@@ -995,10 +1050,11 @@ ADDITIONAL USER INSTRUCTIONS (apply these modifications):
                             _single_line(response_text)[:220],
                         )
                     logger.warning(
-                        "No image in Gemini response (attempt %s/%s, modalities=%s)",
+                        "No image in Gemini response (attempt %s/%s, modalities=%s, summary=%s)",
                         attempt + 1,
                         max_retries,
                         modalities,
+                        self._response_no_image_summary(response),
                     )
                 else:
                     logger.warning(

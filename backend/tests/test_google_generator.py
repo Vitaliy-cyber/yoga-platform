@@ -584,8 +584,8 @@ class TestGoogleGeminiGeneratorGenerateImage:
 
             assert isinstance(result_img, Image.Image)
             assert is_placeholder is False
-            assert seen_modalities[0] == ["TEXT", "IMAGE"]
-            assert ["IMAGE"] in seen_modalities
+            assert seen_modalities[0] == ["IMAGE"]
+            assert ["TEXT", "IMAGE"] in seen_modalities
 
             GoogleGeminiGenerator._instance = None
             GoogleGeminiGenerator._initialized = False
@@ -708,7 +708,7 @@ class TestGoogleGeminiGeneratorGenerateImage:
             assert called["contents"][0] == ref_part
             assert called["contents"][1] == "test prompt"
             config_kwargs = mock_types.GenerateContentConfig.call_args.kwargs
-            assert config_kwargs["response_modalities"] == ["TEXT", "IMAGE"]
+            assert config_kwargs["response_modalities"] in (["IMAGE"], ["TEXT", "IMAGE"])
             assert "image_config" in config_kwargs
 
             GoogleGeminiGenerator._instance = None
