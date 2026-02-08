@@ -191,6 +191,61 @@ async def test_login_sets_refresh_cookie_on_root_path_and_clears_legacy_api_path
     assert any(c.startswith("refresh_token=") and "Path=/api" in c and "Max-Age=0" in c for c in cookies)
     # 2) New cookie: Path=/
     assert any(c.startswith("refresh_token=") and "Path=/" in c and "Max-Age=0" not in c for c in cookies)
+    # 3) Same-site defaults in same-origin context
+    assert any(c.startswith("refresh_token=") and "SameSite=lax" in c for c in cookies)
+    assert any(c.startswith("csrf_token=") and "SameSite=strict" in c for c in cookies)
+
+
+@pytest.mark.asyncio
+async def test_login_sets_none_samesite_for_cross_site_context(monkeypatch):
+    class _FakeTokenService:
+        def __init__(self, _db):
+            pass
+
+        async def create_tokens(self, **_kwargs):
+            return SimpleNamespace(
+                access_token="access",
+                refresh_token="refresh",
+            )
+
+    class _FakeAuditService:
+        def __init__(self, _db):
+            pass
+
+        async def log(self, **_kwargs):
+            return None
+
+    import api.routes.auth as auth_routes
+
+    monkeypatch.setattr(auth_routes, "TokenService", _FakeTokenService)
+    monkeypatch.setattr(auth_routes, "AuditService", _FakeAuditService)
+
+    user = User.create_with_token("test-auth-token")
+    user.id = 1
+    user.created_at = datetime.now(timezone.utc)
+
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_FakeResult(user))
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+
+    request = _make_request(
+        scheme="https",
+        host="api.example.com:443",
+        path="/api/auth/login",
+        headers={
+            "user-agent": "pytest",
+            "origin": "https://app.example.com",
+            "sec-fetch-site": "cross-site",
+        },
+    )
+    response = Response()
+
+    await login_route(UserLogin(token="test-auth-token"), request, response, db)
+
+    cookies = _get_set_cookie_headers(response)
+    assert any(c.startswith("refresh_token=") and "SameSite=none" in c and "Secure" in c for c in cookies)
+    assert any(c.startswith("csrf_token=") and "SameSite=none" in c and "Secure" in c for c in cookies)
 
 
 @pytest.mark.asyncio
@@ -245,3 +300,5 @@ async def test_refresh_sets_refresh_cookie_on_root_path_and_clears_legacy_api_pa
     cookies = _get_set_cookie_headers(response)
     assert any(c.startswith("refresh_token=") and "Path=/api" in c and "Max-Age=0" in c for c in cookies)
     assert any(c.startswith("refresh_token=") and "Path=/" in c and "Max-Age=0" not in c for c in cookies)
+    assert any(c.startswith("refresh_token=") and "SameSite=lax" in c for c in cookies)
+    assert any(c.startswith("csrf_token=") and "SameSite=strict" in c for c in cookies)

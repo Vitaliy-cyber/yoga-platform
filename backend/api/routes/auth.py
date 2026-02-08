@@ -1,7 +1,9 @@
 """Authentication routes with JWT token management and refresh token rotation."""
 
 import asyncio
+import ipaddress
 import logging
+import urllib.parse
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -86,6 +88,105 @@ def _extract_bearer_token(request: Request) -> Optional[str]:
     if auth_header.startswith("Bearer "):
         return auth_header[7:].strip()
     return None
+
+
+def _is_trusted_proxy_request(request: Request) -> bool:
+    """Return True when request comes from a configured trusted proxy."""
+    if not settings.TRUSTED_PROXIES or not request.client:
+        return False
+
+    proxy_strings = [p.strip() for p in settings.TRUSTED_PROXIES.split(",") if p.strip()]
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for proxy in proxy_strings:
+        try:
+            networks.append(ipaddress.ip_network(proxy, strict=False))
+        except ValueError:
+            logger.warning("Invalid TRUSTED_PROXIES network: %s", proxy)
+
+    if not networks:
+        return False
+
+    try:
+        direct_ip = ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return False
+
+    return any(direct_ip in network for network in networks)
+
+
+def _effective_request_scheme_host(request: Request) -> tuple[str, str]:
+    """
+    Return best-effort (scheme, host) for the current request.
+
+    Uses X-Forwarded-* only when the direct client is in TRUSTED_PROXIES.
+    """
+    scheme = request.url.scheme.lower()
+    host = (request.url.hostname or "").lower()
+
+    if not host:
+        host_header = request.headers.get("host", "")
+        host = host_header.split(":", 1)[0].strip().lower()
+
+    if _is_trusted_proxy_request(request):
+        forwarded_proto = request.headers.get("x-forwarded-proto")
+        if forwarded_proto:
+            proto = forwarded_proto.split(",", 1)[0].strip().lower()
+            if proto in {"http", "https"}:
+                scheme = proto
+
+        forwarded_host = request.headers.get("x-forwarded-host")
+        if forwarded_host:
+            candidate = forwarded_host.split(",", 1)[0].strip()
+            parsed = urllib.parse.urlparse(f"//{candidate}")
+            if parsed.hostname:
+                host = parsed.hostname.lower()
+
+    return scheme, host
+
+
+def _is_cross_site_cookie_context(request: Request) -> bool:
+    """
+    Detect whether cookie context is cross-site.
+
+    Priority:
+    1) `Sec-Fetch-Site: cross-site` (browser-provided signal)
+    2) Compare `Origin` with effective request scheme/host.
+    """
+    fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    if fetch_site == "cross-site":
+        return True
+    if fetch_site in {"same-site", "same-origin"}:
+        return False
+
+    origin = (request.headers.get("origin") or "").strip()
+    if not origin:
+        return False
+
+    parsed_origin = urllib.parse.urlparse(origin)
+    if not parsed_origin.scheme or not parsed_origin.hostname:
+        return False
+
+    req_scheme, req_host = _effective_request_scheme_host(request)
+    return (
+        parsed_origin.scheme.lower() != req_scheme.lower()
+        or parsed_origin.hostname.lower() != req_host.lower()
+    )
+
+
+def _cookie_security_params(request: Request) -> tuple[bool, str, str]:
+    """
+    Return (secure, refresh_samesite, csrf_samesite) for auth cookies.
+    """
+    request_scheme, _ = _effective_request_scheme_host(request)
+    is_cross_site = _is_cross_site_cookie_context(request)
+    secure = (
+        settings.APP_MODE.value == "prod"
+        or request_scheme == "https"
+        or is_cross_site
+    )
+    if is_cross_site:
+        return secure, "none", "none"
+    return secure, "lax", "strict"
 
 
 async def _get_valid_bearer_user_id(request: Request, db: AsyncSession) -> Optional[int]:
@@ -257,13 +358,13 @@ async def login(
             # Only mutate cookies after successful commit so we never hand out a refresh token
             # that was rolled back.
             response.delete_cookie(key="refresh_token", path="/api")
-            _is_cross_site = settings.APP_MODE.value == "prod"
+            secure_cookie, refresh_samesite, csrf_samesite = _cookie_security_params(request)
             response.set_cookie(
                 key="refresh_token",
                 value=tokens.refresh_token,
                 httponly=True,
-                secure=_is_cross_site,
-                samesite="none" if _is_cross_site else "lax",
+                secure=secure_cookie,
+                samesite=refresh_samesite,
                 max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
                 path="/",
             )
@@ -273,8 +374,8 @@ async def login(
                 key="csrf_token",
                 value=csrf_token,
                 httponly=False,  # JavaScript needs to read this
-                secure=_is_cross_site,
-                samesite="none" if _is_cross_site else "strict",
+                secure=secure_cookie,
+                samesite=csrf_samesite,
                 max_age=3600,  # 1 hour
                 path="/",
             )
@@ -466,13 +567,13 @@ async def refresh_tokens(
         response.delete_cookie(key="refresh_token", path="/api")
 
         # Update refresh token cookie
-        _is_cross_site = settings.APP_MODE.value == "prod"
+        secure_cookie, refresh_samesite, csrf_samesite = _cookie_security_params(request)
         response.set_cookie(
             key="refresh_token",
             value=tokens.refresh_token,
             httponly=True,
-            secure=_is_cross_site,
-            samesite="none" if _is_cross_site else "lax",
+            secure=secure_cookie,
+            samesite=refresh_samesite,
             max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
             path="/",
         )
@@ -483,8 +584,8 @@ async def refresh_tokens(
             key="csrf_token",
             value=csrf_token,
             httponly=False,
-            secure=_is_cross_site,
-            samesite="none" if _is_cross_site else "strict",
+            secure=secure_cookie,
+            samesite=csrf_samesite,
             max_age=3600,
             path="/",
         )
